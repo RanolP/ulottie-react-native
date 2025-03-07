@@ -1,2 +1,4 @@
+mod lottie;
+
 fn main() {
 }
