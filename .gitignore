@@ -1,4 +1,17 @@
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+.pnp.*
+
+node_modules/
 /target/
 
 .DS_Store
 *.log
+
+/ulottie-dev-server/.output/
+/ulottie-dev-server/.vitest-attachments/
+/ulottie-dev-server/tests/__screenshots__/

@@ -4,9 +4,46 @@ version = "0.0.1"
 authors = ["Hyeseong Kim <tim@daangn.com>"]
 edition = "2021"
 
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "ulottie-compiler"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1.0"
+bitflags = "2.6"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_repr = "0.1"
-thiserror = "1.0"
+clap = { version = "4", features = ["derive"] }
+oxc_allocator = { version = "0.131", optional = true }
+oxc_codegen = { version = "0.131", optional = true }
+oxc_minifier = { version = "0.131", optional = true }
+oxc_parser = { version = "0.131", optional = true }
+oxc_span = { version = "0.131", optional = true }
+
+[features]
+# Pure-Rust frame emulator (Payload → structured `Frame`). On by default
+# because downstream optimization layers (frame analysis to drop unused
+# data, etc.) consume it. Peers that want only the compiler can opt out
+# with `default-features = false`.
+default = ["eval", "minify"]
+eval = []
+# Embedded-runtime minifier + dead-code elimination. Pulls in the oxc
+# minifier crates (~15 transitive dependencies) so the compiler can emit
+# tree-shaken, minified self-contained modules. The flag is on by default
+# because that's the headline advantage of the data backend; opt out with
+# `default-features = false` to keep the compiler crate lean.
+minify = ["dep:oxc_allocator", "dep:oxc_codegen", "dep:oxc_minifier", "dep:oxc_parser", "dep:oxc_span"]
+
+[dev-dependencies]
+insta = "1.41"
+
+# The frame-snapshot integration test exercises the eval module, so it only
+# builds when the feature is enabled. Run via `cargo nextest run --features eval`
+# (or `--all-features`).
+[[test]]
+name = "frame_snapshot"
+required-features = ["eval"]

@@ -1,0 +1,13 @@
+{
+  "name": "ulottie",
+  "private": true,
+  "workspaces": [
+    "ulottie-dev-server"
+  ],
+  "dependenciesMeta": {
+    "odiff-bin": {
+      "built": true
+    }
+  },
+  "packageManager": "yarn@4.15.0"
+}
