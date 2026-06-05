@@ -39,9 +39,6 @@ jobs:
       - name: Install dependencies
         run: yarn install
 
-      - name: Build demo page
-        run: yarn workspace ulottie-dev-server build:demo
-
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
         with:
