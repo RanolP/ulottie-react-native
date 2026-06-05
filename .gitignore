@@ -12,6 +12,8 @@ node_modules/
 .DS_Store
 *.log
 
+_fixtures/animations/tmp/
+
 /ulottie-dev-server/.output/
 /ulottie-dev-server/.vitest-attachments/
 /ulottie-dev-server/tests/__screenshots__/

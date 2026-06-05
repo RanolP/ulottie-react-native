@@ -43,7 +43,7 @@ async function exists(path) {
 // `--artifact-dir`, which the stable toolchain rejects. Build into the
 // crate's default pkg/ and move it ourselves.
 console.log('→ wasm-pack build');
-const pkgDir = join(compilerDir, 'pkg');
+const pkgDir = path.join(compilerDir, 'pkg');
 await rm(pkgDir, { recursive: true, force: true });
 await run(
   'wasm-pack',
@@ -60,23 +60,23 @@ await mkdir(distDir, { recursive: true });
 for (const entry of await readdir(publicDir, { withFileTypes: true })) {
   // Skip any stale public/wasm/ — wasm-pack just rebuilt fresh into pkg/.
   if (entry.name === 'wasm') continue;
-  const src = join(publicDir, entry.name);
-  const dst = join(distDir, entry.name);
+  const src = path.join(publicDir, entry.name);
+  const dst = path.join(distDir, entry.name);
   await cp(src, dst, { recursive: true });
 }
 
 console.log('→ install wasm-pack output → dist/wasm/');
-await cp(pkgDir, join(distDir, 'wasm'), { recursive: true });
+await cp(pkgDir, path.join(distDir, 'wasm'), { recursive: true });
 
 console.log('→ copy _fixtures/animations/ → dist/_fixtures/');
-const fixturesDst = join(distDir, '_fixtures');
+const fixturesDst = path.join(distDir, '_fixtures');
 await mkdir(fixturesDst, { recursive: true });
 for (const entry of await readdir(fixturesSrc)) {
   if (!entry.endsWith('.json')) continue;
-  await cp(join(fixturesSrc, entry), join(fixturesDst, entry));
+  await cp(path.join(fixturesSrc, entry), path.join(fixturesDst, entry));
 }
 
-if (!(await exists(join(distDir, 'wasm', 'ulottie_compiler_bg.wasm')))) {
+if (!(await exists(path.join(distDir, 'wasm', 'ulottie_compiler_bg.wasm')))) {
   throw new Error('wasm-pack output missing — check the build log above');
 }
 

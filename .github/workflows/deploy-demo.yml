@@ -1,0 +1,52 @@
+name: Deploy demo page
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust (stable + wasm32-unknown-unknown)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry + workspace target/
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-pack (prebuilt binary)
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          # See https://github.com/jetli/wasm-pack-action/issues/23
+          version: v0.15.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 26
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install
+
+      - name: Build demo page
+        run: yarn workspace ulottie-dev-server build:demo
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: |
+            pages deploy ulottie-dev-server/dist
+            --branch=main
