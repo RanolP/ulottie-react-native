@@ -1,5 +1,15 @@
 {
   "$schema": "../node_modules/wrangler/config-schema.json",
   "name": "ulottie",
-  "pages_build_output_dir": "./dist",
+  "compatibility_date": "2026-06-05",
+  "build": {
+    "command": "yarn build:demo",
+  },
+  "route": {
+    "pattern": "ulottie.cometkim.dev",
+    "custom_domain": true,
+  },
+  "assets": {
+    "directory": "./dist",
+  },
 }
