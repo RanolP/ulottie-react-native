@@ -6,6 +6,9 @@ edition = "2021"
 
 [lib]
 path = "src/lib.rs"
+# `cdylib` produces the wasm binary that wasm-bindgen wraps; `rlib` keeps
+# the crate consumable as a normal Rust dependency for the dev server.
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "ulottie-compiler"
@@ -23,6 +26,9 @@ oxc_codegen = { version = "0.131", optional = true }
 oxc_minifier = { version = "0.131", optional = true }
 oxc_parser = { version = "0.131", optional = true }
 oxc_span = { version = "0.131", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+serde-wasm-bindgen = { version = "0.6", optional = true }
+js-sys = { version = "0.3", optional = true }
 
 [features]
 # Pure-Rust frame emulator (Payload → structured `Frame`). On by default
@@ -37,6 +43,12 @@ eval = []
 # because that's the headline advantage of the data backend; opt out with
 # `default-features = false` to keep the compiler crate lean.
 minify = ["dep:oxc_allocator", "dep:oxc_codegen", "dep:oxc_minifier", "dep:oxc_parser", "dep:oxc_span"]
+# Browser bindings via wasm-bindgen. Exposes `compile_request(jsonText)`
+# returning the raw bytes + sizes the comparison matrix needs. Gzip is
+# measured client-side via `CompressionStream('gzip')` — no flate2 in the
+# wasm bundle. Implies `minify` because that's the whole point of the
+# demo size matrix.
+wasm = ["minify", "dep:wasm-bindgen", "dep:serde-wasm-bindgen", "dep:js-sys"]
 
 [dev-dependencies]
 insta = "1.41"

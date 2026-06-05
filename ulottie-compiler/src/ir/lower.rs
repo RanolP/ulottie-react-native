@@ -243,7 +243,7 @@ fn lower_prop_vec2(
 ) -> Result<Property<Vec2>> {
     if let Some(split) = p.split() {
         return lower_split_to_vec(module, split, [default[0], default[1], 0.0])
-            .map(|prop| project_vec3_to_vec2(prop));
+            .map(project_vec3_to_vec2);
     }
     let value_source = if p.is_animated() {
         ValueSource::Animated(Keyframes {
@@ -302,14 +302,12 @@ fn lower_split_to_vec(
     };
 
     // Fast path: every axis is static — emit a static Vec3 directly.
-    if let (Some(xs), Some(ys), z_static) = (
+    if let (Some(xs), Some(ys), Some(zs)) = (
         static_scalar(&x_prop),
         static_scalar(&y_prop),
         z_prop.as_ref().map(static_scalar).unwrap_or(Some(default[2])),
     ) {
-        if let Some(zs) = z_static {
-            return Ok(Property::Static([xs, ys, zs]));
-        }
+        return Ok(Property::Static([xs, ys, zs]));
     }
 
     // General path: collect every keyframe time used by any axis, evaluate

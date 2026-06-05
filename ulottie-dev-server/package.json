@@ -4,9 +4,11 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:demo": "node ./build-demo.mjs"
   },
   "devDependencies": {
+    "@types/node": "^25.9.1",
     "@vitest/browser": "^4.1.7",
     "@vitest/browser-playwright": "^4.1.7",
     "lottie-web": "^5.13.0",

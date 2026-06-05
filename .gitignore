@@ -15,3 +15,12 @@ node_modules/
 /ulottie-dev-server/.output/
 /ulottie-dev-server/.vitest-attachments/
 /ulottie-dev-server/tests/__screenshots__/
+
+# wasm-pack output — built artifacts, regenerated via:
+#   cd ulottie-compiler && wasm-pack build --release --target web \
+#     --no-default-features --features wasm,eval
+#   mv pkg ../ulottie-dev-server/public/wasm
+# The dev server falls back to its own /compile when the wasm dir is missing.
+/ulottie-dev-server/public/wasm/
+/ulottie-dev-server/dist/
+/ulottie-compiler/pkg/

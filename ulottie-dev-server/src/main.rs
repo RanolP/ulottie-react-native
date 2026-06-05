@@ -1,28 +1,39 @@
 //! Dev server for the visual comparison harness.
 //!
-//! URL layout:
+//! Two modes:
+//!
+//!   --mode api (default)   exposes /compile + /.output/* for live Rust
+//!                          iteration, and injects `<script>` into HTML
+//!                          responses that redirects window.ulottieCompile
+//!                          at POST /compile.
+//!   --mode static          serves public/ as-is, no /compile, no HTML
+//!                          rewriting. Use to verify that the standalone
+//!                          static deployment (CDN-ready) still works —
+//!                          the page falls back to its in-browser wasm
+//!                          bootstrap.
+//!
+//! URL layout (api mode):
 //!
 //!   /                       redirect → /compare-all.html
 //!   /compile (POST)         body = raw Lottie JSON
 //!   /.output/<id>.js        compiled JS (lazy for fixtures, eager for uploads)
 //!   /.output/<id>.json      fixture source (registered) or upload source
 //!   /.output/driver.js      minified shared runtime (served from memory)
+//!   /_fixtures/<name>.json  registered fixture source
 //!   /<anything-else>        static UI under public/
 //!
-//! Two pre-registered on-disk locations:
+//! On-disk locations:
 //!
-//!   public/                 static UI source (compare-all.html, …)
+//!   public/                 static UI source (compare-all.html, app.js,
+//!                           bootstrap-default.js, lottie.min.js, wasm/)
 //!   __fixtures__/           pre-registered Lottie sources
 //!                            (`<workspace>/_fixtures/animations/`)
 //!   .output/                disk cache: compiled JS + upload sources
+//!                            (api mode only)
 //!
 //! `__fixtures__` is the conceptual name for the fixture source location,
-//! not a URL prefix.
-//!
-//! `/.output/<file>` is served by a chained `ServeDir`: try `.output/<file>`
-//! first, fall back to `_fixtures/animations/<file>`. Compiled JS misses
-//! trigger a lazy compile (middleware) before the static service runs;
-//! cache lives on disk only.
+//! not a URL prefix — both `/.output/<name>.json` (api mode) and
+//! `/_fixtures/<name>.json` (both modes) resolve to it.
 //!
 //! `/.output/driver.js` is a dedicated route ahead of the chain: the
 //! compiler's minified driver is computed once on first request and held
@@ -45,7 +56,7 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
 };
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use flate2::{Compression, write::GzEncoder};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -59,6 +70,21 @@ struct Args {
     /// Port to listen on.
     #[arg(long, default_value_t = 4567)]
     port: u16,
+
+    /// Server mode. `api` exposes /compile and rewrites HTML responses to
+    /// route the page's compile backend at the server. `static` serves
+    /// public/ as-is so the in-browser wasm bootstrap takes over — useful
+    /// for testing the CDN-ready deployment shape locally.
+    #[arg(long, value_enum, default_value_t = Mode::Api)]
+    mode: Mode,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum Mode {
+    /// Live Rust compilation via POST /compile.
+    Api,
+    /// Pure static serving; client uses its own wasm compiler bundle.
+    Static,
 }
 
 /// Pre-registered file locations, resolved once at startup.
@@ -115,37 +141,79 @@ async fn main() -> Result<()> {
     if !paths.public_dir.is_dir() {
         anyhow::bail!("public/ missing: {}", paths.public_dir.display());
     }
-    fs::create_dir_all(&paths.output_dir).await?;
 
-    // /.output/<file>: .output/ wins on hit; fixture source dir wins on miss
-    // so fixture JSON falls through naturally without being copied.
-    let output_service = ServeDir::new(&paths.output_dir)
-        .fallback(ServeDir::new(&paths.fixtures_dir));
+    // Both modes can load fixture JSON via /_fixtures/<name>.json. The
+    // static-mode demo still needs them; a real CDN deploy would copy
+    // them into public/_fixtures/ at build time.
+    let fixtures_service = ServeDir::new(&paths.fixtures_dir);
 
-    let app = Router::new()
+    let mut router = Router::new()
         .route("/", get(|| async { Redirect::temporary("/compare-all.html") }))
-        .route("/compile", post(compile_handler))
-        .route("/.output/driver.js", get(serve_driver))
-        .nest_service("/.output", output_service)
+        .nest_service("/_fixtures", fixtures_service);
+
+    if args.mode == Mode::Api {
+        fs::create_dir_all(&paths.output_dir).await?;
+
+        // /.output/<file>: .output/ wins on hit; fixture source dir wins on
+        // miss so fixture JSON falls through naturally without being copied.
+        let output_service = ServeDir::new(&paths.output_dir)
+            .fallback(ServeDir::new(&paths.fixtures_dir));
+
+        router = router
+            .route("/compile", post(compile_handler))
+            .route("/.output/driver.js", get(serve_driver))
+            .nest_service("/.output", output_service)
+            // Shadow `public/compiler.js` (wasm + worker) with a tiny
+            // fetch-based ESM. app.js's `import './compiler.js'`
+            // resolves here in api mode; the wasm bundle never loads.
+            .route("/compiler.js", get(serve_api_compiler))
+            // ensure_compiled only needs to wrap /.output/* — but layering
+            // it before fallback_service is the simplest way to scope it
+            // to routes that exist before the fallback runs.
+            .layer(middleware::from_fn_with_state(paths.clone(), ensure_compiled));
+    }
+
+    // fallback_service serves the static UI; in static mode this owns
+    // `compiler.js` as well, dishing out the on-disk wasm/worker variant.
+    let app = router
         .fallback_service(ServeDir::new(&paths.public_dir))
-        .layer(middleware::from_fn_with_state(
-            paths.clone(),
-            ensure_compiled,
-        ))
         .layer(middleware::from_fn(no_store))
         .layer(TraceLayer::new_for_http())
         .with_state(paths.clone());
 
     let addr: SocketAddr = ([127, 0, 0, 1], args.port).into();
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    eprintln!("ulottie-dev-server listening on http://{addr}");
-    eprintln!("  public:      {}", paths.public_dir.display());
+    eprintln!("ulottie-dev-server listening on http://{addr}  (mode: {:?})", args.mode);
+    eprintln!("  public:       {}", paths.public_dir.display());
     eprintln!("  __fixtures__: {}", paths.fixtures_dir.display());
-    eprintln!("  .output:      {}", paths.output_dir.display());
-    eprintln!("  POST /compile               — body = raw Lottie JSON");
-    eprintln!("  GET  /.output/<id>.{{json,js}} — fixture stem or upload hash");
+    if args.mode == Mode::Api {
+        eprintln!("  .output:      {}", paths.output_dir.display());
+        eprintln!("  POST /compile               — body = raw Lottie JSON");
+        eprintln!("  GET  /.output/<id>.{{json,js}} — fixture stem or upload hash");
+    } else {
+        eprintln!("  (static mode — page uses ./wasm/ulottie_compiler.js)");
+    }
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// The api-mode shim served at `/compiler.js`. Exposes the same
+/// `{ compile, ready }` interface as the on-disk wasm + worker
+/// variant in `public/compiler.js`, but POSTs to /compile instead.
+/// app.js's `import './compiler.js'` resolves here in api mode.
+const API_COMPILER_JS: &str = r#"export const ready = Promise.resolve();
+export async function compile(jsonText) {
+  const r = await fetch('/compile', { method: 'POST', body: jsonText });
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}
+"#;
+
+async fn serve_api_compiler() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/javascript; charset=utf-8")],
+        API_COMPILER_JS,
+    )
 }
 
 /// Serve the minified shared runtime. Compiled animation modules do
@@ -404,7 +472,7 @@ async fn compile_handler(
     let sizes = Sizes {
         json: size_entry(&json_compact),
         js: size_entry(&js_bytes),
-        ulottie_runtime: size_entry(&ulottie_runtime_bytes),
+        ulottie_runtime: size_entry(ulottie_runtime_bytes),
         js_embedded: size_entry(embedded_bytes),
         embedded_features: EmbeddedFeaturesEntry {
             included,

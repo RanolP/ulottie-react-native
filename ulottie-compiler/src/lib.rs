@@ -4,6 +4,8 @@ pub mod data;
 pub mod eval;
 pub mod ir;
 pub mod lottie;
+#[cfg(feature = "wasm")]
+pub mod wasm;
 
 use anyhow::Result;
 use serde::Serialize;

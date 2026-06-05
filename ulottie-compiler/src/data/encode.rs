@@ -51,7 +51,6 @@ fn layer_supported(layer: &ir::Layer) -> bool {
 }
 
 fn shapes_supported(shapes: &[ir::ShapeNode]) -> bool {
-    let debug = std::env::var("ULOTTIE_DEBUG_BACKEND").is_ok();
     for s in shapes {
         match s {
             ir::ShapeNode::Group { items, .. } => {
