@@ -26,3 +26,5 @@ _fixtures/animations/tmp/
 /ulottie-dev-server/public/wasm/
 /ulottie-dev-server/dist/
 /ulottie-compiler/pkg/
+
+.tokensave/
