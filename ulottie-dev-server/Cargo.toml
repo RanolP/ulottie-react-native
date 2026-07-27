@@ -21,3 +21,7 @@ anyhow = "1"
 sha2 = "0.10"
 clap = { version = "4", features = ["derive"] }
 flate2 = "1"
+rkyv = "0.8.14"
+
+[build-dependencies]
+rkyv-js-codegen = "0.2"

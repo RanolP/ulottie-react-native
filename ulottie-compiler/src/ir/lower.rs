@@ -155,6 +155,10 @@ fn lower_layer(
         out_point: src.op,
         stretch: src.sr.unwrap_or(1.0),
         start_time: src.st.unwrap_or(0.0),
+        time_remap: match &src.tm {
+            Some(tm) => Some(lower_prop_scalar(module, tm, 0.0)?),
+            None => None,
+        },
         is_3d: src.ddd.unwrap_or(0) != 0,
         auto_orient: src.ao.unwrap_or(0) != 0,
         // The Lottie spec uses `hd: 1` to mean "hidden". On layers the field
@@ -528,9 +532,7 @@ fn lower_kf<T: Clone>(
             .spatial_tangent_to
             .as_deref()
             .and_then(parse_vec3),
-        // Hold keyframes: Lottie uses a separate field (`h: 1`); not currently
-        // in our AST. Default to false; can be reintroduced in the AST later.
-        hold: false,
+        hold: src.hold == Some(1),
     }
 }
 
@@ -548,7 +550,7 @@ fn lower_kf_path(src: &AstKeyframe) -> Keyframe<PathData> {
         easing_out: src.out_tangent.as_ref().map(lower_easing),
         spatial_in: None,
         spatial_out: None,
-        hold: false,
+        hold: src.hold == Some(1),
     }
 }
 

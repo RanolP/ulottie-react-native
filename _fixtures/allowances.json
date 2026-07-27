@@ -1,0 +1,9 @@
+{
+  "_comment": [
+    "Unsupported Lottie features these fixtures use, accepted deliberately so",
+    "they still compile. Compilation fails on anything not listed here, so a",
+    "new unsupported feature is a build error rather than a silent mis-render.",
+    "Every entry is a known rendering difference — shrink this list by",
+    "implementing the feature, never by adding to it to make a build pass."
+  ]
+}

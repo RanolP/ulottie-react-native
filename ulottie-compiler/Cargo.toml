@@ -2,7 +2,7 @@
 name = "ulottie-compiler"
 version = "0.0.1"
 authors = ["Hyeseong Kim <tim@daangn.com>"]
-edition = "2021"
+edition = "2024"
 
 [lib]
 path = "src/lib.rs"
@@ -29,13 +29,16 @@ oxc_span = { version = "0.131", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 js-sys = { version = "0.3", optional = true }
+# Pure-Rust deflate, used only to *decide* whether instancing a precomp pays.
+# `default-features = false` keeps it off the C zlib.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"], optional = true }
 
 [features]
 # Pure-Rust frame emulator (Payload → structured `Frame`). On by default
 # because downstream optimization layers (frame analysis to drop unused
 # data, etc.) consume it. Peers that want only the compiler can opt out
 # with `default-features = false`.
-default = ["eval", "minify"]
+default = ["eval", "minify", "auto-instancing"]
 eval = []
 # Embedded-runtime minifier + dead-code elimination. Pulls in the oxc
 # minifier crates (~15 transitive dependencies) so the compiler can emit
@@ -44,11 +47,20 @@ eval = []
 # `default-features = false` to keep the compiler crate lean.
 minify = ["dep:oxc_allocator", "dep:oxc_codegen", "dep:oxc_minifier", "dep:oxc_parser", "dep:oxc_span"]
 # Browser bindings via wasm-bindgen. Exposes `compile_request(jsonText)`
-# returning the raw bytes + sizes the comparison matrix needs. Gzip is
-# measured client-side via `CompressionStream('gzip')` — no flate2 in the
-# wasm bundle. Implies `minify` because that's the whole point of the
-# demo size matrix.
-wasm = ["minify", "dep:wasm-bindgen", "dep:serde-wasm-bindgen", "dep:js-sys"]
+# returning the raw bytes + sizes the comparison matrix needs. Gzip *sizes*
+# are still measured client-side via `CompressionStream('gzip')`; `flate2`
+# comes in through `auto-instancing` because the compiler has to compress
+# internally to choose between the instanced and inlined builds, and a
+# browser-hosted compiler that made that call differently from the CLI would
+# be a worse tool, not a smaller one.
+# Let the compiler decide per animation whether to instance precomps, by
+# compiling both ways and keeping the smaller *compressed* module. Raw bytes
+# are not a usable proxy — `precomp_star_circle` is 34% smaller raw when
+# instanced and 19% larger gzipped, because gzip already deduplicates markup
+# that fits in its 32 KiB window. Without this feature the decision falls back
+# to a size heuristic; see `scene::worth_instancing`.
+auto-instancing = ["dep:flate2"]
+wasm = ["minify", "auto-instancing", "dep:wasm-bindgen", "dep:serde-wasm-bindgen", "dep:js-sys"]
 
 [dev-dependencies]
 insta = "1.41"

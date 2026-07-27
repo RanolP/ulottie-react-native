@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": [
+      "node",
+      "vite/client"
+    ],
+    "esModuleInterop": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "#wasm": [
+        "./demo/src/generated/wasm/ulottie_compiler.d.ts"
+      ]
+    }
+  },
+  "include": [
+    "demo",
+    "tests",
+    "vite.config.ts",
+    "global-setup.ts"
+  ]
+}

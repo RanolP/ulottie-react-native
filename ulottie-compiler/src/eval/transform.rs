@@ -1,21 +1,12 @@
 //! Layer and group transform composition. Mirrors `composeTransform` and the
 //! `updateLayer` math in `runtime/driver.js`.
-//!
-//! The Lottie transform chain is:
-//!
-//! ```text
-//! translate(position) · rotate(rotation) · scale(scale/100) · translate(-anchor)
-//! ```
-//!
-//! Returned as a 2D affine `Transform2D` `[m00 m01 m10 m11 dx dy]`
-//! (SVG `matrix(a,b,c,d,e,f)` order — column-major).
 
 use anyhow::Result;
 
-use crate::data::{self, Payload};
+use crate::data::{self, InlineProp, Value};
 
 use super::frame::Transform2D;
-use super::property::{eval_scalar_or, eval_value};
+use super::property::{eval_scalar_or, eval_inline};
 
 #[derive(Debug, Clone, Copy)]
 pub struct TransformSpec {
@@ -54,40 +45,32 @@ impl TransformSpec {
     }
 }
 
-/// Read a layer's transform property bundle and produce a `TransformSpec`.
-pub fn eval_layer_transform(payload: &Payload, layer: &data::Layer, frame: f64) -> Result<TransformSpec> {
-    let position = eval_vec_or(payload, layer.p, frame, [0.0, 0.0])?;
-    let anchor = eval_vec_or(payload, layer.a, frame, [0.0, 0.0])?;
-    let scale = eval_vec_or(payload, layer.sc, frame, [100.0, 100.0])?;
-    let rotation = eval_scalar_or(payload, layer.r, frame, 0.0)?;
-    let opacity = eval_scalar_or(payload, layer.o, frame, 100.0)?;
-    Ok(TransformSpec { position, anchor, scale, rotation, opacity })
+pub fn eval_layer_transform(layer: &data::Layer, frame: f64) -> Result<TransformSpec> {
+    Ok(TransformSpec {
+        position: eval_vec_or(layer.p.as_ref(), frame, [0.0, 0.0])?,
+        anchor: eval_vec_or(layer.a.as_ref(), frame, [0.0, 0.0])?,
+        scale: eval_vec_or(layer.sc.as_ref(), frame, [100.0, 100.0])?,
+        rotation: eval_scalar_or(layer.r.as_ref(), frame, 0.0)?,
+        opacity: eval_scalar_or(layer.o.as_ref(), frame, 100.0)?,
+    })
 }
 
-/// Same shape as `eval_layer_transform`, applied to a `GroupRef`'s local
-/// transform bundle.
-pub fn eval_group_transform(payload: &Payload, g: &data::GroupRef, frame: f64) -> Result<TransformSpec> {
-    let position = eval_vec_or(payload, g.p, frame, [0.0, 0.0])?;
-    let anchor = eval_vec_or(payload, g.a, frame, [0.0, 0.0])?;
-    let scale = eval_vec_or(payload, g.sc, frame, [100.0, 100.0])?;
-    let rotation = eval_scalar_or(payload, g.r, frame, 0.0)?;
-    let opacity = eval_scalar_or(payload, g.o, frame, 100.0)?;
-    Ok(TransformSpec { position, anchor, scale, rotation, opacity })
+pub fn eval_group_transform(g: &data::GroupRef, frame: f64) -> Result<TransformSpec> {
+    Ok(TransformSpec {
+        position: eval_vec_or(g.p.as_ref(), frame, [0.0, 0.0])?,
+        anchor: eval_vec_or(g.a.as_ref(), frame, [0.0, 0.0])?,
+        scale: eval_vec_or(g.sc.as_ref(), frame, [100.0, 100.0])?,
+        rotation: eval_scalar_or(g.r.as_ref(), frame, 0.0)?,
+        opacity: eval_scalar_or(g.o.as_ref(), frame, 100.0)?,
+    })
 }
 
-// A position/anchor/scale property may be vec2 OR vec3 (when ddd=1). Treat
-// any vec≥2 as vec2 by truncation; missing axes use the default.
-fn eval_vec_or(
-    payload: &Payload,
-    id: Option<u32>,
-    frame: f64,
-    default: [f64; 2],
-) -> Result<[f64; 2]> {
-    let Some(id) = id else { return Ok(default) };
-    match eval_value(payload, id, frame)? {
-        crate::data::Value::Scalar(n) => Ok([n, n]),
-        crate::data::Value::Vector(v) if v.len() >= 2 => Ok([v[0], v[1]]),
-        crate::data::Value::Vector(v) if v.len() == 1 => Ok([v[0], default[1]]),
-        other => Err(anyhow::anyhow!("expected vec2 at property {id}, got {:?}", other)),
+fn eval_vec_or(prop: Option<&InlineProp>, frame: f64, default: [f64; 2]) -> Result<[f64; 2]> {
+    let Some(prop) = prop else { return Ok(default) };
+    match eval_inline(prop, frame)? {
+        Value::Scalar(n) => Ok([n, n]),
+        Value::Vector(v) if v.len() >= 2 => Ok([v[0], v[1]]),
+        Value::Vector(v) if v.len() == 1 => Ok([v[0], default[1]]),
+        other => Err(anyhow::anyhow!("expected vec2, got {:?}", other)),
     }
 }

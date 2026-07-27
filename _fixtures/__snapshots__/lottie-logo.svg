@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="overflow:hidden">
+  <g transform="matrix(1,0,0,1,85.58,248.82)">
+    <path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#6ddad2" stroke-width="14"/>
+  </g>
+  <g transform="matrix(1,0,0,1,121.95,317.31)">
+    <path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#2e606a" stroke-width="14"/>
+  </g>
+  <g mask="url(#t1-0)">
+    <g transform="matrix(.64391,.7651,-.7651,.64391,262.38,-38.99)">
+      <g transform="matrix(1,0,0,1,173.08,262.38)">
+        <path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#6ddad2" stroke-width="14"/>
+      </g>
+    </g>
+  </g>
+  <g transform="matrix(1,0,0,1,165.84,266.79)">
+    <path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#2e606a" stroke-width="14"/>
+  </g>
+  <g transform="matrix(1,0,0,1,209.08,218.56)">
+    <path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#6ddad2" stroke-width="15"/>
+  </g>
+  <g transform="matrix(1,0,0,1,248.38,259.36)">
+    <path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#6ddad2" stroke-width="14"/>
+  </g>
+  <path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#2e606a" stroke-width="14"/>
+  <g transform="matrix(1,0,0,1,305.73,227.46)">
+    <path fill="none" stroke-miterlimit="10" stroke="#2e606a" stroke-width="14"/>
+  </g>
+  <g transform="matrix(1,0,0,1,288.13,226.38)">
+    <path fill="none" stroke-miterlimit="10" stroke="#2e606a" stroke-width="14"/>
+  </g>
+  <g transform="matrix(1,0,0,1,348.48,286.21)">
+    <path fill="none" stroke-miterlimit="10" stroke="#6ddad2" stroke-width="15"/>
+  </g>
+  <path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#6ddad2" stroke-width="15"/>
+  <path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#6ddad2" stroke-width="15"/>
+  <path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#6ddad2" stroke-width="15"/>
+  <g>
+    <g transform="matrix(1,0,0,1,472.13,254.46)">
+      <path d="M7.843,0C7.843-4.332,4.331-7.842,0-7.842C-4.331-7.842-7.843-4.332-7.843,0C-7.843,4.331-4.331,7.842,0,7.842C4.331,7.842,7.843,4.331,7.843,0Z" fill="#6ddad2"/>
+    </g>
+  </g>
+  <defs>
+    <filter id="i0-0" filterUnits="userSpaceOnUse" x="0" y="0" width="500" height="500">
+      <feComponentTransfer>
+        <feFuncA type="table" tableValues="1 0"/>
+      </feComponentTransfer>
+    </filter>
+    <mask id="t1-0" mask-type="alpha" maskUnits="userSpaceOnUse" x="0" y="0" width="500" height="500">
+      <g filter="url(#i0-0)">
+        <g transform="matrix(1,0,0,1,165.84,266.79)">
+          <path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#2e606a" stroke-width="14"/>
+        </g>
+      </g>
+    </mask>
+  </defs>
+</svg>

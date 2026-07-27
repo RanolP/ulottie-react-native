@@ -3,7 +3,7 @@
   "name": "ulottie",
   "compatibility_date": "2026-06-05",
   "build": {
-    "command": "yarn build:demo",
+    "command": "yarn vite build",
   },
   "route": {
     "pattern": "ulottie.cometkim.dev",

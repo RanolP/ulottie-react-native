@@ -170,6 +170,10 @@ pub struct Layer {
     pub masks_properties: Option<Vec<MaskProperty>>,
     pub td: Option<u8>,
     pub tt: Option<u8>,
+    /// Time remap (precomp layers): the composition's own time, in **seconds**,
+    /// as a function of the parent's time. Multiply by the frame rate to get
+    /// the inner frame.
+    pub tm: Option<Property>,
     pub ef: Option<serde_json::Value>,
 }
 

@@ -40,6 +40,11 @@ pub struct Keyframe {
 
     #[serde(rename = "ti")]
     pub spatial_tangent_in: Option<Vec<f64>>,
+
+    /// Hold (step) keyframe: the value stays put until the next keyframe
+    /// instead of interpolating toward it.
+    #[serde(rename = "h", default)]
+    pub hold: Option<u8>,
 }
 
 impl Keyframe {

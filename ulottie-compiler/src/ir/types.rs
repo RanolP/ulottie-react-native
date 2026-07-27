@@ -364,6 +364,9 @@ pub struct Layer {
     pub stretch: f64,
     /// Inner start time used by precomp instances to offset their child clock.
     pub start_time: f64,
+    /// Time remap: the precomp's inner time in seconds as a function of the
+    /// outer time. Replaces the usual `outer - start_time` clock entirely.
+    pub time_remap: Option<Property<Scalar>>,
     pub is_3d: bool,
     pub auto_orient: bool,
     pub hidden: bool,
@@ -514,11 +517,22 @@ impl ExprTable {
     pub fn lookup_by_hash(&self, hash: u64) -> Option<ExprId> {
         self.by_hash.get(&hash).copied()
     }
-    /// Insert an expression. If `dedup_by_hash` already contains the canonical
-    /// hash, returns the existing id; otherwise allocates a new one. During
-    /// lowering we don't dedup (every property's expression gets its own id);
-    /// the DedupeExpressions pass rebuilds the table with dedup enabled.
+    /// Insert an expression, reusing an identical one if it is already here.
+    ///
+    /// After Effects duplicates the same expression onto every layer it is
+    /// applied to, so a file routinely carries twenty copies of six distinct
+    /// bodies. Properties store the returned id, so handing back the existing
+    /// one deduplicates the emitted `E[]` with no remapping pass.
+    ///
+    /// The hash indexes the lookup and body equality confirms it, so a hash
+    /// collision costs a missed dedup rather than merging two expressions that
+    /// only happened to collide.
     pub fn insert(&mut self, mut e: Expression) -> ExprId {
+        if let Some(&existing) = self.by_hash.get(&e.canonical_hash) {
+            if self.expressions[existing.0 as usize].body == e.body {
+                return existing;
+            }
+        }
         let id = ExprId(self.expressions.len() as u32);
         e.id = id;
         self.by_hash.insert(e.canonical_hash, id);

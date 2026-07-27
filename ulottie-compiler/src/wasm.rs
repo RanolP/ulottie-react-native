@@ -12,7 +12,7 @@ use serde::Serialize as _;
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    EmbeddedFeatures, RuntimeMode,
+    CompileOptions, EmbeddedFeatures, MarkupMode, RuntimeMode,
     backend,
     ir,
     lottie,
@@ -27,6 +27,9 @@ pub struct CompileResult {
     compact_json: Vec<u8>,
     compiled_js: Vec<u8>,
     compiled_embedded: Vec<u8>,
+    compiled_extracted: Vec<u8>,
+    sprite_svg: Vec<u8>,
+    runtime_slice: Vec<u8>,
     driver_min_js: Vec<u8>,
     total_frames: f64,
     name: Option<String>,
@@ -34,6 +37,8 @@ pub struct CompileResult {
     feature_cost_expressions: i64,
     feature_cost_trim_path: i64,
     feature_cost_gradient: i64,
+    plan: serde_json::Value,
+    unsupported: serde_json::Value,
 }
 
 #[wasm_bindgen]
@@ -53,12 +58,41 @@ impl CompileResult {
         bytes(&self.compiled_embedded)
     }
 
+    #[wasm_bindgen(getter, js_name = compiledExtracted)]
+    pub fn compiled_extracted(&self) -> Uint8Array {
+        bytes(&self.compiled_extracted)
+    }
+
+    #[wasm_bindgen(getter, js_name = spriteSvg)]
+    pub fn sprite_svg(&self) -> Uint8Array {
+        bytes(&self.sprite_svg)
+    }
+
+    /// Minified source of only the runtime modules this animation imports —
+    /// what a bundler ships for it, as opposed to `driverMinJs`, the ceiling.
+    #[wasm_bindgen(getter, js_name = runtimeSlice)]
+    pub fn runtime_slice(&self) -> Uint8Array {
+        bytes(&self.runtime_slice)
+    }
+
     #[wasm_bindgen(getter, js_name = driverMinJs)]
     pub fn driver_min_js(&self) -> Uint8Array {
         bytes(&self.driver_min_js)
     }
 
-    #[wasm_bindgen(getter, js_name = totalFrames)]
+    /// What the AOT stage decided: capabilities, imports, instancing, counts.
+    #[wasm_bindgen(getter)]
+    pub fn plan(&self) -> JsValue {
+        to_object(&self.plan)
+    }
+
+    /// Features the backend does not implement, with their visible effect.
+    #[wasm_bindgen(getter)]
+    pub fn unsupported(&self) -> JsValue {
+        to_object(&self.unsupported)
+    }
+
+    #[wasm_bindgen(getter, js_name = total_frames)]
     pub fn total_frames(&self) -> f64 {
         self.total_frames
     }
@@ -68,28 +102,19 @@ impl CompileResult {
         self.name.clone()
     }
 
-    /// `{ included, costRaw }` mirroring `embeddedFeatures` on the dev
-    /// server side, so the existing `featuresRow()` renderer works
-    /// unchanged.
-    #[wasm_bindgen(getter, js_name = embeddedFeatures)]
-    pub fn embedded_features(&self) -> JsValue {
-        let v = serde_json::json!({
-            "included": {
-                "expressions": self.features.expressions,
-                "trimPath":   self.features.trim_path,
-                "gradient":   self.features.gradient,
-            },
-            "costRaw": {
-                "expressions": self.feature_cost_expressions,
-                "trimPath":   self.feature_cost_trim_path,
-                "gradient":   self.feature_cost_gradient,
-            },
-        });
-        // Default serde-wasm-bindgen serializes serde Maps as JS `Map`,
-        // but app.js reads `ef.included.expressions` with dot notation —
-        // an Object is what we want.
-        let ser = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
-        v.serialize(&ser).unwrap_or(JsValue::NULL)
+    /// The flattened feature report, matching `contract::FeatureReport` on the
+    /// server side — the shape the generated bindings describe, so both
+    /// backends hand the page the same object.
+    #[wasm_bindgen(getter)]
+    pub fn features(&self) -> JsValue {
+        to_object(&serde_json::json!({
+            "expressions": self.features.expressions,
+            "trim_path": self.features.trim_path,
+            "gradient": self.features.gradient,
+            "expressions_cost": self.feature_cost_expressions,
+            "trim_path_cost": self.feature_cost_trim_path,
+            "gradient_cost": self.feature_cost_gradient,
+        }))
     }
 }
 
@@ -105,12 +130,69 @@ pub fn compile_request(json_text: &str) -> Result<CompileResult, JsError> {
 
     let (ip, op, name) = (animation.in_point, animation.out_point, animation.name.clone());
 
-    let compiled_js = backend::compile(&module, RuntimeMode::Extern)
+    // Everything the source uses that the backend does not implement. Allowed
+    // wholesale here: the page is a viewer, and refusing to show a degraded
+    // render would be less useful than showing it next to the warning.
+    let found = crate::unsupported(json_text).unwrap_or_default();
+    let allow: std::collections::BTreeSet<_> = found.iter().map(|f| f.feature).collect();
+
+    let opts = |m| CompileOptions {
+        runtime_mode: m,
+        allow: allow.clone(),
+        ..Default::default()
+    };
+    let report = backend::report(&module, &opts(RuntimeMode::Extern))
         .map_err(|e| JsError::new(&format!("compile extern: {e}")))?
         .ok_or_else(|| JsError::new("data backend can't encode this fixture"))?;
-    let compiled_embedded = backend::compile(&module, RuntimeMode::Embedded)
+    let compiled_js = report.js.clone();
+    let compiled_embedded = backend::compile(&module, &opts(RuntimeMode::Embedded))
         .map_err(|e| JsError::new(&format!("compile embedded: {e}")))?
         .unwrap_or_default();
+
+    // Extracted delivery: the module carries only the `<svg>` shell and the
+    // markup ships as a sprite the page inlines or preloads.
+    let extracted_opts = CompileOptions {
+        markup: MarkupMode::Extracted("anim".into()),
+        allow: allow.clone(),
+        ..Default::default()
+    };
+    let compiled_extracted = backend::compile(&module, &extracted_opts)
+        .map_err(|e| JsError::new(&format!("compile extracted: {e}")))?
+        .unwrap_or_default();
+    let sprite_svg = crate::compile_symbol(json_text, "anim")
+        .map(|sym| crate::sprite(&[sym]))
+        .unwrap_or_default();
+
+    let runtime_slice = if report.is_static {
+        String::new()
+    } else {
+        crate::runtime_slice(&report.caps)
+    };
+
+    let plan = serde_json::json!({
+        "caps": report.caps,
+        "modules": report.modules,
+        "isStatic": report.is_static,
+        "instanced": report.instanced,
+        "templated": report.templated,
+        "elements": report.elements,
+        "bindings": report.bindings,
+        "records": report.records,
+    });
+    let unsupported = serde_json::Value::Array(
+        found
+            .iter()
+            .map(|f| {
+                serde_json::json!({
+                    "feature": f.feature.name(),
+                    "effect": f.feature.effect(),
+                    // The viewer allows everything, so anything listed here is
+                    // a degradation you are currently looking at.
+                    "allowed": true,
+                })
+            })
+            .collect(),
+    );
 
     // Compact JSON: re-stringify without whitespace so the matrix's
     // "Lottie JSON" size reflects what production would ship, same rule
@@ -142,6 +224,9 @@ pub fn compile_request(json_text: &str) -> Result<CompileResult, JsError> {
         compact_json,
         compiled_js: compiled_js.into_bytes(),
         compiled_embedded: compiled_embedded.into_bytes(),
+        compiled_extracted: compiled_extracted.into_bytes(),
+        sprite_svg: sprite_svg.into_bytes(),
+        runtime_slice: runtime_slice.into_bytes(),
         driver_min_js: driver_min_js.into_bytes(),
         total_frames: (op - ip).max(0.0),
         name,
@@ -149,7 +234,16 @@ pub fn compile_request(json_text: &str) -> Result<CompileResult, JsError> {
         feature_cost_expressions,
         feature_cost_trim_path,
         feature_cost_gradient,
+        plan,
+        unsupported,
     })
+}
+
+/// serde-wasm-bindgen serializes maps as JS `Map` by default; the page reads
+/// these with dot notation, so they have to come across as plain objects.
+fn to_object(v: &serde_json::Value) -> JsValue {
+    let ser = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+    v.serialize(&ser).unwrap_or(JsValue::NULL)
 }
 
 fn bytes(v: &[u8]) -> Uint8Array {

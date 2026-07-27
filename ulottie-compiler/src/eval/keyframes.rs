@@ -50,6 +50,11 @@ pub fn interpolate(kf: &Keyframes, frame: f64) -> Result<Value> {
         .unwrap_or_else(|| resolve_start(kf, i + 1));
     let v1: &Value = &v1_owned;
 
+    // A held keyframe keeps its value for the whole segment.
+    if kf.h.as_ref().and_then(|h| h.get(i)).copied().unwrap_or(false) {
+        return Ok(v0.clone());
+    }
+
     // Easing: scalar bezier on the time axis.
     let u = match &kf.oi {
         Some(oi) if i < oi.len() => apply_easing(u_lin, &oi[i]),

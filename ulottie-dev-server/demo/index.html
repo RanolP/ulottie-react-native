@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>µlottie vs lottie-web</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --ink: #1a1d21;
+      --dim: #6b7280;
+      --line: #e5e7eb;
+      --card: #fff;
+      --good: #15803d;
+      --bad: #b91c1c;
+      --accent: #2563eb;
+    }
+
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f4f5f7;
+      color: var(--ink);
+      padding: 20px;
+      line-height: 1.45;
+    }
+
+    .wrap { max-width: 940px; margin: 0 auto; display: grid; gap: 14px; }
+
+    h1 { font-size: 17px; text-align: center; }
+
+    /* Grid items are block-level, so `text-align` cannot centre them. */
+    .controls { display: grid; gap: 6px; justify-items: center; }
+    .controls select, .controls input[type=file] { font-size: 13px; padding: 3px 6px; }
+    .controls input[type=range] { width: 420px; vertical-align: middle; }
+    .controls label { font-size: 13px; }
+
+    .card {
+      background: var(--card);
+      border-radius: 10px;
+      padding: 14px 18px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, .08);
+    }
+
+    .card h2 {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--dim);
+      margin-bottom: 10px;
+      font-weight: 600;
+    }
+
+    /* ---- render comparison ---- */
+    .compare { display: flex; gap: 14px; justify-content: center; }
+    .compare .card { flex: 1; }
+    .compare h3 { font-size: 12px; text-align: center; color: var(--dim); margin-bottom: 6px; font-weight: 600; }
+    #lottie-ref, #ulottie { width: 100%; aspect-ratio: 1; overflow: hidden; }
+    #ulottie svg { width: 100%; height: 100%; display: block; }
+
+    /* ---- plan ---- */
+    .badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .badge {
+      font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 999px;
+      background: #eef2ff; color: #3730a3; border: 1px solid #c7d2fe;
+    }
+    .badge.static { background: #ecfdf5; color: #065f46; border-color: #a7f3d0; }
+    .badge.muted { background: #f3f4f6; color: #6b7280; border-color: var(--line); }
+
+    .facts { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 10px; }
+    .fact { font-size: 12px; color: var(--dim); }
+    .fact b { font-size: 15px; color: var(--ink); font-weight: 650; display: block; }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+    .chips + .chips { margin-top: 7px; }
+    .chips .k {
+      font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+      color: var(--dim); margin-right: 4px; min-width: 84px;
+    }
+    .chip {
+      font-size: 11px; padding: 1px 7px; border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      background: #f3f4f6; color: #374151; border: 1px solid var(--line);
+    }
+    .chip.on { background: #eff6ff; color: #1e40af; border-color: #bfdbfe; }
+    .chip.off { background: #fef2f2; color: #991b1b; border-color: #fecaca; text-decoration: line-through; }
+    .chip.warn { background: #fffbeb; color: #92400e; border-color: #fde68a; }
+
+    /* A title with a control on the right. The title keeps `.card h2`; only
+       the row it sits in is new. */
+    .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+
+    /* ---- tables ---- */
+    table {
+      width: 100%; border-collapse: collapse; font-size: 13px;
+      /* Digits of equal width, or the columns read as ragged. */
+      font-variant-numeric: tabular-nums;
+    }
+    /* Fixed number columns, so totals and parts line up regardless of text. */
+    th:nth-child(2), td:nth-child(2),
+    th:nth-child(3), td:nth-child(3) { width: 15%; white-space: nowrap; }
+    th:nth-child(4), td:nth-child(4) { width: 18%; white-space: nowrap; }
+    th, td { padding: 5px 8px; text-align: right; }
+    th:first-child, td:first-child { text-align: left; }
+    thead th { border-bottom: 1px solid var(--line); font-weight: 600; color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+    tbody tr.best td { background: #f0f9ff; font-weight: 600; }
+    tbody tr.base td { color: var(--dim); }
+    /* Component rows: each total is the sum of the parts under it. Hidden
+       until the breakdown is asked for — the totals are the story. */
+    tbody tr.part { display: none; }
+    #size-table.detail tbody tr.part { display: table-row; }
+    tbody tr.part td { color: var(--dim); font-size: 12px; padding-top: 1px; padding-bottom: 1px; }
+    tbody tr.part td:first-child { padding-left: 22px; }
+    #size-table.detail tbody tr.total td { border-top: 1px solid var(--line); }
+    td .sub { display: block; font-size: 11px; color: var(--dim); font-weight: 400; }
+    .gain { color: var(--good); font-weight: 600; }
+    .loss { color: var(--bad); font-weight: 600; }
+    .note { font-size: 11px; color: var(--dim); margin-top: 8px; }
+
+    button {
+      font: inherit; font-size: 12px; padding: 4px 12px; border-radius: 6px;
+      border: 1px solid var(--line); background: #fff; cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); color: var(--accent); }
+    button:disabled { opacity: .5; cursor: default; }
+
+    #drop-hint {
+      display: none; position: fixed; inset: 0;
+      background: rgba(37, 99, 235, .12); border: 4px dashed var(--accent);
+      pointer-events: none; z-index: 1000;
+    }
+    #drop-hint.active { display: block; }
+    #upload-status { font-size: 12px; color: var(--dim); min-height: 16px; }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <h1>µlottie - AOT compiler for Lottie animations</h1>
+
+    <div class="controls">
+      <div>
+        <select id="anim-select">
+          <option value="boucing-ball">Bouncing Ball</option>
+          <option value="bouncy_ball">Bouncy Ball (lottie-docs)</option>
+          <option value="ellipse">Ellipse</option>
+          <option value="rectangle">Rectangle</option>
+          <option value="fill">Fill (paths)</option>
+          <option value="trim_path">Trim Path</option>
+          <option value="lottie-logo">Lottie Logo</option>
+          <option value="lights">Lights</option>
+          <option value="ripple">Ripple</option>
+          <option value="starfish">Starfish</option>
+          <option value="precomp_star_circle">Precomp Star Circle</option>
+        </select>
+        <label>or load file: <input type="file" id="file-input" accept=".json,application/json"></label>
+      </div>
+      <label>Frame <span id="frame-display">0</span> / <span id="total-frames">0</span></label>
+      <input type="range" id="scrubber" min="0" max="100" step="1" value="0">
+      <div id="upload-status">Drop a Lottie .json anywhere on this page to compile it.</div>
+    </div>
+
+    <div class="compare">
+      <div class="card">
+        <h3>lottie-web (reference)</h3>
+        <div id="lottie-ref"></div>
+      </div>
+      <div class="card">
+        <h3>ulottie (compiled)</h3>
+        <div id="ulottie"></div>
+      </div>
+    </div>
+
+    <section class="card">
+      <h2>What the compiler decided</h2>
+      <div id="plan">load an animation</div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>First load — what a page downloads</h2>
+        <button id="size-detail" aria-expanded="false">breakdown</button>
+      </div>
+      <table id="size-table">
+        <thead>
+          <tr><th></th><th>Raw</th><th>Gzipped</th><th>vs lottie-web</th></tr>
+        </thead>
+        <tbody><tr><td colspan="4">load an animation</td></tr></tbody>
+      </table>
+      <div class="note" id="size-note"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Runtime — measured in this browser, now</h2>
+        <button id="measure">Measure</button>
+      </div>
+      <table id="perf-table">
+        <thead>
+          <tr><th></th><th>lottie-web</th><th>ulottie</th><th>difference</th></tr>
+        </thead>
+        <tbody><tr><td colspan="4">press Measure</td></tr></tbody>
+      </table>
+      <div class="note" id="perf-note">tinybench, with style and layout forced inside the
+        timed region — without that the numbers describe attribute writes, not rendering,
+        and flatter ulottie. Paint and raster are still outside what any synchronous
+        measurement can see. <span id="clock"></span></div>
+    </section>
+  </div>
+
+  <div id="drop-hint"></div>
+
+  <!--
+    Bundled by Vite. `src/compiler.js` picks the backend at runtime: the Rust
+    dev server when one is proxied, the in-browser wasm build otherwise. Both
+    report the same shape.
+  -->
+  <script type="module" src="./src/app.ts"></script>
+</body>
+
+</html>

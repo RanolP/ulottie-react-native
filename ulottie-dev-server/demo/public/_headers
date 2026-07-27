@@ -1,0 +1,7 @@
+# Cross-origin isolation, so `performance.now()` reports 5 µs granularity
+# instead of Chrome's default 100 µs clamp — the runtime panel samples against
+# it. Everything the page loads is same-origin, so `require-corp` costs
+# nothing. Mirrored in `vite.config.ts` for dev and preview.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
