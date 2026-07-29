@@ -1,60 +1,83 @@
 // Layer transform and opacity, read from the expression layer table.
 //
 // When an animation has expressions the layer's properties already live in the
-// record table so `thisLayer.position` can read them. These binders take the
-// record index rather than a second copy of the same keyframes.
+// record table so `thisLayer.position` can read them. These bindings take the
+// record index rather than a second copy of the same keyframes — which is also
+// why they are the one op whose inputs stay evaluator objects: a record is the
+// handle the engine hands around, and it is shared with whatever else reads it.
 
-import { r5, r2, r } from '../num.js';
-import { attr } from '../set.js';
+import { mtx } from '../mtx.js';
+import { r } from '../num.js';
+import { put } from '../set.js';
 import { record } from '../rec.js';
+import { open, runsum } from '../batch.js';
 
 // A record field the compiler elided is one that equals its default, so the
 // default lives here rather than costing a wire entry. These must stay in step
-// with `flat::RECORD_DEFAULTS`.
-const ORIGIN = () => [0, 0, 0];
-const FULL = () => [100, 100, 100];
+// with `flat::RECORD_DEFAULTS` — `o` is 100, so an elided opacity is opaque.
+//
+// The vectors are module constants rather than fresh literals: `ripple`'s three
+// records all elide both anchor and scale, so returning a new array would
+// allocate two per binding per frame — 276 on a corpus whose frame path is
+// meant to allocate nothing. Nothing mutates them; `mtx` only reads.
+const O3 = [0, 0, 0];
+const F3 = [100, 100, 100];
+const ORIGIN = () => O3;
+const FULL = () => F3;
 const ZERO = () => 0;
 const OPAQUE = () => 100;
 
-export function bLayerTx(el, S, a, ctx, at, ri) {
-  return layerTx(el, record(ctx, at, ri));
-}
-
 /**
- * Build a layer's transform updater from its record.
+ * A record's transform fields as evaluators, `[p, a, sc, r, o]`, with the
+ * compiler's elisions filled in.
  *
- * Nothing here folds — every input is a runtime handle — so generated code
- * calls this rather than inlining it. `ripple` has 140 of these bindings, and
- * inlining them cost 84 KB against roughly one kilobyte of calls.
+ * Resolved **once per binding** — at bind time for a batch, in `init` for
+ * generated code. Asking the record for its own defaults per frame is four
+ * property loads and four branches on every binding, which measured 5% of
+ * `ripple`'s frame across its 140 layer bindings.
  */
-export function layerTx(el, rec) {
-  // The record's fields are already evaluators; a missing one means the
-  // compiler elided a property equal to its default.
-  const p = rec.p || ORIGIN;
-  const an = rec.a || ORIGIN;
-  const s = rec.sc || FULL;
-  const rot = rec.r || ZERO;
-  const set = attr(el, 'transform');
-  return (f) => {
-    const pv = p(f), av = an(f), sv = s(f);
-    const th = rot(f) * Math.PI / 180;
-    const cs = Math.cos(th), sn = Math.sin(th);
-    const sx = sv[0] / 100, sy = sv[1] / 100;
-    const m0 = cs * sx, m1 = sn * sx, m2 = -sn * sy, m3 = cs * sy;
-    set(
-      'matrix(' + r5(m0) + ',' + r5(m1) + ',' + r5(m2) + ',' + r5(m3) + ','
-      + r2(pv[0] - (m0 * av[0] + m2 * av[1])) + ','
-      + r2(pv[1] - (m1 * av[0] + m3 * av[1])) + ')');
-  };
+export function lyFields(rec) {
+  return [rec.p || ORIGIN, rec.a || ORIGIN, rec.sc || FULL, rec.r || ZERO, rec.o || OPAQUE];
 }
 
-export function bLayerOpacity(el, S, a, ctx, at, ri) {
-  return layerOp(el, record(ctx, at, ri));
+// The record column ships as first differences — an inlined precomp's copies
+// address ascending records, which is the one shape deltas suit.
+
+export function bLayerTx(x, base, eb, sb, ps, at) {
+  const b = open(x, base, eb, sb, ps, 1);
+  const n = b.n;
+  const R = runsum(b.A[0], n);
+  const P = new Array(n), A = new Array(n), K = new Array(n), Q = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const f = lyFields(record(x, at, R[i]));
+    P[i] = f[0]; A[i] = f[1]; K[i] = f[2]; Q[i] = f[3];
+  }
+  return { n, E: b.E, G: b.G, L: b.L, P, A, K, Q, W: new Array(n) };
 }
 
-/** The same, for a layer's opacity. */
-export function layerOp(el, rec) {
-  const o = rec.o || OPAQUE;
-  const set = attr(el, 'opacity');
-  return (f) => set(r(o(f) / 100));
+export function oLayerTx(x, s) {
+  const n = s.n, E = s.E, G = s.G, L = s.L, W = s.W, T = x.T, ON = x.ON;
+  const P = s.P, A = s.A, K = s.K, Q = s.Q;
+  for (let i = 0; i < n; i++) {
+    if (!ON[G[i]]) continue;
+    const t = T[L[i]];
+    put(E[i], 'transform', mtx(P[i](t), A[i](t), K[i](t), Q[i](t)), W, i);
+  }
+}
+
+export function bLayerOpacity(x, base, eb, sb, ps, at) {
+  const b = open(x, base, eb, sb, ps, 1);
+  const n = b.n;
+  const R = runsum(b.A[0], n);
+  const O = new Array(n);
+  for (let i = 0; i < n; i++) O[i] = lyFields(record(x, at, R[i]))[4];
+  return { n, E: b.E, G: b.G, L: b.L, O, W: new Array(n) };
+}
+
+export function oLayerOpacity(x, s) {
+  const n = s.n, E = s.E, G = s.G, L = s.L, O = s.O, W = s.W, T = x.T, ON = x.ON;
+  for (let i = 0; i < n; i++) {
+    if (!ON[G[i]]) continue;
+    put(E[i], 'opacity', r(O[i](T[L[i]]) / 100), W, i);
+  }
 }

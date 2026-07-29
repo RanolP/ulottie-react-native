@@ -50,11 +50,28 @@ const GATED: &[(&str, Caps)] = &[
     ("rectPath", Caps::GEOM_RECT),
     ("ellipsePath", Caps::GEOM_ELLIPSE),
     ("starPath", Caps::GEOM_STAR),
-    // bShape names the trim helpers on a branch it only takes when the shape
-    // carries a trim modifier.
+    // The shape ops name the trim helpers on a branch they only take when some
+    // shape in the batch carries a trim modifier.
     ("trimTable", Caps::TRIM),
     ("trimApply", Caps::TRIM),
+    ("trimCols", Caps::TRIM),
+    ("trim", Caps::TRIM),
     ("expand", Caps::TEMPLATES),
+    // Every op names `xcol` to pick up the expression-driven bindings in one of
+    // its columns, and calls it only when there is an engine to hand them to.
+    // Without this gate, one `oOpacity` would drag `resolve` and the whole
+    // keyframe-handle surface into an animation that has no expressions at all.
+    //
+    // This is why each binder spells `x.expr ? xcol(…) : null` rather than
+    // letting `xcol` return null for itself: cutting the edge removes the
+    // *declaration*, so the guard at the call site is what keeps a module
+    // without expressions from calling a name it does not carry. Folding those
+    // 32 ternaries away looks like a clean ~380 bytes and breaks every
+    // animation that has no expressions.
+    ("xcol", Caps::EXPRESSIONS),
+    // The record-offset column, decoded by `mount` only when an engine is there
+    // to read the table it indexes.
+    ("column", Caps::EXPRESSIONS),
     // The expression runtime, cut to what the bodies name. A resolved body
     // reports the symbols it calls exactly, in `Plan::helpers`, and those enter
     // `roots()` directly; these gates cover the ones the runtime names on a
@@ -113,7 +130,9 @@ pub fn declarations(src: &str) -> Vec<Decl> {
             }
             // Before the first declaration: file header comments and blanks.
             None => {
-                if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('*')
+                if trimmed.is_empty()
+                    || trimmed.starts_with("//")
+                    || trimmed.starts_with('*')
                     || trimmed.starts_with("/*")
                 {
                     pending.push_str(line);
@@ -203,10 +222,7 @@ pub fn shake(decls: Vec<Decl>, roots: &[&str], caps: Caps) -> Vec<Decl> {
         .collect();
 
     let mut live = vec![false; decls.len()];
-    let mut stack: Vec<usize> = roots
-        .iter()
-        .filter_map(|r| index.get(r).copied())
-        .collect();
+    let mut stack: Vec<usize> = roots.iter().filter_map(|r| index.get(r).copied()).collect();
     for i in &stack {
         live[*i] = true;
     }
@@ -266,7 +282,10 @@ export function unused() {
     #[test]
     fn unreachable_declarations_are_dropped() {
         let kept = shake(declarations(SRC), &["a"], Caps::empty());
-        assert_eq!(kept.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+        assert_eq!(
+            kept.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(),
+            ["a", "b"]
+        );
     }
 
     #[test]
@@ -274,7 +293,10 @@ export function unused() {
         let src = "\
 export function a() {\n  // calls b() one day\n  return 1;\n}\nfunction b() { return 2; }\n";
         let kept = shake(declarations(src), &["a"], Caps::empty());
-        assert_eq!(kept.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), ["a"]);
+        assert_eq!(
+            kept.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(),
+            ["a"]
+        );
     }
 
     #[test]

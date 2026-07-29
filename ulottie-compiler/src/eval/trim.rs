@@ -56,8 +56,7 @@ fn table(path: &Flat) -> Option<Table> {
         for k in 1..=SAMPLES {
             let t = k as f64 / SAMPLES as f64;
             let u = 1.0 - t;
-            let (u3, u2t, ut2, t3) =
-                (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+            let (u3, u2t, ut2, t3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
             let x = u3 * p0.0 + u2t * p1.0 + ut2 * p2.0 + t3 * p3.0;
             let y = u3 * p0.1 + u2t * p1.1 + ut2 * p2.1 + t3 * p3.1;
             cum += ((x - px).powi(2) + (y - py).powi(2)).sqrt();
@@ -66,9 +65,17 @@ fn table(path: &Flat) -> Option<Table> {
             py = y;
         }
         total += cum;
-        segs.push(Seg { len: cum, dist, p: [p0.0, p0.1, p1.0, p1.1, p2.0, p2.1, p3.0, p3.1] });
+        segs.push(Seg {
+            len: cum,
+            dist,
+            p: [p0.0, p0.1, p1.0, p1.1, p2.0, p2.1, p3.0, p3.1],
+        });
     }
-    Some(Table { segs, total, closed: path.c })
+    Some(Table {
+        segs,
+        total,
+        closed: path.c,
+    })
 }
 
 /// Outcome of trimming a path with a constant range.
@@ -92,7 +99,9 @@ pub fn trim(path: &Flat, start: f64, end: f64, offset: f64) -> Trimmed {
     if vis >= 1.0 {
         return Trimmed::Whole;
     }
-    let Some(tab) = table(path) else { return Trimmed::Whole };
+    let Some(tab) = table(path) else {
+        return Trimmed::Whole;
+    };
     if tab.total == 0.0 {
         return Trimmed::Empty;
     }
@@ -140,7 +149,12 @@ fn concat(x: Flat, y: Flat) -> Flat {
 fn cut(tab: &Table, af: f64, bf: f64) -> Flat {
     let a_loc = locate(tab, af * tab.total);
     let b_loc = locate(tab, bf * tab.total);
-    let mut out = Flat { v: vec![], i: vec![], o: vec![], c: false };
+    let mut out = Flat {
+        v: vec![],
+        i: vec![],
+        o: vec![],
+        c: false,
+    };
 
     if a_loc.0 == b_loc.0 {
         let p = between(&tab.segs[a_loc.0].p, a_loc.1, b_loc.1);
@@ -196,7 +210,11 @@ fn locate(tab: &Table, dist: f64) -> (usize, f64) {
             let up = lo;
             let low = up.saturating_sub(1);
             let (dl, dh) = (seg.dist[low], seg.dist[up]);
-            let f = if dh == dl { 0.0 } else { (local - dl) / (dh - dl) };
+            let f = if dh == dl {
+                0.0
+            } else {
+                (local - dl) / (dh - dl)
+            };
             return (s, ((low as f64 + f) / SAMPLES as f64).clamp(0.0, 1.0));
         }
         acc += seg.len;

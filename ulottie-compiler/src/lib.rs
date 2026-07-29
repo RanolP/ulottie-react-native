@@ -190,8 +190,8 @@ pub fn compile_document(json: &str) -> Result<String> {
     // Inlined markup is parsed as HTML, where the SVG namespace is implied.
     // A standalone document has to declare it or a browser renders the source
     // tree instead of the picture.
-    let doc = document_template(json)?
-        .replacen("<svg ", "<svg xmlns=\"http://www.w3.org/2000/svg\" ", 1);
+    let doc =
+        document_template(json)?.replacen("<svg ", "<svg xmlns=\"http://www.w3.org/2000/svg\" ", 1);
     Ok(scene::resolve_ids(&doc, 0))
 }
 
@@ -324,9 +324,6 @@ pub fn runtime_slice_pretty(caps: &[String]) -> String {
 pub fn runtime_modules() -> impl Iterator<Item = (&'static str, &'static str)> {
     backend::emit::modules().iter().map(|m| (m.name, m.src))
 }
-
-
-
 
 /// Build the embedded runtime source for an arbitrary feature subset. Used by
 /// the dev server to compute per-feature size deltas: by calling this with

@@ -11,7 +11,7 @@
 
 use std::fs;
 
-use ulottie_compiler::{compile_with, CompileOptions, RuntimeMode};
+use ulottie_compiler::{CompileOptions, RuntimeMode, compile_with};
 
 mod common;
 
@@ -79,7 +79,11 @@ fn embedded_output_stays_within_budget() {
             over.push(format!("  {name}: {size} B > budget {budget} B"));
         }
     }
-    assert!(over.is_empty(), "embedded output exceeded budget:\n{}", over.join("\n"));
+    assert!(
+        over.is_empty(),
+        "embedded output exceeded budget:\n{}",
+        over.join("\n")
+    );
 }
 
 /// Animations with no time-varying property must not carry a runtime at all —
@@ -94,7 +98,10 @@ fn static_animations_ship_no_runtime() {
             "{name} is fully static but still schedules frames"
         );
         assert!(js.contains("<svg"), "{name} should carry baked markup");
-        assert!(js.contains("export const markup"), "{name} should export markup for SSR");
+        assert!(
+            js.contains("export const markup"),
+            "{name} should export markup for SSR"
+        );
     }
 }
 
@@ -103,9 +110,18 @@ fn static_animations_ship_no_runtime() {
 #[test]
 fn unused_capabilities_are_not_bundled() {
     let ball = embedded("bouncy_ball");
-    assert!(!ball.contains("trimTable"), "bouncy_ball pulled in trim support");
-    assert!(!ball.contains("radialGradient"), "bouncy_ball pulled in gradient support");
+    assert!(
+        !ball.contains("trimTable"),
+        "bouncy_ball pulled in trim support"
+    );
+    assert!(
+        !ball.contains("radialGradient"),
+        "bouncy_ball pulled in gradient support"
+    );
 
     let logo = embedded("lottie-logo");
-    assert!(!logo.contains("radialGradient"), "lottie-logo pulled in gradient support");
+    assert!(
+        !logo.contains("radialGradient"),
+        "lottie-logo pulled in gradient support"
+    );
 }

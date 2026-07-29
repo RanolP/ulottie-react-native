@@ -13,12 +13,16 @@ pub fn can_encode(m: &ir::Module) -> bool {
     for asset in &m.assets {
         if let ir::AssetKind::Precomp { layers } = &asset.kind {
             for layer in layers {
-                if !layer_supported(layer) { return false; }
+                if !layer_supported(layer) {
+                    return false;
+                }
             }
         }
     }
     for layer in &m.layers {
-        if !layer_supported(layer) { return false; }
+        if !layer_supported(layer) {
+            return false;
+        }
     }
     true
 }
@@ -30,7 +34,11 @@ fn layer_supported(layer: &ir::Layer) -> bool {
         ir::LayerKind::Image { .. } | ir::LayerKind::Other { .. } => false,
     };
     if !supported && std::env::var("ULOTTIE_DEBUG_BACKEND").is_ok() {
-        eprintln!("data-backend bail: layer ind={} ty={:?}", layer.index, std::mem::discriminant(&layer.kind));
+        eprintln!(
+            "data-backend bail: layer ind={} ty={:?}",
+            layer.index,
+            std::mem::discriminant(&layer.kind)
+        );
     }
     supported
 }
@@ -39,7 +47,9 @@ fn shapes_supported(shapes: &[ir::ShapeNode]) -> bool {
     for s in shapes {
         match s {
             ir::ShapeNode::Group { items, .. } => {
-                if !shapes_supported(items) { return false; }
+                if !shapes_supported(items) {
+                    return false;
+                }
             }
             _ => {}
         }
@@ -52,23 +62,44 @@ fn transform_is_identity(t: &ir::Transform) -> bool {
     let anchor = static_vec3(&t.anchor).unwrap_or([0.0, 0.0, 0.0]);
     if (position[0] - anchor[0]).abs() > 1e-3
         || (position[1] - anchor[1]).abs() > 1e-3
-        || (position[2] - anchor[2]).abs() > 1e-3 { return false; }
+        || (position[2] - anchor[2]).abs() > 1e-3
+    {
+        return false;
+    }
     let scale = static_vec3(&t.scale).unwrap_or([100.0, 100.0, 100.0]);
-    if (scale[0] - 100.0).abs() > 1e-3 || (scale[1] - 100.0).abs() > 1e-3 { return false; }
+    if (scale[0] - 100.0).abs() > 1e-3 || (scale[1] - 100.0).abs() > 1e-3 {
+        return false;
+    }
     let rotation = static_scalar(&t.rotation).unwrap_or(0.0);
-    if rotation.abs() > 1e-3 { return false; }
+    if rotation.abs() > 1e-3 {
+        return false;
+    }
     let opacity = static_scalar(&t.opacity).unwrap_or(100.0);
-    if (opacity - 100.0).abs() > 1e-3 { return false; }
-    let skew_ok = t.skew.as_ref().is_none_or(|p| static_scalar(p) == Some(0.0));
-    let skew_axis_ok = t.skew_axis.as_ref().is_none_or(|p| static_scalar(p) == Some(0.0));
+    if (opacity - 100.0).abs() > 1e-3 {
+        return false;
+    }
+    let skew_ok = t
+        .skew
+        .as_ref()
+        .is_none_or(|p| static_scalar(p) == Some(0.0));
+    let skew_axis_ok = t
+        .skew_axis
+        .as_ref()
+        .is_none_or(|p| static_scalar(p) == Some(0.0));
     skew_ok && skew_axis_ok
 }
 
 fn static_scalar(p: &ir::Property<f64>) -> Option<f64> {
-    match p { ir::Property::Static(v) => Some(*v), _ => None }
+    match p {
+        ir::Property::Static(v) => Some(*v),
+        _ => None,
+    }
 }
 fn static_vec3(p: &ir::Property<ir::Vec3>) -> Option<ir::Vec3> {
-    match p { ir::Property::Static(v) => Some(*v), _ => None }
+    match p {
+        ir::Property::Static(v) => Some(*v),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -90,18 +121,34 @@ pub fn encode(m: &ir::Module) -> Result<Payload> {
             match &asset.kind {
                 ir::AssetKind::Precomp { layers } => {
                     let mut inner = Vec::with_capacity(layers.len());
-                    for l in layers { inner.push(enc.encode_layer(l)?); }
+                    for l in layers {
+                        inner.push(enc.encode_layer(l)?);
+                    }
                     assets.insert(asset.id.clone(), Asset::Precomp { l: inner });
                 }
-                ir::AssetKind::Image { path, filename, width, height, embedded } => {
-                    assets.insert(asset.id.clone(), Asset::Image {
-                        u: path.clone(), p: filename.clone(),
-                        w: *width, h: *height, e: if *embedded { 1 } else { 0 },
-                    });
+                ir::AssetKind::Image {
+                    path,
+                    filename,
+                    width,
+                    height,
+                    embedded,
+                } => {
+                    assets.insert(
+                        asset.id.clone(),
+                        Asset::Image {
+                            u: path.clone(),
+                            p: filename.clone(),
+                            w: *width,
+                            h: *height,
+                            e: if *embedded { 1 } else { 0 },
+                        },
+                    );
                 }
             }
         }
-        if !assets.is_empty() { enc.payload.a = Some(assets); }
+        if !assets.is_empty() {
+            enc.payload.a = Some(assets);
+        }
     }
 
     for layer in &m.layers {
@@ -118,11 +165,16 @@ struct Encoder {
 
 impl Encoder {
     fn new() -> Self {
-        Self { payload: Payload::default(), str_cache: std::collections::HashMap::new() }
+        Self {
+            payload: Payload::default(),
+            str_cache: std::collections::HashMap::new(),
+        }
     }
 
     fn intern_string(&mut self, s: &str) -> u32 {
-        if let Some(&id) = self.str_cache.get(s) { return id; }
+        if let Some(&id) = self.str_cache.get(s) {
+            return id;
+        }
         let id = self.payload.st.len() as u32;
         self.payload.st.push(s.to_string());
         self.str_cache.insert(s.to_string(), id);
@@ -136,7 +188,11 @@ impl Encoder {
             ip: layer.in_point,
             op: layer.out_point,
             sr: layer.stretch,
-            st: if layer.start_time == 0.0 { None } else { Some(layer.start_time) },
+            st: if layer.start_time == 0.0 {
+                None
+            } else {
+                Some(layer.start_time)
+            },
             p: Some(self.inline_vec3(&layer.transform.position)?),
             a: Some(self.inline_vec3(&layer.transform.anchor)?),
             sc: Some(self.inline_vec3(&layer.transform.scale)?),
@@ -149,9 +205,15 @@ impl Encoder {
             out.tr = Some(self.inline_scalar(tr)?);
         }
         out.tt = layer.track_matte;
-        if layer.matte_layer_for_above { out.td = Some(1); }
-        if let Some(parent) = layer.parent { out.pr = Some(parent.0); }
-        if let Some(name) = &layer.name { out.n = Some(self.intern_string(name)); }
+        if layer.matte_layer_for_above {
+            out.td = Some(1);
+        }
+        if let Some(parent) = layer.parent {
+            out.pr = Some(parent.0);
+        }
+        if let Some(name) = &layer.name {
+            out.n = Some(self.intern_string(name));
+        }
 
         if !layer.masks.is_empty() {
             let mut masks = Vec::with_capacity(layer.masks.len());
@@ -166,7 +228,12 @@ impl Encoder {
                     Some(prop) => Some(self.inline_scalar(prop)?),
                     None => None,
                 };
-                masks.push(LayerMask { m: mode.to_string(), inv: m.inverted, pt, o });
+                masks.push(LayerMask {
+                    m: mode.to_string(),
+                    inv: m.inverted,
+                    pt,
+                    o,
+                });
             }
             out.mk = Some(masks);
         }
@@ -178,36 +245,57 @@ impl Encoder {
                 for p in &e.parameters {
                     let (v, pid) = match &p.value {
                         ir::EffectValue::Scalar(ir::Property::Static(s)) => (Some(*s), None),
-                        ir::EffectValue::Scalar(prop) => {
-                            (None, Some(self.inline_scalar(prop)?))
-                        }
+                        ir::EffectValue::Scalar(prop) => (None, Some(self.inline_scalar(prop)?)),
                         ir::EffectValue::Other(_) => continue,
                     };
                     params.push(EffectParam {
-                        nm: p.name.clone(), mn: p.match_name.clone(),
-                        ty: p.ty, v, p: pid,
+                        nm: p.name.clone(),
+                        mn: p.match_name.clone(),
+                        ty: p.ty,
+                        v,
+                        p: pid,
                     });
                 }
-                effects.push(Effect { nm: e.name.clone(), mn: e.match_name.clone(), ef: params });
+                effects.push(Effect {
+                    nm: e.name.clone(),
+                    mn: e.match_name.clone(),
+                    ef: params,
+                });
             }
-            if !effects.is_empty() { out.ef = Some(effects); }
+            if !effects.is_empty() {
+                out.ef = Some(effects);
+            }
         }
 
         match &layer.kind {
             ir::LayerKind::Shape { shapes } => {
                 let mut shape_refs = Vec::new();
                 self.encode_shape_tree(shapes, &mut shape_refs)?;
-                if !shape_refs.is_empty() { out.shapes = Some(shape_refs); }
+                if !shape_refs.is_empty() {
+                    out.shapes = Some(shape_refs);
+                }
             }
-            ir::LayerKind::Solid { color, width, height } => {
+            ir::LayerKind::Solid {
+                color,
+                width,
+                height,
+            } => {
                 out.cl = Some(color.clone());
                 out.sw = Some(*width);
                 out.sh = Some(*height);
             }
-            ir::LayerKind::Precomp { asset, width, height } => {
+            ir::LayerKind::Precomp {
+                asset,
+                width,
+                height,
+            } => {
                 out.rf = Some(asset.clone());
-                if *width != 0 { out.sw = Some(*width); }
-                if *height != 0 { out.sh = Some(*height); }
+                if *width != 0 {
+                    out.sw = Some(*width);
+                }
+                if *height != 0 {
+                    out.sh = Some(*height);
+                }
             }
             _ => {}
         }
@@ -215,7 +303,11 @@ impl Encoder {
         Ok(out)
     }
 
-    fn encode_shape_tree(&mut self, shapes: &[ir::ShapeNode], out: &mut Vec<ShapeRef>) -> Result<()> {
+    fn encode_shape_tree(
+        &mut self,
+        shapes: &[ir::ShapeNode],
+        out: &mut Vec<ShapeRef>,
+    ) -> Result<()> {
         self.encode_shape_tree_with(shapes, out, &[], None)
     }
 
@@ -239,104 +331,235 @@ impl Encoder {
                     self.payload.y.push(Style::Fill { c, o });
                     current_styles.push(id);
                 }
-                ir::ShapeNode::Stroke { color, opacity, width, linecap, linejoin, miter_limit, .. } => {
+                ir::ShapeNode::Stroke {
+                    color,
+                    opacity,
+                    width,
+                    linecap,
+                    linejoin,
+                    miter_limit,
+                    ..
+                } => {
                     let c = self.inline_color(color)?;
                     let o = self.inline_scalar(opacity)?;
                     let w = self.inline_scalar(width)?;
                     let id = self.payload.y.len() as u32;
                     self.payload.y.push(Style::Stroke {
-                        c, o, w,
-                        lc: linecap_num(*linecap), lj: linejoin_num(*linejoin), ml: *miter_limit,
+                        c,
+                        o,
+                        w,
+                        lc: linecap_num(*linecap),
+                        lj: linejoin_num(*linejoin),
+                        ml: *miter_limit,
                     });
                     current_styles.push(id);
                 }
-                ir::ShapeNode::GradientStroke { gradient, width, opacity, start, end, kind, linecap, linejoin, miter_limit, .. } => {
+                ir::ShapeNode::GradientStroke {
+                    gradient,
+                    width,
+                    opacity,
+                    start,
+                    end,
+                    kind,
+                    linecap,
+                    linejoin,
+                    miter_limit,
+                    ..
+                } => {
                     let w = self.inline_scalar(width)?;
                     let o = self.inline_scalar(opacity)?;
-                    let s = match start { Some(p) => Some(self.inline_vec2(p)?), None => None };
-                    let e = match end { Some(p) => Some(self.inline_vec2(p)?), None => None };
+                    let s = match start {
+                        Some(p) => Some(self.inline_vec2(p)?),
+                        None => None,
+                    };
+                    let e = match end {
+                        Some(p) => Some(self.inline_vec2(p)?),
+                        None => None,
+                    };
                     let id = self.payload.y.len() as u32;
                     self.payload.y.push(Style::GradientStroke {
                         g: gradient.raw.clone().unwrap_or(serde_json::Value::Null),
-                        w, o, s, e,
-                        gk: match kind { ir::GradientKind::Linear => 1, ir::GradientKind::Radial => 2 },
-                        lc: linecap_num(*linecap), lj: linejoin_num(*linejoin), ml: *miter_limit,
+                        w,
+                        o,
+                        s,
+                        e,
+                        gk: match kind {
+                            ir::GradientKind::Linear => 1,
+                            ir::GradientKind::Radial => 2,
+                        },
+                        lc: linecap_num(*linecap),
+                        lj: linejoin_num(*linejoin),
+                        ml: *miter_limit,
                     });
                     current_styles.push(id);
                 }
-                ir::ShapeNode::GradientFill { gradient, opacity, start, end, kind, rule, .. } => {
+                ir::ShapeNode::GradientFill {
+                    gradient,
+                    opacity,
+                    start,
+                    end,
+                    kind,
+                    rule,
+                    ..
+                } => {
                     let o = self.inline_scalar(opacity)?;
-                    let s = match start { Some(p) => Some(self.inline_vec2(p)?), None => None };
-                    let e = match end { Some(p) => Some(self.inline_vec2(p)?), None => None };
+                    let s = match start {
+                        Some(p) => Some(self.inline_vec2(p)?),
+                        None => None,
+                    };
+                    let e = match end {
+                        Some(p) => Some(self.inline_vec2(p)?),
+                        None => None,
+                    };
                     let id = self.payload.y.len() as u32;
                     self.payload.y.push(Style::GradientFill {
                         g: gradient.raw.clone().unwrap_or(serde_json::Value::Null),
-                        o, s, e,
-                        gk: match kind { ir::GradientKind::Linear => 1, ir::GradientKind::Radial => 2 },
-                        fr: match rule { ir::FillRule::NonZero => 1, ir::FillRule::EvenOdd => 2 },
+                        o,
+                        s,
+                        e,
+                        gk: match kind {
+                            ir::GradientKind::Linear => 1,
+                            ir::GradientKind::Radial => 2,
+                        },
+                        fr: match rule {
+                            ir::FillRule::NonZero => 1,
+                            ir::FillRule::EvenOdd => 2,
+                        },
                     });
                     current_styles.push(id);
                 }
-                ir::ShapeNode::TrimPath { start, end, offset, multiple_shapes, .. } => {
+                ir::ShapeNode::TrimPath {
+                    start,
+                    end,
+                    offset,
+                    multiple_shapes,
+                    ..
+                } => {
                     let s = self.inline_scalar(start)?;
                     let e = self.inline_scalar(end)?;
                     let o = self.inline_scalar(offset)?;
                     let id = self.payload.y.len() as u32;
                     self.payload.y.push(Style::TrimPath {
-                        s, e, o,
-                        m: match multiple_shapes { ir::TrimMultipleShapes::Simultaneously => 1, ir::TrimMultipleShapes::Individually => 2 },
+                        s,
+                        e,
+                        o,
+                        m: match multiple_shapes {
+                            ir::TrimMultipleShapes::Simultaneously => 1,
+                            ir::TrimMultipleShapes::Individually => 2,
+                        },
                     });
                     current_trim = Some(id);
                 }
-                ir::ShapeNode::Transform { transform, .. } => { group_transform = Some(transform); }
+                ir::ShapeNode::Transform { transform, .. } => {
+                    group_transform = Some(transform);
+                }
                 _ => {}
             }
         }
 
         let emit_into_group = group_transform.is_some_and(|t| !transform_is_identity(t));
         let mut emitted: Vec<ShapeRef> = Vec::new();
-        let target = if emit_into_group { &mut emitted } else { &mut *out };
+        let target = if emit_into_group {
+            &mut emitted
+        } else {
+            &mut *out
+        };
 
         for s in shapes {
             match s {
                 ir::ShapeNode::Group { items, .. } => {
                     self.encode_shape_tree_with(items, target, &current_styles, current_trim)?;
                 }
-                ir::ShapeNode::Rectangle { size, position, radius, .. } => {
+                ir::ShapeNode::Rectangle {
+                    size,
+                    position,
+                    radius,
+                    ..
+                } => {
                     let sz = self.inline_vec2(size)?;
                     let ps = self.inline_vec2(position)?;
                     let rd = self.inline_scalar(radius)?;
                     let sid = self.payload.s.len() as u32;
-                    self.payload.s.push(Shape::Rect { sz, ps, rd, nm: None });
-                    target.push(ShapeRef::Prim(PrimRef { s: sid, y: current_styles.clone(), tm: current_trim }));
+                    self.payload.s.push(Shape::Rect {
+                        sz,
+                        ps,
+                        rd,
+                        nm: None,
+                    });
+                    target.push(ShapeRef::Prim(PrimRef {
+                        s: sid,
+                        y: current_styles.clone(),
+                        tm: current_trim,
+                    }));
                 }
                 ir::ShapeNode::Ellipse { size, position, .. } => {
                     let sz = self.inline_vec2(size)?;
                     let ps = self.inline_vec2(position)?;
                     let sid = self.payload.s.len() as u32;
                     self.payload.s.push(Shape::Ellipse { sz, ps, nm: None });
-                    target.push(ShapeRef::Prim(PrimRef { s: sid, y: current_styles.clone(), tm: current_trim }));
+                    target.push(ShapeRef::Prim(PrimRef {
+                        s: sid,
+                        y: current_styles.clone(),
+                        tm: current_trim,
+                    }));
                 }
                 ir::ShapeNode::Path { ks, .. } => {
                     let pt = self.inline_path(ks)?;
                     let sid = self.payload.s.len() as u32;
                     self.payload.s.push(Shape::Path { pt, nm: None });
-                    target.push(ShapeRef::Prim(PrimRef { s: sid, y: current_styles.clone(), tm: current_trim }));
+                    target.push(ShapeRef::Prim(PrimRef {
+                        s: sid,
+                        y: current_styles.clone(),
+                        tm: current_trim,
+                    }));
                 }
-                ir::ShapeNode::PolyStar { kind, points, position, rotation, outer_radius, inner_radius, outer_roundness, inner_roundness, .. } => {
+                ir::ShapeNode::PolyStar {
+                    kind,
+                    points,
+                    position,
+                    rotation,
+                    outer_radius,
+                    inner_radius,
+                    outer_roundness,
+                    inner_roundness,
+                    ..
+                } => {
                     let pt = self.inline_scalar(points)?;
                     let ps = self.inline_vec2(position)?;
                     let rt = self.inline_scalar(rotation)?;
                     let or = self.inline_scalar(outer_radius)?;
-                    let ir = match inner_radius { Some(p) => self.inline_scalar(p)?, None => self.inline_scalar(&ir::Property::Static(0.0))? };
-                    let os = match outer_roundness { Some(p) => Some(self.inline_scalar(p)?), None => None };
-                    let is = match inner_roundness { Some(p) => Some(self.inline_scalar(p)?), None => None };
+                    let ir = match inner_radius {
+                        Some(p) => self.inline_scalar(p)?,
+                        None => self.inline_scalar(&ir::Property::Static(0.0))?,
+                    };
+                    let os = match outer_roundness {
+                        Some(p) => Some(self.inline_scalar(p)?),
+                        None => None,
+                    };
+                    let is = match inner_roundness {
+                        Some(p) => Some(self.inline_scalar(p)?),
+                        None => None,
+                    };
                     let sid = self.payload.s.len() as u32;
                     self.payload.s.push(Shape::PolyStar {
-                        sy: match kind { ir::PolyStarKind::Star => 1, ir::PolyStarKind::Polygon => 2 },
-                        pt, ps, or, ir, rt, os, is, nm: None,
+                        sy: match kind {
+                            ir::PolyStarKind::Star => 1,
+                            ir::PolyStarKind::Polygon => 2,
+                        },
+                        pt,
+                        ps,
+                        or,
+                        ir,
+                        rt,
+                        os,
+                        is,
+                        nm: None,
                     });
-                    target.push(ShapeRef::Prim(PrimRef { s: sid, y: current_styles.clone(), tm: current_trim }));
+                    target.push(ShapeRef::Prim(PrimRef {
+                        s: sid,
+                        y: current_styles.clone(),
+                        tm: current_trim,
+                    }));
                 }
                 _ => {}
             }
@@ -410,7 +633,11 @@ impl Encoder {
                     ir::ValueSource::Static(pd) => Some(Value::Path(path_to_wire(pd))),
                     ir::ValueSource::Animated(_) => None,
                 };
-                InlineProp::Expression(ExprProp { e: expr.0, fb, kf: None })
+                InlineProp::Expression(ExprProp {
+                    e: expr.0,
+                    fb,
+                    kf: None,
+                })
             }
         })
     }
@@ -447,12 +674,31 @@ fn encode_keyframes_scalar(kf: &ir::Keyframes<f64>) -> Keyframes {
     for frame in &kf.frames {
         times.push(frame.time);
         holds.push(frame.hold);
-        if frame.hold { any_hold = true; }
-        values.push(Value::Scalar(frame.value.unwrap_or(0.0)));
+        if frame.hold {
+            any_hold = true;
+        }
+        // An absent value is written as the empty marker, not as zero. Lottie's
+        // older keyframe form puts a segment's destination in `e` on the
+        // *first* keyframe and leaves the last one a bare terminator with no
+        // `s`; both readers resolve that by looking back at `e[i-1]`, but only
+        // if they can tell "absent" from "zero". `unwrap_or(0.0)` could not, so
+        // a two-keyframe legacy property looked constant and collapsed to a
+        // static value — which is how `starfish`'s eye lost its blink: its time
+        // remap ramps 0 → 2.333s entirely through `e`, and folded to a
+        // motionless 0. The vector encoder below has always done this.
+        values.push(match frame.value {
+            Some(v) => Value::Scalar(v),
+            None => Value::Vector(Vec::new()),
+        });
         ends.push(frame.end_value.map(Value::Scalar));
-        if frame.end_value.is_some() { any_end = true; }
+        if frame.end_value.is_some() {
+            any_end = true;
+        }
         if let (Some(o), Some(i)) = (&frame.easing_out, &frame.easing_in) {
-            oi_list.push(EasingPair { o: convert_easing(o), i: convert_easing(i) });
+            oi_list.push(EasingPair {
+                o: convert_easing(o),
+                i: convert_easing(i),
+            });
             any_easing = true;
         } else {
             oi_list.push(default_linear_easing());
@@ -460,10 +706,12 @@ fn encode_keyframes_scalar(kf: &ir::Keyframes<f64>) -> Keyframes {
     }
 
     Keyframes {
-        t: times, v: values,
+        t: times,
+        v: values,
         e: if any_end { Some(ends) } else { None },
         oi: if any_easing { Some(oi_list) } else { None },
-        to: None, ti: None,
+        to: None,
+        ti: None,
         h: if any_hold { Some(holds) } else { None },
     }
 }
@@ -484,12 +732,21 @@ fn encode_keyframes_vec<const N: usize>(kf: &ir::Keyframes<[f64; N]>, _dim: usiz
     for frame in &kf.frames {
         times.push(frame.time);
         holds.push(frame.hold);
-        if frame.hold { any_hold = true; }
-        values.push(Value::Vector(frame.value.map(|v| v.to_vec()).unwrap_or_default()));
+        if frame.hold {
+            any_hold = true;
+        }
+        values.push(Value::Vector(
+            frame.value.map(|v| v.to_vec()).unwrap_or_default(),
+        ));
         ends.push(frame.end_value.map(|v| Value::Vector(v.to_vec())));
-        if frame.end_value.is_some() { any_end = true; }
+        if frame.end_value.is_some() {
+            any_end = true;
+        }
         if let (Some(o), Some(i)) = (&frame.easing_out, &frame.easing_in) {
-            oi_list.push(EasingPair { o: convert_easing(o), i: convert_easing(i) });
+            oi_list.push(EasingPair {
+                o: convert_easing(o),
+                i: convert_easing(i),
+            });
             any_easing = true;
         } else {
             oi_list.push(default_linear_easing());
@@ -498,7 +755,9 @@ fn encode_keyframes_vec<const N: usize>(kf: &ir::Keyframes<[f64; N]>, _dim: usiz
             (Some(o), Some(i)) => {
                 to_list.push(o.to_vec());
                 ti_list.push(i.to_vec());
-                if o.iter().any(|&x| x != 0.0) || i.iter().any(|&x| x != 0.0) { any_spatial = true; }
+                if o.iter().any(|&x| x != 0.0) || i.iter().any(|&x| x != 0.0) {
+                    any_spatial = true;
+                }
             }
             _ => {
                 to_list.push(vec![0.0; N]);
@@ -508,7 +767,8 @@ fn encode_keyframes_vec<const N: usize>(kf: &ir::Keyframes<[f64; N]>, _dim: usiz
     }
 
     Keyframes {
-        t: times, v: values,
+        t: times,
+        v: values,
         e: if any_end { Some(ends) } else { None },
         oi: if any_easing { Some(oi_list) } else { None },
         to: if any_spatial { Some(to_list) } else { None },
@@ -530,15 +790,27 @@ fn encode_keyframes_path(kf: &ir::Keyframes<ir::PathData>) -> Keyframes {
     for frame in &kf.frames {
         times.push(frame.time);
         holds.push(frame.hold);
-        if frame.hold { any_hold = true; }
+        if frame.hold {
+            any_hold = true;
+        }
         match &frame.value {
             Some(pd) => values.push(Value::Path(path_to_wire(pd))),
             None => values.push(Value::Vector(Vec::new())),
         }
-        ends.push(frame.end_value.as_ref().map(|pd| Value::Path(path_to_wire(pd))));
-        if frame.end_value.is_some() { any_end = true; }
+        ends.push(
+            frame
+                .end_value
+                .as_ref()
+                .map(|pd| Value::Path(path_to_wire(pd))),
+        );
+        if frame.end_value.is_some() {
+            any_end = true;
+        }
         if let (Some(o), Some(i)) = (&frame.easing_out, &frame.easing_in) {
-            oi_list.push(EasingPair { o: convert_easing(o), i: convert_easing(i) });
+            oi_list.push(EasingPair {
+                o: convert_easing(o),
+                i: convert_easing(i),
+            });
             any_easing = true;
         } else {
             oi_list.push(default_linear_easing());
@@ -546,16 +818,21 @@ fn encode_keyframes_path(kf: &ir::Keyframes<ir::PathData>) -> Keyframes {
     }
 
     Keyframes {
-        t: times, v: values,
+        t: times,
+        v: values,
         e: if any_end { Some(ends) } else { None },
         oi: if any_easing { Some(oi_list) } else { None },
-        to: None, ti: None,
+        to: None,
+        ti: None,
         h: if any_hold { Some(holds) } else { None },
     }
 }
 
 fn convert_easing(h: &ir::EasingHandle) -> EasingHandle {
-    EasingHandle { x: convert_easing_component(&h.x), y: convert_easing_component(&h.y) }
+    EasingHandle {
+        x: convert_easing_component(&h.x),
+        y: convert_easing_component(&h.y),
+    }
 }
 
 fn convert_easing_component(c: &ir::EasingValue) -> EasingComponent {
@@ -567,8 +844,14 @@ fn convert_easing_component(c: &ir::EasingValue) -> EasingComponent {
 
 fn default_linear_easing() -> EasingPair {
     EasingPair {
-        o: EasingHandle { x: EasingComponent::Scalar(0.0), y: EasingComponent::Scalar(0.0) },
-        i: EasingHandle { x: EasingComponent::Scalar(1.0), y: EasingComponent::Scalar(1.0) },
+        o: EasingHandle {
+            x: EasingComponent::Scalar(0.0),
+            y: EasingComponent::Scalar(0.0),
+        },
+        i: EasingHandle {
+            x: EasingComponent::Scalar(1.0),
+            y: EasingComponent::Scalar(1.0),
+        },
     }
 }
 
@@ -584,11 +867,19 @@ fn layer_ty_num(kind: &ir::LayerKind) -> u32 {
 }
 
 fn linecap_num(c: ir::LineCap) -> u8 {
-    match c { ir::LineCap::Butt => 1, ir::LineCap::Round => 2, ir::LineCap::Square => 3 }
+    match c {
+        ir::LineCap::Butt => 1,
+        ir::LineCap::Round => 2,
+        ir::LineCap::Square => 3,
+    }
 }
 
 fn linejoin_num(j: ir::LineJoin) -> u8 {
-    match j { ir::LineJoin::Miter => 1, ir::LineJoin::Round => 2, ir::LineJoin::Bevel => 3 }
+    match j {
+        ir::LineJoin::Miter => 1,
+        ir::LineJoin::Round => 2,
+        ir::LineJoin::Bevel => 3,
+    }
 }
 
 fn path_to_wire(pd: &ir::PathData) -> PathValue {
@@ -597,5 +888,52 @@ fn path_to_wire(pd: &ir::PathData) -> PathValue {
         i: pd.in_tangents.iter().map(|p| [p[0], p[1]]).collect(),
         o: pd.out_tangents.iter().map(|p| [p[0], p[1]]).collect(),
         c: pd.closed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(time: f64, value: Option<f64>, end: Option<f64>) -> ir::Keyframe<f64> {
+        ir::Keyframe {
+            time,
+            value,
+            end_value: end,
+            easing_in: None,
+            easing_out: None,
+            spatial_in: None,
+            spatial_out: None,
+            hold: false,
+        }
+    }
+
+    /// Lottie's older keyframe form puts a segment's destination in `e` on the
+    /// *first* keyframe and leaves the last one a bare terminator with no `s`.
+    /// Both readers resolve that by looking back at `e[i-1]` — but only if the
+    /// encoder distinguishes "absent" from "zero".
+    ///
+    /// Writing the terminator as a literal `0` made such a property look
+    /// constant, so `classify_keyframes` collapsed it to a static value. That is
+    /// how `starfish`'s eye lost its blink: its time remap ramps 0 → 2.333s
+    /// entirely through `e`, folded to a motionless 0, and the eyelid mask sat
+    /// on its first keyframe forever.
+    #[test]
+    fn a_keyframe_with_no_start_value_encodes_as_absent_not_zero() {
+        let kf = ir::Keyframes {
+            frames: vec![frame(0.0, Some(0.0), Some(2.333)), frame(140.0, None, None)],
+        };
+        let out = encode_keyframes_scalar(&kf);
+        assert_eq!(out.v[0], Value::Scalar(0.0), "a real value stays a scalar");
+        assert!(
+            matches!(&out.v[1], Value::Vector(x) if x.is_empty()),
+            "the terminator must carry the empty marker, not a zero: {:?}",
+            out.v[1]
+        );
+        // …and the destination it stands for is still on the wire.
+        assert_eq!(
+            out.e.as_ref().and_then(|e| e[0].clone()),
+            Some(Value::Scalar(2.333))
+        );
     }
 }

@@ -6,7 +6,7 @@ use anyhow::Result;
 use crate::data::{self, InlineProp, Value};
 
 use super::frame::Transform2D;
-use super::property::{eval_scalar_or, eval_inline};
+use super::property::{eval_inline, eval_scalar_or};
 
 #[derive(Debug, Clone, Copy)]
 pub struct TransformSpec {
@@ -41,7 +41,9 @@ impl TransformSpec {
         let m11 = cos * sy;
         let dx = self.position[0] - (m00 * self.anchor[0] + m01 * self.anchor[1]);
         let dy = self.position[1] - (m10 * self.anchor[0] + m11 * self.anchor[1]);
-        Transform2D { m: [m00, m10, m01, m11, dx, dy] }
+        Transform2D {
+            m: [m00, m10, m01, m11, dx, dy],
+        }
     }
 }
 

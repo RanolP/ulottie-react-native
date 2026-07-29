@@ -85,7 +85,10 @@ pub fn fold(body: &str, facts: &Facts) -> Outcome {
         return Outcome::Open;
     }
 
-    let mut env = Env { vars: HashMap::new(), facts };
+    let mut env = Env {
+        vars: HashMap::new(),
+        facts,
+    };
     for stmt in &parsed.program.body {
         match env.exec(stmt) {
             Some(Flow::Normal) => {}
@@ -548,7 +551,9 @@ fn math(name: &str, args: &[V]) -> Option<V> {
 fn param_value(effect: &ir::Effect, key: &str) -> Option<V> {
     for p in &effect.parameters {
         if p.name.as_deref() == Some(key) || p.match_name.as_deref() == Some(key) {
-            let ir::EffectValue::Scalar(prop) = &p.value else { return None };
+            let ir::EffectValue::Scalar(prop) = &p.value else {
+                return None;
+            };
             return prop.static_value().copied().map(V::Num);
         }
     }

@@ -11,6 +11,11 @@ import { dec } from '../../ulottie-compiler/runtime/vlq.js';
 import { column } from '../../ulottie-compiler/runtime/col.js';
 import * as W from '../../ulottie-compiler/runtime/wire.js';
 
+// Everything below reads the stream through the runtime's own decoder and
+// header. It still went stale twice — once when the payload stopped being a
+// `{d, s}` object and became a bare string, and once when the asset and use
+// rows lost their record and scope columns — so prefer `W.*` over a literal.
+
 const [, , file, ...flags] = process.argv;
 if (!file) {
   console.error('usage: probe.mjs <module.js> [--records] [--exprs] [--assets]');
@@ -18,12 +23,13 @@ if (!file) {
 }
 
 const src = readFileSync(file, 'utf8');
-const m = src.match(/const D = ([\s\S]*?);\n\n(?:const E|export const)/) ||
-  src.match(/const D=(\{[\s\S]*?\});\n/);
+const m = /^const D = "([0-9a-v]*)";$/m.exec(src) || /const D="([0-9a-v]*)"/.exec(src);
 if (!m) throw new Error('no payload found in ' + file);
-const D = JSON.parse(m[1]);
-const S = dec(D.d);
-const str = D.s || [];
+const S = dec(m[1]);
+// Layer and effect names stopped being payload once every reference resolved to
+// a slot at compile time; a module that still emits a pool names it `SP`.
+const pool = /^const SP = \[([\s\S]*?)\];$/m.exec(src);
+const str = pool ? pool[1].split('\n').map((l) => l.trim().replace(/^'|',?$/g, '')).filter(Boolean) : [];
 
 const FIELDS = [['p', W.R_P], ['a', W.R_A], ['sc', W.R_SC], ['r', W.R_R], ['o', W.R_O], ['h', W.R_H]];
 
@@ -51,31 +57,34 @@ function exprAt(off) {
   return { x: S[off + 1], fb: S[off + 2], l: S[off + 3] ? S[off + 3] - 1 : undefined };
 }
 
-const docTable = column(S, S[W.H_LAYERS], true);
-const docRecs = readRecords(docTable);
-const scopes = column(S, S[W.H_SCOPES], true);
+const docRecs = readRecords(column(S, S[W.H_LAYERS]));
 
-console.log(`records: ${docRecs.length}  scopes column: ${scopes ? scopes.length : 'absent'}`);
+console.log(`records: ${docRecs.length}`);
 
 const assetsOff = S[W.H_ASSETS];
 const assets = [];
 if (assetsOff) {
   for (let k = 0, n = S[assetsOff]; k < n; k++) {
-    const row = assetsOff + 1 + k * 5;
-    assets.push(readRecords(column(S, S[row + 4], true)));
+    const row = assetsOff + 1 + k * W.A_STRIDE;
+    assets.push(readRecords(column(S, S[row + W.A_RECORDS])));
   }
 }
 const usesOff = S[W.H_USES];
 const uses = [];
 if (usesOff) {
   for (let u = 0, n = S[usesOff]; u < n; u++) {
-    const row = usesOff + 1 + u * 6;
-    uses.push({ asset: S[row], elBase: S[row + 1], recBase: S[row + 2], slotBase: S[row + 3], parentSlot: S[row + 4], scope: S[row + 5] });
+    const row = usesOff + 1 + u * W.U_STRIDE;
+    uses.push({
+      asset: S[row],
+      elBase: S[row + W.U_EL_BASE],
+      slotBase: S[row + W.U_SLOT_BASE],
+      parentSlot: S[row + W.U_PARENT],
+    });
   }
 }
 console.log(`assets: ${assets.length} (${assets.map((a) => a.length).join(', ')} records)  uses: ${uses.length}`);
 
-const show = (recs, label, scopeOf) => {
+const show = (recs, label) => {
   console.log(`\n--- ${label}`);
   recs.forEach((r, i) => {
     const parts = [`#${i}`, `ind=${r.i}`];
@@ -85,15 +94,17 @@ const show = (recs, label, scopeOf) => {
       const e = exprAt(r[key]);
       if (e) parts.push(`${key}=EXPR{x:${e.x},l:${e.l}}`);
     }
-    if (scopeOf) parts.push(`scope=${scopeOf(i)}`);
+
     console.log('  ' + parts.join(' '));
   });
 };
 
 if (flags.includes('--records')) {
-  show(docRecs, 'document', (i) => (scopes ? scopes[i] : 0));
-  assets.forEach((a, k) => show(a, `asset ${k}`, null));
-  for (const u of uses) console.log(`  use asset=${u.asset} recBase=${u.recBase} scope=${u.scope}`);
+  show(docRecs, 'document');
+  assets.forEach((a, k) => show(a, `asset ${k}`));
+  for (const u of uses) {
+    console.log(`  use asset=${u.asset} elBase=${u.elBase} slotBase=${u.slotBase} parentSlot=${u.parentSlot}`);
+  }
 }
 
 if (flags.includes('--exprs')) {

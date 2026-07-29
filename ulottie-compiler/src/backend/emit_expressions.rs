@@ -12,7 +12,7 @@
 
 use crate::scene::Caps;
 
-use super::layers::Plan;
+use super::layers::{Plan, Surface};
 
 /// Names destructured from `ctx`.
 ///
@@ -44,13 +44,26 @@ pub const CTX_NAMES: &[&str] = &[
 /// exactly, in `Plan::helpers`, and those go straight into the shake roots.
 pub fn vocabulary(bodies: &[String]) -> Caps {
     const PROPERTY: &[&str] = &[
-        "thisProperty", "numKeys", "key", "nearestKey", "valueAtTime",
-        "velocityAtTime", "loopOut",
+        "thisProperty",
+        "numKeys",
+        "key",
+        "nearestKey",
+        "valueAtTime",
+        "velocityAtTime",
+        "loopOut",
     ];
     const COMP: &[&str] = &["thisComp", "toComp", "fromCompToSurface"];
     const PATH: &[&str] = &[
-        "createPath", "pointOnPath", "tangentOnPath", "points", "inTangents",
-        "outTangents", "isClosed", "lyPath", "lyPoints", "lyClosed",
+        "createPath",
+        "pointOnPath",
+        "tangentOnPath",
+        "points",
+        "inTangents",
+        "outTangents",
+        "isClosed",
+        "lyPath",
+        "lyPoints",
+        "lyClosed",
     ];
     // Deliberately *not* `free_identifiers`: that one excludes member accesses,
     // because `path.pointOnPath(t)` needs no free binding in the preamble. The
@@ -104,10 +117,7 @@ pub fn emit_one(out: &mut String, body: &str, plan: &Plan) {
 
     let ctx_used: Vec<&str> = CTX_NAMES.iter().copied().filter(|n| uses(n)).collect();
     if !ctx_used.is_empty() {
-        out.push_str(&format!(
-            "    const {{ {} }} = ctx;\n",
-            ctx_used.join(", ")
-        ));
+        out.push_str(&format!("    const {{ {} }} = ctx;\n", ctx_used.join(", ")));
     }
     if uses("time") {
         out.push_str("    const time = frame / ctx.frameRate;\n");
@@ -118,27 +128,44 @@ pub fn emit_one(out: &mut String, body: &str, plan: &Plan) {
     if plan.frame_duration {
         out.push_str("    const frameDuration = 1 / ctx.frameRate;\n");
     }
-    // The `thisProperty` surface. Each is stubbed when the property has no
-    // keyframes, which is why they cannot simply be read off `thisProperty`.
-    if uses("numKeys") {
-        out.push_str("    const numKeys = thisProperty?.numKeys ?? 0;\n");
-    }
-    if uses("nearestKey") {
-        out.push_str("    const nearestKey = thisProperty?.nearestKey ? thisProperty.nearestKey.bind(thisProperty) : ((t) => ({ index: 1, time: 0 }));\n");
-    }
-    if uses("key") {
-        out.push_str("    const key = thisProperty?.key ? thisProperty.key.bind(thisProperty) : ((n) => ({ time: 0, value: 0, index: n }));\n");
-    }
-    if uses("valueAtTime") {
-        out.push_str("    const valueAtTime = thisProperty?.valueAtTime ? thisProperty.valueAtTime.bind(thisProperty) : ((t) => 0);\n");
-    }
-    if uses("velocityAtTime") {
-        out.push_str("    const velocityAtTime = thisProperty?.velocityAtTime ? thisProperty.velocityAtTime.bind(thisProperty) : ((t) => 0);\n");
-    }
+    // The `thisProperty` surface.
+    //
+    // `thisProperty` is always an object — `evalExpr` builds one for every call
+    // — and none of its methods reads `this`, so neither the `?.` nor a
+    // `.bind()` was ever load-bearing. The bind was also *per evaluation*: the
+    // preamble is inside the body, so every frame allocated one bound function
+    // per accessor.
+    //
+    // Which accessors exist is decided by the value source, which the planner
+    // resolved long ago — see [`Surface`]. A body applied to a path property
+    // gets the stub written out; one applied to anything else reads the method
+    // directly. The `||` survives only where the uses disagree, which is the
+    // same rule the layer pass folds by.
+    let keys = plan.surface.map(Surface::has_keys);
+    let mut accessor = |name: &str, stub: &str| {
+        if !uses(name) {
+            return;
+        }
+        out.push_str(&match keys {
+            Some(true) => format!("    const {name} = thisProperty.{name};\n"),
+            Some(false) => format!("    const {name} = {stub};\n"),
+            None => format!("    const {name} = thisProperty.{name} || ({stub});\n"),
+        });
+    };
+    accessor("nearestKey", "(t) => ({ index: 1, time: 0 })");
+    accessor("key", "(n) => ({ time: 0, value: 0, index: n })");
+    accessor("valueAtTime", "(t) => 0");
+    accessor("velocityAtTime", "(t) => 0");
     // AE exposes `loopOut` as a free function equivalent to
     // `thisProperty.loopOut(...)`.
-    if uses("loopOut") {
-        out.push_str("    const loopOut = thisProperty?.loopOut ? thisProperty.loopOut.bind(thisProperty) : ((mode, n) => value);\n");
+    accessor("loopOut", "(mode, n) => value");
+    // `numKeys` is defined on every shape, and is zero on all but the keyed
+    // one — so it is a literal whenever the uses agree it is not keyed.
+    if uses("numKeys") {
+        out.push_str(match plan.surface {
+            Some(Surface::Keyed) | None => "    const numKeys = thisProperty.numKeys;\n",
+            Some(_) => "    const numKeys = 0;\n",
+        });
     }
 
     // Bodymovin bodies usually declare `$bm_rt` themselves; only add one when
@@ -226,6 +253,85 @@ mod tests {
             body: String::new(),
             helpers: Default::default(),
             frame_duration: false,
+            // Keyed is what the corpus is; the other two are covered below.
+            surface: Some(Surface::Keyed),
+        }
+    }
+
+    fn emit_with(body: &str, surface: Option<Surface>) -> String {
+        let mut out = String::new();
+        emit_one(
+            &mut out,
+            body,
+            &Plan {
+                surface,
+                ..resolved()
+            },
+        );
+        out
+    }
+
+    /// The accessors are read straight off `thisProperty` when every property
+    /// using the body agrees it has them, replaced by the stub when they all
+    /// agree it does not, and probed only when they disagree.
+    ///
+    /// Only the first of the three occurs in the corpus, so the other two would
+    /// otherwise ship unexercised.
+    #[test]
+    fn the_property_surface_folds_to_what_the_uses_agree_on() {
+        let body = "$bm_rt = key(nearestKey(time).index);";
+
+        let keyed = emit_with(body, Some(Surface::Keyed));
+        assert!(keyed.contains("const key = thisProperty.key;"), "{keyed}");
+        assert!(
+            !keyed.contains("||"),
+            "a settled surface needs no probe: {keyed}"
+        );
+
+        // A path property has the geometry accessors and none of these.
+        let path = emit_with(body, Some(Surface::Path));
+        assert!(
+            path.contains("const key = (n) => ({ time: 0, value: 0, index: n });"),
+            "{path}"
+        );
+        assert!(!path.contains("thisProperty.key"), "{path}");
+
+        // Deduplicated across properties that disagree: keep the probe.
+        let mixed = emit_with(body, None);
+        assert!(
+            mixed.contains("const key = thisProperty.key || ((n) =>"),
+            "{mixed}"
+        );
+    }
+
+    /// `numKeys` is defined on all three shapes, and zero on all but the keyed
+    /// one — so it is a literal wherever the uses agree it is not keyed.
+    #[test]
+    fn num_keys_folds_to_a_literal_off_the_keyed_surface() {
+        let body = "$bm_rt = numKeys;";
+        assert!(
+            emit_with(body, Some(Surface::Keyed)).contains("const numKeys = thisProperty.numKeys;")
+        );
+        assert!(emit_with(body, Some(Surface::Stub)).contains("const numKeys = 0;"));
+        assert!(emit_with(body, Some(Surface::Path)).contains("const numKeys = 0;"));
+        assert!(emit_with(body, None).contains("const numKeys = thisProperty.numKeys;"));
+    }
+
+    /// Nothing in the preamble may probe or rebind: `thisProperty` is always an
+    /// object, and none of its methods reads `this`. The bind was also once per
+    /// *evaluation*, since the preamble lives inside the body.
+    #[test]
+    fn the_preamble_neither_probes_nor_binds() {
+        let body = "$bm_rt = loopOut('cycle') + valueAtTime(0) + velocityAtTime(0) + numKeys;";
+        for surface in [
+            Some(Surface::Keyed),
+            Some(Surface::Stub),
+            Some(Surface::Path),
+            None,
+        ] {
+            let out = emit_with(body, surface);
+            assert!(!out.contains(".bind("), "{surface:?}: {out}");
+            assert!(!out.contains("thisProperty?."), "{surface:?}: {out}");
         }
     }
 
@@ -234,7 +340,6 @@ mod tests {
         emit_one(&mut s, body, &resolved());
         s
     }
-
 
     #[test]
     fn only_the_names_a_body_uses_are_bound() {
@@ -251,7 +356,10 @@ mod tests {
         // so the body keeps the call but no binding is introduced for it.
         let out = emit("$bm_rt = p.pointOnPath(0.5);");
         assert!(out.contains("p.pointOnPath(0.5)"), "{out}");
-        assert!(!out.contains("= ctx;"), "no ctx destructure expected: {out}");
+        assert!(
+            !out.contains("= ctx;"),
+            "no ctx destructure expected: {out}"
+        );
     }
 
     #[test]
@@ -282,15 +390,20 @@ mod tests {
         assert!(!out.contains("thisComp"), "{out}");
     }
 
-
     #[test]
     fn frame_duration_is_a_division_not_a_baked_decimal() {
         let mut s = String::new();
         emit_one(
             &mut s,
             "$bm_rt = frameDuration;",
-            &Plan { frame_duration: true, ..resolved() },
+            &Plan {
+                frame_duration: true,
+                ..resolved()
+            },
         );
-        assert!(s.contains("const frameDuration = 1 / ctx.frameRate;"), "{s}");
+        assert!(
+            s.contains("const frameDuration = 1 / ctx.frameRate;"),
+            "{s}"
+        );
     }
 }

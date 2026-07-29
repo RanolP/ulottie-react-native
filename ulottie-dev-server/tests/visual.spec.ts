@@ -395,6 +395,41 @@ describe('the number formatter', () => {
 // drawing actually is.
 const GEOMETRY_TOLERANCE = 0.02; // 2% of the viewport
 
+// An animated mask has to keep animating.
+//
+// `starfish`'s eye is a precomp whose clock is a time remap, and the eyelid is
+// an animated mask inside it. Every gate above missed it losing that: the mask
+// only moves for ~18 frames either side of t≈0.09 and t≈0.57, and `SAMPLES`
+// steps over both; the geometry check reads `getBoundingClientRect`, which is
+// blind to clipping; and the pixel check never looked at those frames. So the
+// starfish stopped winking and nothing said a word.
+//
+// This asks the narrow question the others cannot: does the mask's `d` take
+// more than one value over the animation? It is deliberately not a comparison
+// against lottie-web — a frozen mask is wrong on its own terms.
+describe('an animated mask keeps animating', () => {
+  test('starfish', { timeout: 60_000 }, async () => {
+    const { ref, ulottie } = mountContainers();
+    const anim = await loadFixture('starfish', ref, ulottie, 'embedded');
+    try {
+      const seen = new Set<string>();
+      for (let f = 0; f <= anim.totalFrames; f += 4) {
+        anim.goToFrame(f);
+        await new Promise(r => requestAnimationFrame(() => r(undefined)));
+        for (const p of ulottie.querySelectorAll('mask path')) {
+          seen.add(p.getAttribute('d') ?? '');
+        }
+      }
+      expect(
+        seen.size,
+        `starfish's eyelid mask never moves — it took one shape across the whole animation`,
+      ).toBeGreaterThan(1);
+    } finally {
+      anim.destroy();
+    }
+  });
+});
+
 describe('geometry parity vs lottie-web', () => {
   beforeAll(async () => {
     await page.viewport(VIEWPORT_W * 2 + 40, VIEWPORT_H + 40);

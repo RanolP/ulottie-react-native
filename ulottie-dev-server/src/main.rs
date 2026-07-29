@@ -40,7 +40,7 @@ use anyhow::Result;
 
 mod contract;
 use axum::{
-    Json, Router,
+    Router,
     body::Bytes,
     extract::State,
     http::{HeaderValue, Request, StatusCode, header},
@@ -50,7 +50,7 @@ use axum::{
 };
 use clap::{Parser, ValueEnum};
 use flate2::{Compression, write::GzEncoder};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::fs;
 use tower_http::services::ServeDir;
@@ -123,8 +123,7 @@ impl PathLayout {
             .ok_or_else(|| anyhow::anyhow!("crate has no parent"))?
             .to_path_buf();
         Ok(Self {
-            lottie_web_bundle: workspace
-                .join("node_modules/lottie-web/build/player/lottie.min.js"),
+            lottie_web_bundle: workspace.join("node_modules/lottie-web/build/player/lottie.min.js"),
             fixtures_dir: workspace.join("_fixtures").join("animations"),
             output_dir: crate_dir.join(".output"),
         })
@@ -134,7 +133,9 @@ impl PathLayout {
 /// Unsupported features each fixture is allowed to use, from
 /// `_fixtures/allowances.json`. Keeping it in the repo rather than in code
 /// means a degradation shows up in review as a diff.
-fn fixture_allowances(name: &str) -> std::collections::BTreeSet<ulottie_compiler::support::Feature> {
+fn fixture_allowances(
+    name: &str,
+) -> std::collections::BTreeSet<ulottie_compiler::support::Feature> {
     static CACHE: OnceLock<serde_json::Value> = OnceLock::new();
     let doc = CACHE.get_or_init(|| {
         let path = StdPath::new(env!("CARGO_MANIFEST_DIR"))
@@ -160,7 +161,9 @@ fn fixture_allowances(name: &str) -> std::collections::BTreeSet<ulottie_compiler
 /// `/compile` responses, so both stay in sync without a disk round-trip.
 fn minified_driver() -> &'static str {
     static CACHE: OnceLock<String> = OnceLock::new();
-    CACHE.get_or_init(ulottie_compiler::minified_driver).as_str()
+    CACHE
+        .get_or_init(ulottie_compiler::minified_driver)
+        .as_str()
 }
 
 #[tokio::main]
@@ -202,7 +205,10 @@ async fn run_server(paths: Arc<PathLayout>, args: ServeArgs) -> Result<()> {
         .route("/.output/driver.js", get(serve_driver))
         .route("/.output/runtime/{*path}", get(serve_runtime_module))
         .nest_service("/.output", output_service)
-        .layer(middleware::from_fn_with_state(paths.clone(), ensure_compiled))
+        .layer(middleware::from_fn_with_state(
+            paths.clone(),
+            ensure_compiled,
+        ))
         .layer(middleware::from_fn(no_store))
         .layer(TraceLayer::new_for_http())
         .with_state(paths.clone());
@@ -225,7 +231,10 @@ async fn run_server(paths: Arc<PathLayout>, args: ServeArgs) -> Result<()> {
 /// size panel reports as the ceiling.
 async fn serve_driver() -> impl IntoResponse {
     (
-        [(header::CONTENT_TYPE, "application/javascript; charset=utf-8")],
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
         minified_driver(),
     )
 }
@@ -234,19 +243,19 @@ async fn serve_driver() -> impl IntoResponse {
 /// exactly the entry points it binds (`./runtime/core.js`,
 /// `./runtime/ops/txt.js`, …) so a bundler resolves a normal module graph and
 /// shakes it; the browser resolves the same specifiers against this route.
-async fn serve_runtime_module(
-    axum::extract::Path(rest): axum::extract::Path<String>,
-) -> Response {
+async fn serve_runtime_module(axum::extract::Path(rest): axum::extract::Path<String>) -> Response {
     match ulottie_compiler::runtime_module(&rest) {
         Some(src) => (
-            [(header::CONTENT_TYPE, "application/javascript; charset=utf-8")],
+            [(
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            )],
             src.to_string(),
         )
             .into_response(),
         None => (StatusCode::NOT_FOUND, format!("no runtime module `{rest}`")).into_response(),
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Middleware
@@ -277,7 +286,10 @@ async fn ensure_compiled(
         // differs — but cache under the *requested* name, so the two forms do
         // not overwrite each other.
         let (routed, pretty) = match file.find(".pretty.") {
-            Some(i) => (format!("{}{}", &file[..i], &file[i + ".pretty".len()..]), true),
+            Some(i) => (
+                format!("{}{}", &file[..i], &file[i + ".pretty".len()..]),
+                true,
+            ),
             None => (file.to_string(), false),
         };
         // `<name>.sprite.svg` is produced as a side effect of compiling
@@ -309,10 +321,8 @@ async fn ensure_compiled(
 /// Stamp `Cache-Control: no-store` on every response.
 async fn no_store(req: Request<axum::body::Body>, next: Next) -> Response {
     let mut res = next.run(req).await;
-    res.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    );
+    res.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     res
 }
 
@@ -387,7 +397,10 @@ async fn compile_if_stale(
     if variant == Variant::Slice {
         let report = ulottie_compiler::compile_report(
             &json,
-            &ulottie_compiler::CompileOptions { allow, ..Default::default() },
+            &ulottie_compiler::CompileOptions {
+                allow,
+                ..Default::default()
+            },
         )
         .map_err(|e| ApiError::compile(format!("compile {name}: {e}")))?;
         let body = if pretty {
@@ -487,14 +500,21 @@ fn feature_costs() -> &'static FeatureCost {
             full - ulottie_compiler::embedded_runtime_size(omitted) as i32
         };
         FeatureCost {
-            expressions: cost(ulottie_compiler::EmbeddedFeatures { expressions: false, ..all_on }),
-            trim_path: cost(ulottie_compiler::EmbeddedFeatures { trim_path: false, ..all_on }),
-            gradient: cost(ulottie_compiler::EmbeddedFeatures { gradient: false, ..all_on }),
+            expressions: cost(ulottie_compiler::EmbeddedFeatures {
+                expressions: false,
+                ..all_on
+            }),
+            trim_path: cost(ulottie_compiler::EmbeddedFeatures {
+                trim_path: false,
+                ..all_on
+            }),
+            gradient: cost(ulottie_compiler::EmbeddedFeatures {
+                gradient: false,
+                ..all_on
+            }),
         }
     })
 }
-
-
 
 #[derive(Deserialize)]
 struct LottieHeader {
@@ -512,7 +532,10 @@ fn gzip_size(data: &[u8]) -> usize {
 }
 
 fn size_entry(data: &[u8]) -> contract::SizeEntry {
-    contract::SizeEntry { raw: data.len() as u32, gzipped: gzip_size(data) as u32 }
+    contract::SizeEntry {
+        raw: data.len() as u32,
+        gzipped: gzip_size(data) as u32,
+    }
 }
 
 async fn compile_handler(
@@ -562,8 +585,8 @@ async fn compile_handler(
         allow: allow_all.clone(),
         ..Default::default()
     };
-    let embedded_js = ulottie_compiler::compile_with(json_text, &embedded_options)
-        .unwrap_or_default();
+    let embedded_js =
+        ulottie_compiler::compile_with(json_text, &embedded_options).unwrap_or_default();
     let embedded_path = paths.output_dir.join(format!("{id}.embedded.js"));
     fs::write(&embedded_path, &embedded_js).await.ok();
     let embedded_bytes = embedded_js.as_bytes();
@@ -641,8 +664,14 @@ async fn compile_handler(
         (format!("{id}.slice.js"), slice.as_bytes()),
         (format!("{id}.pretty.json"), pretty_json.as_bytes()),
         (format!("{id}.pretty.js"), pretty_extern.as_bytes()),
-        (format!("{id}.embedded.pretty.js"), pretty_embedded.as_bytes()),
-        (format!("{id}.extracted.pretty.js"), pretty_extracted.as_bytes()),
+        (
+            format!("{id}.embedded.pretty.js"),
+            pretty_embedded.as_bytes(),
+        ),
+        (
+            format!("{id}.extracted.pretty.js"),
+            pretty_extracted.as_bytes(),
+        ),
         (format!("{id}.slice.pretty.js"), pretty_slice.as_bytes()),
         (format!("{id}.sprite.pretty.svg"), pretty_sprite.as_bytes()),
     ] {
@@ -821,13 +850,7 @@ async fn run_sizes(paths: Arc<PathLayout>, args: SizesArgs) -> Result<()> {
     let lottie_raw = lottie_bytes.len();
     let lottie_gz = gzip_size(&lottie_bytes);
 
-    print_table(
-        &fixtures,
-        driver_raw,
-        driver_gz,
-        lottie_raw,
-        lottie_gz,
-    );
+    print_table(&fixtures, driver_raw, driver_gz, lottie_raw, lottie_gz);
 
     Ok(())
 }
@@ -846,7 +869,10 @@ async fn measure_fixture(path: &StdPath) -> Result<FixtureSizes> {
     // Extern mode.
     let extern_js = ulottie_compiler::compile_with(
         &json_text,
-        &ulottie_compiler::CompileOptions { allow: allow.clone(), ..Default::default() },
+        &ulottie_compiler::CompileOptions {
+            allow: allow.clone(),
+            ..Default::default()
+        },
     )
     .unwrap_or_default();
     let extern_raw = extern_js.len();
@@ -931,9 +957,21 @@ fn print_table(
 
     fn feat_str(f: &ulottie_compiler::EmbeddedFeatures) -> String {
         let mut s = String::new();
-        if f.expressions { s.push('E'); } else { s.push('-'); }
-        if f.trim_path { s.push('T'); } else { s.push('-'); }
-        if f.gradient { s.push('G'); } else { s.push('-'); }
+        if f.expressions {
+            s.push('E');
+        } else {
+            s.push('-');
+        }
+        if f.trim_path {
+            s.push('T');
+        } else {
+            s.push('-');
+        }
+        if f.gradient {
+            s.push('G');
+        } else {
+            s.push('-');
+        }
         s
     }
 
@@ -943,10 +981,13 @@ fn print_table(
     println!(
         "\n {:<nw$}  {}  {}  {}  {}  {}  {}  {}  Feat  How",
         "Fixt",
-        hdr("JSON"), hdr_gz("gz"),
-        hdr("Ext"), hdr_gz("gz"),
+        hdr("JSON"),
+        hdr_gz("gz"),
+        hdr("Ext"),
+        hdr_gz("gz"),
         hdr("+slice"),
-        hdr("Emb"), hdr_gz("gz"),
+        hdr("Emb"),
+        hdr_gz("gz"),
         nw = nw,
     );
     println!("{}", "-".repeat(nw + 80));
@@ -955,12 +996,15 @@ fn print_table(
         println!(
             " {:<nw$}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {}  {}",
             f.name,
-            fmt_bytes(f.json_raw), fmt_bytes(f.json_gz),
-            fmt_bytes(f.extern_raw), fmt_bytes(f.extern_gz),
+            fmt_bytes(f.json_raw),
+            fmt_bytes(f.json_gz),
+            fmt_bytes(f.extern_raw),
+            fmt_bytes(f.extern_gz),
             // What a page actually downloads for *one* animation in shared
             // mode: the module plus the runtime slice it imports.
             fmt_bytes(f.extern_gz + f.slice_gz),
-            fmt_bytes(f.embedded_raw), fmt_bytes(f.embedded_gz),
+            fmt_bytes(f.embedded_raw),
+            fmt_bytes(f.embedded_gz),
             feat_str(&f.features),
             if f.generated { "code" } else { "interp" },
             nw = nw,
@@ -974,15 +1018,19 @@ fn print_table(
     println!(
         " {:<nw$}  {:>8}  {:>8}  {:>8}  {:>8}",
         "runtime (all capabilities)",
-        "", "",
-        fmt_bytes(driver_raw), fmt_bytes(driver_gz),
+        "",
+        "",
+        fmt_bytes(driver_raw),
+        fmt_bytes(driver_gz),
         nw = nw,
     );
     println!(
         " {:<nw$}  {:>8}  {:>8}  {:>8}  {:>8}",
         "lottie.min.js",
-        "", "",
-        fmt_bytes(lottie_raw), fmt_bytes(lottie_gz),
+        "",
+        "",
+        fmt_bytes(lottie_raw),
+        fmt_bytes(lottie_gz),
         nw = nw,
     );
     println!();
@@ -993,10 +1041,7 @@ fn print_table(
         let avg_extern_gz = fixtures.iter().map(|f| f.extern_gz).sum::<usize>() / n;
         let avg_embedded_gz = fixtures.iter().map(|f| f.embedded_gz).sum::<usize>() / n;
         let avg_json_gz = fixtures.iter().map(|f| f.json_gz).sum::<usize>() / n;
-        println!(
-            "Averages ({} fixtures, gzipped):",
-            n
-        );
+        println!("Averages ({} fixtures, gzipped):", n);
         println!(
             "  lottie-web first load : {:>8}  (lottie.min.js + {} avg JSON)",
             fmt_bytes(lottie_gz + avg_json_gz),
@@ -1006,16 +1051,12 @@ fn print_table(
             "  ulottie extern module : {:>8}  (avg; imports the runtime as ES modules,",
             fmt_bytes(avg_extern_gz),
         );
-        println!(
-            "                                    so a bundler ships only what is reached)"
-        );
+        println!("                                    so a bundler ships only what is reached)");
         println!(
             "  ulottie embedded      : {:>8}  (self-contained, avg — this is the",
             fmt_bytes(avg_embedded_gz),
         );
-        println!(
-            "                                    single-animation first load)"
-        );
+        println!("                                    single-animation first load)");
     }
 }
 
@@ -1030,10 +1071,16 @@ struct ApiError {
 
 impl ApiError {
     fn bad_request(msg: String) -> Self {
-        Self { status: StatusCode::BAD_REQUEST, message: msg }
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: msg,
+        }
     }
     fn compile(msg: String) -> Self {
-        Self { status: StatusCode::UNPROCESSABLE_ENTITY, message: msg }
+        Self {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            message: msg,
+        }
     }
 }
 

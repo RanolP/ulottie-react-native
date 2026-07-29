@@ -31,7 +31,11 @@ fn effect(name: &str, params: &[(&str, Option<f64>)]) -> ir::Effect {
 }
 
 fn facts<'a>(effects: &'a [ir::Effect], num_keys: usize) -> Facts<'a> {
-    Facts { effects, num_keys, value_range: None }
+    Facts {
+        effects,
+        num_keys,
+        value_range: None,
+    }
 }
 
 /// `lights`, used on five layers. The guard is an effect checkbox and a
@@ -47,14 +51,20 @@ if (thisProperty.propertyGroup(1)('Pseudo/ADBE Trace Path-0002') == true && this
 
 #[test]
 fn a_loop_toggle_that_is_off_deletes_the_expression() {
-    let fx = [effect("Trace", &[("Pseudo/ADBE Trace Path-0002", Some(0.0))])];
+    let fx = [effect(
+        "Trace",
+        &[("Pseudo/ADBE Trace Path-0002", Some(0.0))],
+    )];
     assert_eq!(fold(LOOP_TOGGLE, &facts(&fx, 4)), Outcome::Identity);
 }
 
 #[test]
 fn a_property_with_one_keyframe_deletes_it_too() {
     // The toggle is on, but `numKeys > 1` is false, so the loop cannot apply.
-    let fx = [effect("Trace", &[("Pseudo/ADBE Trace Path-0002", Some(1.0))])];
+    let fx = [effect(
+        "Trace",
+        &[("Pseudo/ADBE Trace Path-0002", Some(1.0))],
+    )];
     assert_eq!(fold(LOOP_TOGGLE, &facts(&fx, 1)), Outcome::Identity);
 }
 
@@ -62,7 +72,10 @@ fn a_property_with_one_keyframe_deletes_it_too() {
 fn a_loop_toggle_that_is_on_stays() {
     // `loopOut` genuinely varies with the frame — folding it away would be a
     // rendering change, so the expression ships.
-    let fx = [effect("Trace", &[("Pseudo/ADBE Trace Path-0002", Some(1.0))])];
+    let fx = [effect(
+        "Trace",
+        &[("Pseudo/ADBE Trace Path-0002", Some(1.0))],
+    )];
     assert_eq!(fold(LOOP_TOGGLE, &facts(&fx, 4)), Outcome::Open);
 }
 
@@ -90,19 +103,31 @@ const CLAMP: &str = "var $bm_rt;\n$bm_rt = clamp(value, 0, 100);";
 
 #[test]
 fn clamping_a_property_to_a_range_it_never_leaves_is_nothing() {
-    let f = Facts { effects: &[], num_keys: 3, value_range: Some((0.0, 100.0)) };
+    let f = Facts {
+        effects: &[],
+        num_keys: 3,
+        value_range: Some((0.0, 100.0)),
+    };
     assert_eq!(fold(CLAMP, &f), Outcome::Identity);
 }
 
 #[test]
 fn clamping_one_that_does_leave_it_stays() {
-    let f = Facts { effects: &[], num_keys: 3, value_range: Some((-10.0, 120.0)) };
+    let f = Facts {
+        effects: &[],
+        num_keys: 3,
+        value_range: Some((-10.0, 120.0)),
+    };
     assert_eq!(fold(CLAMP, &f), Outcome::Open);
 }
 
 #[test]
 fn clamping_an_unknown_range_stays() {
-    let f = Facts { effects: &[], num_keys: 3, value_range: None };
+    let f = Facts {
+        effects: &[],
+        num_keys: 3,
+        value_range: None,
+    };
     assert_eq!(fold(CLAMP, &f), Outcome::Open);
 }
 
@@ -122,9 +147,18 @@ try {
 fn an_overshoot_on_a_property_with_no_keyframes_is_nothing() {
     // `0 < numKeys` is false, so `n` stays 0, so the ternary takes `value`.
     let fx = [
-        effect("Position - Overshoot", &[("ADBE Slider Control-0001", Some(35.0))]),
-        effect("Position - Bounce", &[("ADBE Slider Control-0001", Some(60.0))]),
-        effect("Position - Friction", &[("ADBE Slider Control-0001", Some(20.0))]),
+        effect(
+            "Position - Overshoot",
+            &[("ADBE Slider Control-0001", Some(35.0))],
+        ),
+        effect(
+            "Position - Bounce",
+            &[("ADBE Slider Control-0001", Some(60.0))],
+        ),
+        effect(
+            "Position - Friction",
+            &[("ADBE Slider Control-0001", Some(20.0))],
+        ),
     ];
     assert_eq!(fold(OVERSHOOT, &facts(&fx, 0)), Outcome::Identity);
 }
@@ -133,9 +167,18 @@ fn an_overshoot_on_a_property_with_no_keyframes_is_nothing() {
 fn an_overshoot_with_keyframes_stays() {
     // `nearestKey(time)` depends on the frame; nothing here can decide it.
     let fx = [
-        effect("Position - Overshoot", &[("ADBE Slider Control-0001", Some(35.0))]),
-        effect("Position - Bounce", &[("ADBE Slider Control-0001", Some(60.0))]),
-        effect("Position - Friction", &[("ADBE Slider Control-0001", Some(20.0))]),
+        effect(
+            "Position - Overshoot",
+            &[("ADBE Slider Control-0001", Some(35.0))],
+        ),
+        effect(
+            "Position - Bounce",
+            &[("ADBE Slider Control-0001", Some(60.0))],
+        ),
+        effect(
+            "Position - Friction",
+            &[("ADBE Slider Control-0001", Some(20.0))],
+        ),
     ];
     assert_eq!(fold(OVERSHOOT, &facts(&fx, 5)), Outcome::Open);
 }
@@ -168,7 +211,10 @@ $bm_rt = pathLayer.toComp(pathLayer('ADBE Root Vectors Group')(1).pointOnPath(0.
 
 #[test]
 fn syntax_it_cannot_parse_is_left_alone() {
-    assert_eq!(fold("this is not javascript {{{", &facts(&[], 0)), Outcome::Open);
+    assert_eq!(
+        fold("this is not javascript {{{", &facts(&[], 0)),
+        Outcome::Open
+    );
 }
 
 #[test]

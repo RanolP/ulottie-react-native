@@ -95,7 +95,10 @@ fn resolve_refs(module: &mut ir::Module) {
     // `None` marks a body whose uses disagree, or one whose layer does not
     // answer to a name it asks for.
     let mut agreed: HashMap<u32, Option<Vec<Vec<u32>>>> = HashMap::new();
-    let mut uses = Uses { refs: &refs, agreed: &mut agreed };
+    let mut uses = Uses {
+        refs: &refs,
+        agreed: &mut agreed,
+    };
     collect_uses(module, &mut uses);
     drop(uses);
 
@@ -103,9 +106,11 @@ fn resolve_refs(module: &mut ir::Module) {
     for (id, indices) in agreed {
         let Some(indices) = indices else { continue };
         let list = &refs[&id];
-        let pairs: Vec<(&resolve::Ref, Vec<u32>)> =
-            list.iter().zip(indices).collect();
-        rewritten.push((id, resolve::rewrite(&module.expressions.get(ir::ExprId(id)).body, &pairs)));
+        let pairs: Vec<(&resolve::Ref, Vec<u32>)> = list.iter().zip(indices).collect();
+        rewritten.push((
+            id,
+            resolve::rewrite(&module.expressions.get(ir::ExprId(id)).body, &pairs),
+        ));
     }
     for (id, body) in rewritten {
         module.expressions.get_mut(ir::ExprId(id)).body = body;
@@ -155,13 +160,19 @@ fn fold_branches(module: &mut ir::Module) {
             let Some(list) = found.get(&id) else { continue };
             // Each test on its own, against this property. One the evaluator
             // cannot decide is `None` — kept, never guessed at.
-            let facts = Facts { effects: &effects, num_keys, value_range: None };
+            let facts = Facts {
+                effects: &effects,
+                num_keys,
+                value_range: None,
+            };
             let decided: Vec<Option<bool>> = list
                 .iter()
-                .map(|b| match super::fold(&format!("$bm_rt = ({});", b.test), &facts) {
-                    Outcome::Constant(n) => Some(n != 0.0),
-                    _ => None,
-                })
+                .map(
+                    |b| match super::fold(&format!("$bm_rt = ({});", b.test), &facts) {
+                        Outcome::Constant(n) => Some(n != 0.0),
+                        _ => None,
+                    },
+                )
                 .collect();
             match agreed.entry(id) {
                 std::collections::hash_map::Entry::Vacant(v) => {
@@ -202,9 +213,10 @@ struct Uses<'a> {
 impl Uses<'_> {
     /// One property still carrying expression `id`, on a layer with `effects`.
     fn record(&mut self, id: u32, effects: &[ir::Effect]) {
-        let Some(list) = self.refs.get(&id) else { return };
-        let resolved: Option<Vec<Vec<u32>>> =
-            list.iter().map(|r| r.resolve(effects)).collect();
+        let Some(list) = self.refs.get(&id) else {
+            return;
+        };
+        let resolved: Option<Vec<Vec<u32>>> = list.iter().map(|r| r.resolve(effects)).collect();
         match self.agreed.entry(id) {
             std::collections::hash_map::Entry::Vacant(v) => {
                 v.insert(resolved);
@@ -334,7 +346,12 @@ fn shape(node: &mut ir::ShapeNode, cx: &mut Cx, fx: &[ir::Effect]) {
             }
         }
         ir::ShapeNode::Path { ks, .. } => ks.visit(cx, fx),
-        ir::ShapeNode::Rectangle { size, position, radius, .. } => {
+        ir::ShapeNode::Rectangle {
+            size,
+            position,
+            radius,
+            ..
+        } => {
             size.visit(cx, fx);
             position.visit(cx, fx);
             radius.visit(cx, fx);
@@ -357,7 +374,10 @@ fn shape(node: &mut ir::ShapeNode, cx: &mut Cx, fx: &[ir::Effect]) {
             position.visit(cx, fx);
             rotation.visit(cx, fx);
             outer_radius.visit(cx, fx);
-            for p in [inner_radius, outer_roundness, inner_roundness].into_iter().flatten() {
+            for p in [inner_radius, outer_roundness, inner_roundness]
+                .into_iter()
+                .flatten()
+            {
                 p.visit(cx, fx);
             }
         }
@@ -365,25 +385,43 @@ fn shape(node: &mut ir::ShapeNode, cx: &mut Cx, fx: &[ir::Effect]) {
             color.visit(cx, fx);
             opacity.visit(cx, fx);
         }
-        ir::ShapeNode::Stroke { color, opacity, width, .. } => {
+        ir::ShapeNode::Stroke {
+            color,
+            opacity,
+            width,
+            ..
+        } => {
             color.visit(cx, fx);
             opacity.visit(cx, fx);
             width.visit(cx, fx);
         }
-        ir::ShapeNode::GradientFill { opacity, start, end, .. } => {
+        ir::ShapeNode::GradientFill {
+            opacity,
+            start,
+            end,
+            ..
+        } => {
             opacity.visit(cx, fx);
             for p in [start, end].into_iter().flatten() {
                 p.visit(cx, fx);
             }
         }
-        ir::ShapeNode::GradientStroke { width, opacity, start, end, .. } => {
+        ir::ShapeNode::GradientStroke {
+            width,
+            opacity,
+            start,
+            end,
+            ..
+        } => {
             width.visit(cx, fx);
             opacity.visit(cx, fx);
             for p in [start, end].into_iter().flatten() {
                 p.visit(cx, fx);
             }
         }
-        ir::ShapeNode::TrimPath { start, end, offset, .. } => {
+        ir::ShapeNode::TrimPath {
+            start, end, offset, ..
+        } => {
             start.visit(cx, fx);
             end.visit(cx, fx);
             offset.visit(cx, fx);
@@ -421,7 +459,9 @@ fn decide<T: Clone>(
     effects: &[ir::Effect],
     range: impl Fn(&ir::ValueSource<T>) -> Option<(f64, f64)>,
 ) -> Option<Decision<T>> {
-    let ir::Property::Expression { fallback, expr } = prop else { return None };
+    let ir::Property::Expression { fallback, expr } = prop else {
+        return None;
+    };
     if let Some(map) = cx.remap {
         *expr = ir::ExprId(map[&expr.0]);
         return None;
@@ -430,8 +470,11 @@ fn decide<T: Clone>(
         cx.found.push((expr.0, num_keys(fallback)));
         return None;
     }
-    let facts =
-        Facts { effects, num_keys: num_keys(fallback), value_range: range(fallback) };
+    let facts = Facts {
+        effects,
+        num_keys: num_keys(fallback),
+        value_range: range(fallback),
+    };
     cx.seen.insert(expr.0);
     Some(Decision {
         id: expr.0,
@@ -458,7 +501,9 @@ fn demote<T: Clone>(prop: &mut ir::Property<T>, fallback: ir::ValueSource<T>) {
 
 impl Site for ir::Property<ir::Scalar> {
     fn visit(&mut self, cx: &mut Cx, effects: &[ir::Effect]) {
-        let Some(d) = decide(self, cx, effects, scalar_range) else { return };
+        let Some(d) = decide(self, cx, effects, scalar_range) else {
+            return;
+        };
         match d.outcome {
             Outcome::Identity => demote(self, d.fallback),
             Outcome::Constant(n) => *self = ir::Property::Static(n),
@@ -501,7 +546,9 @@ macro_rules! identity_only {
     ($t:ty) => {
         impl Site for ir::Property<$t> {
             fn visit(&mut self, cx: &mut Cx, effects: &[ir::Effect]) {
-                let Some(d) = decide(self, cx, effects, |_| None) else { return };
+                let Some(d) = decide(self, cx, effects, |_| None) else {
+                    return;
+                };
                 if d.outcome == Outcome::Identity {
                     demote(self, d.fallback);
                     cx.folded += 1;

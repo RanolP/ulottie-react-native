@@ -4,8 +4,9 @@
 // caps: TRANSFORM | KEYFRAMES | EASING | SPATIAL
 
 import { mount } from './runtime/core.js';
-import { bTransform } from './runtime/ops/tx.js';
-const B=[bTransform];
+import { bTransform, oTransform } from './runtime/ops/tx.js';
+const P0=(x,B,e,l,q,a)=>[bTransform(x,B[0],e,l,q,a)];
+const A0=(x,S)=>{oTransform(x,S[0])};
 
 const M =
   '<svg viewBox="0 0 1080 1080" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="overflow:hidden">' +
@@ -17,7 +18,7 @@ const M =
     '</g>' +
   '</svg>';
 
-const D = "0gmqe0gpst10i200000kh100000c00gt7gt7qp200gt7gp70kn4gt7gt70mj5gt7qp20mj5gt7uk10mj5gt7msq5e0k1o2s3g5k6o7sgopg1inngt1sgopg1ihlp8sgopg1inngt1sgopg1ihlp8sgopg1inngt1sgopg1ihlp8sgopg1inngt12426260lmom3000000000000000000000lmom3i34upvu3spsk8mgi5i1k1i2q2u3s4k5k6i7q7g5g5o3m6g5g5g5g5o3m6g5g5g5g5o3m6g5g588888a88002802k5ubmcgh1";
+const D = "0gmqe0gpst10q100qh10000c00gt7gt7qp200gt7gp70kn4gt7gt70mj5gt7qp20mj5gt7uk10mj5gt7msq5e0k1o2s3g5k6o7sgopg1inngt1sgopg1ihlp8sgopg1inngt1sgopg1ihlp8sgopg1inngt1sgopg1ihlp8sgopg1inngt12426260lmom3000000000000000000000lmom3i34upvu3spsk8mgi5i1k1i2q2u3s4k5k6i7q7g5g5o3m6g5g5g5g5o3m6g5g5g5g5o3m6g5g588888a8800202s4mbubog12sg1";
 
 export const markup = M;
-export const init = (c, o) => mount(M, D, B, c, o);
+export const init = (c, o) => mount(M, D, P0, A0, c, o);

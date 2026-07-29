@@ -8,6 +8,7 @@
       "vite/client"
     ],
     "esModuleInterop": true,
+    "allowJs": true,
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,

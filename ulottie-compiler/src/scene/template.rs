@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use super::{Planner, El};
+use super::{El, Planner};
 
 /// Don't factor out anything smaller than this. A placeholder is ~19 bytes and
 /// the table entry pays for itself after the second occurrence, so the floor
@@ -73,11 +73,23 @@ impl Planner<'_> {
         out.push_str("</svg>");
 
         if std::env::var("ULOTTIE_DEBUG_TPL").is_ok() {
-            let mut c: Vec<_> = counts.iter().filter(|(t, n)| **n >= 2 && t.len() >= 40).collect();
+            let mut c: Vec<_> = counts
+                .iter()
+                .filter(|(t, n)| **n >= 2 && t.len() >= 40)
+                .collect();
             c.sort_by_key(|(t, n)| std::cmp::Reverse(t.len() * **n));
-            eprintln!("markup {} B, limit {}, candidates:", markup.len(), self.inline_limit);
+            eprintln!(
+                "markup {} B, limit {}, candidates:",
+                markup.len(),
+                self.inline_limit
+            );
             for (t, n) in c.iter().take(5) {
-                eprintln!("  {n}x {} B  worth={}  {}", t.len(), (worth_it)(t), &t[..t.len().min(70)]);
+                eprintln!(
+                    "  {n}x {} B  worth={}  {}",
+                    t.len(),
+                    (worth_it)(t),
+                    &t[..t.len().min(70)]
+                );
             }
             eprintln!("  table: {} entries", table.len());
         }

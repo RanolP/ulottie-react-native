@@ -5,9 +5,10 @@
 
 import { mount } from './runtime/core.js';
 import { makeExpr, fromCompToSurface, lyAnchor, lyAt, lyEffect, lyPath, toComp } from './runtime/expr.js';
-import { bShape } from './runtime/ops/shape.js';
-import { bLayerTx } from './runtime/ops/layer.js';
-const B=[,,,,bShape,,,,,,bLayerTx];
+import { bShape, oShape } from './runtime/ops/shape.js';
+import { bLayerTx, oLayerTx } from './runtime/ops/layer.js';
+const P0=(x,B,e,l,q,a)=>[bShape(x,B[0],e,l,q,a),bLayerTx(x,B[1],e,l,q,a)];
+const A0=(x,S)=>{oShape(x,S[0]);oLayerTx(x,S[1])};
 
 const M =
   '<svg viewBox="0 0 800 600" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="overflow:hidden">' +
@@ -57,7 +58,7 @@ const M =
     '</g>' +
   '</svg>';
 
-const D = "0gskt10gsni90i200000g7si30000600gt7gt7gj70io6io6ki40io6io6k86tl2v25v2gp2v200jm100000km100086s3i10k6e2k1u202k1142k1942k1922k1922k192481s602004000ikv1000eiqf06002000iooj10002000ighn20002000ighn202004000iqru5000eiqf02004000ikko4000eiqf02004000iguu2000eiqf02004000ignn1000eiqf0600200k1i1000200k1e000200k1a02004000ioqh60000202004000igiu40000202004000iosi30000202004000imku100002026gi3ol2080sg220082uh2226gr5oi20mgi980o7om1sn1qh3oi20qh3qh30qh3qh30qh3oi2020484kj2626icoi2080sg2a82uh2a80sg2c82uh2c80sg2e82uh2e80sg2g182uh2g1i36luj1uvp20i36lkru6uruv10kdavnh1gq5tuh1qq5vmi1qk6lsh1ir7tvg1in6g50000j6v4t19s3v40000k6g5u1ar3i36usk2upp30i36ofuqp30i36hh9upp30i36vgk2quv20s1qk3c8a8ccccaeeeeos22mh2ii2uh2sao84qi2uh2oo26ul2uh2oco88mm2uh2os2agn2on2uh2qfos2cgo2oo2uh2mh1os2egp2op2uh2ij1os2g1gq2oq2uh2uk1og3i1sg2k6qm1sh3k18gr2qr2ks2sp1sh3m1akg3qr2ks2or1sh3o1cug3qr2ks2kt1sh3q1eoh3qr2ks2gv1sh1s10ii3qr2ks2";
+const D = "0gskt10gsni90q100q8gh3000600gt7gt7gj70io6io6ki40io6io6k86tl2v25v2gp2v200jm100000km100086k3i1202s50c04aaaa2e111334k6u62004000ikv1000eiqf06002000iooj10002000ighn20002000ighn202004000iqru5000eiqf02004000ikko4000eiqf02004000iguu2000eiqf02004000ignn1000eiqf0600200k1i1000200k1e000200k1a02004000ioqh60000202004000igiu40000202004000iosi30000202004000imku100002026gi3ol2080gv120082ig2226gr5oi20mgi980o7om1sn1qh3oi20qh3qh30qh3qh30qh3oi2020484oh2626icoi2080gv1a82ig2a80gv1c82ig2c80gv1e82ig2e80gv1g182ig2g1i36luj1uvp20i36lkru6uruv10kdavnh1gq5tuh1qq5vmi1qk6lsh1ir7tvg1in6g50000j6v4t19s3v40000k6g5u1ar3i36usk2upp30i36ofuqp30i36hh9upp30i36vgk2quv20s1ui3c8a8ccccaeeeeos22qv1mg2ig2g9o84ug2ig2oo26ik2ig2sao88qk2ig2os2akl2sl2ig2udos2ckm2sm2ig2qfos2ekn2sn2ig2mh1os2g1ko2so2ig2ij1og3i1gv1s5uk1sh3k18kp2up2oq2go1sh3m1aou2up2oq2sp1sh3o1civ2up2oq2or1sh3q1esv2up2oq2kt1sh1s10mg3up2oq2";
 
 const E = [
   function(value, thisLayer, thisProperty, frame, ctx) {
@@ -82,10 +83,10 @@ const E = [
     const { sum, sub, mul, div } = ctx;
     const time = frame / ctx.frameRate;
     const frameDuration = 1 / ctx.frameRate;
-    const numKeys = thisProperty?.numKeys ?? 0;
-    const nearestKey = thisProperty?.nearestKey ? thisProperty.nearestKey.bind(thisProperty) : ((t) => ({ index: 1, time: 0 }));
-    const key = thisProperty?.key ? thisProperty.key.bind(thisProperty) : ((n) => ({ time: 0, value: 0, index: n }));
-    const velocityAtTime = thisProperty?.velocityAtTime ? thisProperty.velocityAtTime.bind(thisProperty) : ((t) => 0);
+    const nearestKey = thisProperty.nearestKey;
+    const key = thisProperty.key;
+    const velocityAtTime = thisProperty.velocityAtTime;
+    const numKeys = thisProperty.numKeys;
     var $bm_rt;
     var amp, freq, decay, n, t, v;
     try {
@@ -122,4 +123,4 @@ const E = [
 ];
 
 export const markup = M;
-export const init = (c, o) => mount(M, D, B, c, o,{x:v=>makeExpr(E,v)});
+export const init = (c, o) => mount(M, D, P0, A0, c, o,{x:v=>makeExpr(E,v)});

@@ -9,7 +9,7 @@
 use std::fs;
 
 use ulottie_compiler::backend::shake;
-use ulottie_compiler::{compile_with, CompileOptions, RuntimeMode};
+use ulottie_compiler::{CompileOptions, RuntimeMode, compile_with};
 
 mod common;
 
@@ -56,7 +56,11 @@ fn dead_declarations(src: &str) -> Vec<String> {
     let names: Vec<String> = all.iter().map(|d| d.name.clone()).collect();
     // `markup` and `init` are the module's exports; everything else has to be
     // reachable from them.
-    let live = shake::shake(all, &["markup", "init"], ulottie_compiler::scene::Caps::all());
+    let live = shake::shake(
+        all,
+        &["markup", "init"],
+        ulottie_compiler::scene::Caps::all(),
+    );
     let live: Vec<&str> = live.iter().map(|d| d.name.as_str()).collect();
     names
         .into_iter()
@@ -87,7 +91,14 @@ fn embedded_output_has_no_unreachable_declarations() {
 #[test]
 fn capability_gates_keep_unused_runtime_out() {
     let ball = emitted("bouncy_ball", RuntimeMode::Embedded);
-    for gone in ["lerpPath", "trimTable", "pathD", "rectPath", "starPath", "css"] {
+    for gone in [
+        "lerpPath",
+        "trimTable",
+        "pathD",
+        "rectPath",
+        "starPath",
+        "css",
+    ] {
         assert!(
             !ball.contains(&format!("function {gone}")),
             "bouncy_ball animates one transform but still ships `{gone}`"
@@ -95,9 +106,12 @@ fn capability_gates_keep_unused_runtime_out() {
     }
 
     let logo = emitted("lottie-logo", RuntimeMode::Embedded);
-    assert!(logo.contains("function trimTable"), "lottie-logo trims paths");
     assert!(
-        !logo.contains("function bGradient"),
+        logo.contains("function trimTable"),
+        "lottie-logo trims paths"
+    );
+    assert!(
+        !logo.contains("function oGradient"),
         "lottie-logo has no gradients but ships the gradient binder"
     );
 }
@@ -108,9 +122,15 @@ fn capability_gates_keep_unused_runtime_out() {
 fn extern_output_imports_only_what_it_binds() {
     let ball = emitted("bouncy_ball", RuntimeMode::Extern);
     assert!(ball.contains("import { mount } from './runtime/core.js';"));
-    assert!(ball.contains("import { bTransform } from './runtime/ops/tx.js';"));
-    assert!(!ball.contains("driver.js"), "extern must not pull an aggregate driver");
-    assert!(!ball.contains("bGradient"), "bouncy_ball binds no gradients");
+    assert!(ball.contains("import { bTransform, oTransform } from './runtime/ops/tx.js';"));
+    assert!(
+        !ball.contains("driver.js"),
+        "extern must not pull an aggregate driver"
+    );
+    assert!(
+        !ball.contains("oGradient"),
+        "bouncy_ball binds no gradients"
+    );
 }
 
 /// Reachability is resolved on bare names, so two runtime modules must never
@@ -146,8 +166,13 @@ fn runtime_top_level_names_are_globally_unique() {
 fn expression_bodies_only_call_what_the_module_declares() {
     for name in fixture_names() {
         let src = emitted(&name, RuntimeMode::Embedded);
-        let Some(table) = src.split_once("const E = [") else { continue };
-        let table = &table.1[..table.1.find("\n];").expect("expression table is terminated")];
+        let Some(table) = src.split_once("const E = [") else {
+            continue;
+        };
+        let table = &table.1[..table
+            .1
+            .find("\n];")
+            .expect("expression table is terminated")];
 
         // Everything the module declares, plus what a body legitimately binds
         // for itself: the function's own parameters, and the names the preamble
@@ -157,8 +182,17 @@ fn expression_bodies_only_call_what_the_module_declares() {
             .map(|d| d.name.clone())
             .collect();
         known.extend(
-            ["value", "thisLayer", "thisProperty", "frame", "ctx", "Math", "Array", "console"]
-                .map(String::from),
+            [
+                "value",
+                "thisLayer",
+                "thisProperty",
+                "frame",
+                "ctx",
+                "Math",
+                "Array",
+                "console",
+            ]
+            .map(String::from),
         );
         for line in table.lines() {
             let t = line.trim_start();
@@ -236,7 +270,9 @@ fn free_names(src: &str) -> std::collections::BTreeSet<String> {
         }
         if c.is_alphabetic() || c == '_' || c == '$' {
             let start = i;
-            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == '$') {
+            while i < chars.len()
+                && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == '$')
+            {
                 i += 1;
             }
             let after = chars[i..].iter().find(|c| !c.is_whitespace());
@@ -248,10 +284,36 @@ fn free_names(src: &str) -> std::collections::BTreeSet<String> {
                 let w: String = chars[start..i].iter().collect();
                 // Keywords are not references.
                 const KW: &[&str] = &[
-                    "var", "let", "const", "function", "return", "if", "else", "for", "while",
-                    "try", "catch", "finally", "new", "typeof", "in", "of", "true", "false",
-                    "null", "undefined", "this", "throw", "switch", "case", "break", "continue",
-                    "do", "delete", "void", "instanceof",
+                    "var",
+                    "let",
+                    "const",
+                    "function",
+                    "return",
+                    "if",
+                    "else",
+                    "for",
+                    "while",
+                    "try",
+                    "catch",
+                    "finally",
+                    "new",
+                    "typeof",
+                    "in",
+                    "of",
+                    "true",
+                    "false",
+                    "null",
+                    "undefined",
+                    "this",
+                    "throw",
+                    "switch",
+                    "case",
+                    "break",
+                    "continue",
+                    "do",
+                    "delete",
+                    "void",
+                    "instanceof",
                 ];
                 if !KW.contains(&w.as_str()) {
                     out.insert(w);
@@ -275,7 +337,10 @@ fn every_fixture_resolves_its_layer_references() {
     for name in fixture_names() {
         ulottie_compiler::compile_report(
             &source(&name),
-            &CompileOptions { allow: common::allowances(&name), ..Default::default() },
+            &CompileOptions {
+                allow: common::allowances(&name),
+                ..Default::default()
+            },
         )
         .unwrap_or_else(|e| panic!("compile {name}: {e}"));
     }
@@ -296,7 +361,10 @@ fn a_generated_module_keeps_its_spatial_motion_paths() {
     for name in fixture_names() {
         let report = ulottie_compiler::compile_report(
             &source(&name),
-            &CompileOptions { allow: common::allowances(&name), ..Default::default() },
+            &CompileOptions {
+                allow: common::allowances(&name),
+                ..Default::default()
+            },
         )
         .unwrap_or_else(|e| panic!("compile {name}: {e}"));
         if !report.generated || !report.caps.iter().any(|c| c == "SPATIAL") {

@@ -7,9 +7,12 @@ import { mount } from './runtime/core.js';
 import { makeExpr, fromCompToSurface, lyAnchor, lyAt, lyEffect, toComp } from './runtime/expr.js';
 import { resolve } from './runtime/kf.js';
 import { expand } from './runtime/tpl.js';
-import { bShape } from './runtime/ops/shape.js';
-import { bLayerTx } from './runtime/ops/layer.js';
-const B=[,,,,bShape,,,,,,bLayerTx];
+import { bShape, oShape } from './runtime/ops/shape.js';
+import { bLayerTx, oLayerTx } from './runtime/ops/layer.js';
+const P0=(x,B,e,l,q,a)=>[bShape(x,B[0],e,l,q,a),bLayerTx(x,B[1],e,l,q,a)];
+const A0=(x,S)=>{oShape(x,S[0]);oLayerTx(x,S[1])};
+const P1=(x,B,e,l,q,a)=>[bShape(x,B[0],e,l,q,a)];
+const A1=(x,S)=>{oShape(x,S[0])};
 
 const M =
   '<svg viewBox="0 0 800 600" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="overflow:hidden">' +
@@ -38,7 +41,7 @@ const M =
     '</g>' +
   '</svg>';
 
-const D = "0gskt10gpvi94i2s80000oi1kt6ug8qh8gj80q100gt7gt7ko30gh4gt7gs30kn4gt7kv60io6io6kp70io6io6kv60kn4gt7uk10io6io6uk1uk1io6gt7uk1qq1io6io6uk1it1io6io6uk1sr1io6io6qr40or6gt7gr30io6io640000ql2200oh1kfk1grqi2gks9mini3kjvv3usm1itvj2jrjt2ktrj4npsh2gqncrmmu4rlhm1pukm1hnks1hpj3njmh5iggk1hkvt1soms4lnjs1sph5lrhi1mup1rtfgssi1pubskq1kll1kko6qlqh1rm4knt1vkseqmqbhvj2nl5vkqfjinajg4lsl1rph5mrhi1lup1stfvrsi1qubrkq1jll1jko6plqh1sm4jnt1glsepmqbivj2ol5glqfkinakg4msl184gau10sh1e2k1462k1a22k1142k1142k1142k114483ki106002000iks90002000iskt10002000ioqh606002000iooj10002000ighn20002000ighn206002000iooj10002000ighn20002000ighn206002000iooj10002000ighn20002000ighn206002000iooj10002000ighn20002000iulq106002000iooj10002000ighn20002000ighn20k100200k1q3000200k1m3000200k1i3000200k1u2000200k1q2000200k1m2000200k1i2000200k1u1000200k1q1000200k1m10i36grou2utjg2026j2n30i36glmg2ingv20i26vgenoh10i36gujp4guil7gktg3kf6oqh60nqh600usm50000rhq5jk30000ssj5qg3i36uhpi1iuhk20i16sq3ms20msi980q8uq1gl2ilhol2upqr80iqgucupqr80iqgucupqr80tqjv5upqr8060882gq3826o7o7000msu9g10o7q9ofqk1kn1uq1sk2mkrq6oju70irhj6oorj20mkrq6oju70mkrq6oju70ijjv5nis60mkrq6oju70mkrq6oju70irhj6oorj20ac0acea0020000gpl6ijg60ghkapqs40000ovq2ruh40gurahup10gpl6ijg60gpl6ijg60opnbvnj50gpl6olta0000gorbnhh10sus2hso40vol6hjg60opnbvnj5082gu3ai36inki3kmi60msq9a0k7m9uq1ok2stgr1tlkt20snkr3tuis10stgr1tlkt20stgr1tlkt20snkr3tuis10ag1eaqrol1hmo50hlp9pvjp10ilmh1hka0qrol1hmo50tpp3luu80mit4nk90hlmh1ika0tpp3luu8082mq4ei36grv7ujt70mvq9g10gltr1gmhm2gkng4unqt4gloi5grvo6gnhu8lshg3ulge0lqpr1hkma0lshg3ulge0lshg3ulge0lqpr1hkma0lshg3ulge0lshg3ulge0lqpr1hkma0ai1eai1eamqj2jvrf0jsoh1shl20000mqj2jvrf0jsoh1shl20000mqj2jvrf0lto9kmp10000lqj2kvrf0lto9kmp10000lqj2kvrf0lto9kmp1082sh5i1i36nun3mppg30msq9a0q7iauq1uk2jgveuttn60kks7mguh70jgveuttn60jgveuttn60kks7mguh70ak1eaqfsgr70tpmbspj60mt6jvu70qfsgr70hvoakun50lt6kvu70pfrgr70hvoakun5082kt5m1i36iprv1gpho40msq9a0o7m9uq1sk2gsrg5ilhk60gimv5ighg50gsrg5ilhk60gsrg5ilhk60gimv5ighg50m1o1em1gvneolr10grr4gsnl10000gvneolr10iop2gst50000vunenlr10iop2gst5082qk6q1i36ukvg4iiut20i36ghlicuoqr80i36vufhjt60u1kv6aeaccacacacacas126ij3sj3sj146mk3gl3ql3km3s166so3mp3op28qs3it3st3km1so2a6kp4st3mp1s8c6sp4st3so2e6qg5st3os1s8g16ih5st3so2i16is5st3qv1s8k16qs5st3so2m16oj6st3si2s8o16gk6st3so2q16uq6st3ul2s8s16mr6st3oh3u1gs6qs6sh1gp2k78nk1nlqi1jmgi1nlqi1jmgi1rjo8nk1rjo8k78nk1rkvajmgi1rkvajmgi1vidnk1vidmji66gircosmfgsnl1sp7gr7sp7240ks7248eot702220000oh1i36ijil1mlnd02mg8o12ov7sj320st7ou7su7ig820i1u122480st364oi80";
+const D = "0gskt10gpvi94q1k80ik1or6uu7ov7mh8q100gt7gt7ko30gh4gt7gs30kn4gt7kv60io6io6kp70io6io6kv60kn4gt7uk10io6io6uk1uk1io6gt7uk1qq1io6io6uk1it1io6io6uk1sr1io6io6qr40or6gt7gr30io6io640000ql2200oh1kfk1grqi2gks9mini3kjvv3usm1itvj2jrjt2ktrj4npsh2gqncrmmu4rlhm1pukm1hnks1hpj3njmh5iggk1hkvt1soms4lnjs1sph5lrhi1mup1rtfgssi1pubskq1kll1kko6qlqh1rm4knt1vkseqmqbhvj2nl5vkqfjinajg4lsl1rph5mrhi1lup1stfvrsi1qubrkq1jll1jko6plqh1sm4jnt1glsepmqbivj2ol5glqfkinakg4msl184o9u1202kh10c04222226i133334sh1mi16002000iks90002000iskt10002000ioqh606002000iooj10002000ighn20002000ighn206002000iooj10002000ighn20002000ighn206002000iooj10002000ighn20002000ighn206002000iooj10002000ighn20002000iulq106002000iooj10002000ighn20002000ighn20k100200k1q3000200k1m3000200k1i3000200k1u2000200k1q2000200k1m2000200k1i2000200k1u1000200k1q1000200k1m10i36grou2utjg2026j2n30i36glmg2ingv20i26vgenoh10i36gujp4guil7gktg3kf6oqh60nqh600usm50000rhq5jk30000ssj5qg3i36uhpi1iuhk20i16sq3ms20msi980q8uq1gl2ilhol2upqr80iqgucupqr80iqgucupqr80tqjv5upqr8060882ko3826o7o7000msu9g10o7q9ofqk1kn1uq1sk2mkrq6oju70irhj6oorj20mkrq6oju70mkrq6oju70ijjv5nis60mkrq6oju70mkrq6oju70irhj6oorj20ac0acea0020000gpl6ijg60ghkapqs40000ovq2ruh40gurahup10gpl6ijg60gpl6ijg60opnbvnj50gpl6olta0000gorbnhh10sus2hso40vol6hjg60opnbvnj5082ks3ai36inki3kmi60msq9a0k7m9uq1ok2stgr1tlkt20snkr3tuis10stgr1tlkt20stgr1tlkt20snkr3tuis10ag1eaqrol1hmo50hlp9pvjp10ilmh1hka0qrol1hmo50tpp3luu80mit4nk90hlmh1ika0tpp3luu8082qo4ei36grv7ujt70mvq9g10gltr1gmhm2gkng4unqt4gloi5grvo6gnhu8lshg3ulge0lqpr1hkma0lshg3ulge0lshg3ulge0lqpr1hkma0lshg3ulge0lshg3ulge0lqpr1hkma0ai1eai1eamqj2jvrf0jsoh1shl20000mqj2jvrf0jsoh1shl20000mqj2jvrf0lto9kmp10000lqj2kvrf0lto9kmp10000lqj2kvrf0lto9kmp1082gg5i1i36nun3mppg30msq9a0q7iauq1uk2jgveuttn60kks7mguh70jgveuttn60jgveuttn60kks7mguh70ak1eaqfsgr70tpmbspj60mt6jvu70qfsgr70hvoakun50lt6kvu70pfrgr70hvoakun5082or5m1i36iprv1gpho40msq9a0o7m9uq1sk2gsrg5ilhk60gimv5ighg50gsrg5ilhk60gsrg5ilhk60gimv5ighg50m1o1em1gvneolr10grr4gsnl10000gvneolr10iop2gst50000vunenlr10iop2gst5082ui6q1i36ukvg4iiut20i36ghlicuoqr80i36vufhjt60u1ot6aeaccacacacacas126mh3gi3sj146qi3kj3uj3ok3s166gn3qn3op28uq3mr3gs3ok1so2a6on4gs3qn1s8c6go4gs3so2e6uu4gs3sq1s8g16mv4gs3so2i16mq5gs3ut1s8k16uq5gs3so2m16sh6gs3gh2s8o16ki6gs3so2q16ip6gs3ik2s8s16qp6gs3oh3u1kq6uq6kh1kn2k78nk1nlqi1jmgi1nlqi1jmgi1rjo8nk1rjo8k78nk1rkvajmgi1rkvajmgi1vidnk1vidmji66gircosmfgsnl1go7kp7go72424e2oq702sr720000oh1i36ijil1mlnd02mu7o12ot7gi320os7ss7iu720i122mc40oh10qji180ig864ug80";
 
 const TPL = [
   '<g><g transform="translate(61.29,55.56)"><g mask="url(#m0--c)"><g transform="translate(-18,-28)"><ellipse cx="0" cy="0" rx="9" ry="8" fill="#3c3b3b"/></g></g></g><defs><mask id="m0--c" mask-type="luminance"><path fill="#fff" fill-rule="evenodd"/></mask></defs></g>',
@@ -46,7 +49,7 @@ const TPL = [
 
 const E = [
   function(value, thisLayer, thisProperty, frame, ctx) {
-    const loopOut = thisProperty?.loopOut ? thisProperty.loopOut.bind(thisProperty) : ((mode, n) => value);
+    const loopOut = thisProperty.loopOut;
     var $bm_rt;
     $bm_rt = loopOut('cycle');
     return $bm_rt;
@@ -55,10 +58,10 @@ const E = [
     const { sum, sub, mul, div } = ctx;
     const time = frame / ctx.frameRate;
     const frameDuration = 1 / ctx.frameRate;
-    const numKeys = thisProperty?.numKeys ?? 0;
-    const nearestKey = thisProperty?.nearestKey ? thisProperty.nearestKey.bind(thisProperty) : ((t) => ({ index: 1, time: 0 }));
-    const key = thisProperty?.key ? thisProperty.key.bind(thisProperty) : ((n) => ({ time: 0, value: 0, index: n }));
-    const velocityAtTime = thisProperty?.velocityAtTime ? thisProperty.velocityAtTime.bind(thisProperty) : ((t) => 0);
+    const nearestKey = thisProperty.nearestKey;
+    const key = thisProperty.key;
+    const velocityAtTime = thisProperty.velocityAtTime;
+    const numKeys = thisProperty.numKeys;
     var $bm_rt;
     var amp, freq, decay, n, t, v;
     try {
@@ -95,4 +98,4 @@ const E = [
 ];
 
 export const markup = M;
-export const init = (c, o) => mount(M, D, B, c, o,{t:s=>expand(s,TPL),r:resolve,x:v=>makeExpr(E,v)});
+export const init = (c, o) => mount(M, D, P0, A0, c, o,{a:[P1],b:[A1],t:s=>expand(s,TPL),r:resolve,x:v=>makeExpr(E,v)});

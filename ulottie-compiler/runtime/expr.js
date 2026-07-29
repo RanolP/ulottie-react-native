@@ -16,7 +16,7 @@
 // Bundled only when the animation has expressions.
 
 import { records, record, lyLink } from './rec.js';
-import { H_ASSETS, H_USES } from './wire.js';
+import { H_ASSETS, H_USES, A_STRIDE, A_RECORDS, U_STRIDE } from './wire.js';
 import { column } from './col.js';
 
 /**
@@ -36,7 +36,7 @@ export function makeExpr(E, ctx) {
   ctx.recs = records(ctx, ctx.y);
   const uses = S[H_USES], assets = S[H_ASSETS];
   for (let u = 0, n = uses ? S[uses] : 0; u < n; u++) {
-    const row = uses + 1 + u * 6;
+    const row = uses + 1 + u * U_STRIDE;
     // Built *before* its records, so the handles they resolve to close over
     // the instantiation they belong to. Safe only because `ctx.expr(h, at)`
     // merely captures `at` and reads `at.recs` at frame time — make `resolve`
@@ -45,7 +45,7 @@ export function makeExpr(E, ctx) {
     // wire row also carries were only ever read by the name lookup, which no
     // emitted body performs any more.
     const a = {};
-    a.recs = records(ctx, column(S, S[assets + 1 + S[row] * 5 + 4], true), a);
+    a.recs = records(ctx, column(S, S[assets + 1 + S[row] * A_STRIDE + A_RECORDS]), a);
     ctx.byUse[u] = a;
   }
   // Only a module that still has a body looking a layer up by name passes
@@ -64,6 +64,12 @@ export function initExpr(E, ctx) {
   // return, every expression-driven property silently became its own constant
   // fallback, with nothing in the console to say so.
   ctx.expr = (p, at) => (f) => evalExpr(p, f, ctx, at);
+  // Created up front rather than on first use: the ops read `x.S` and `x.z` off
+  // this object on every property, and adding a field mid-animation would
+  // change its shape underneath them.
+  ctx.memo = new Map();
+  ctx.tp = new Map();
+  ctx.logged = new Set();
   attachHelpers(ctx);
   return ctx.expr;
 }
@@ -95,9 +101,7 @@ function evalExpr(p, frame, ctx, at) {
   // repeated reads collapse to one evaluation. Keyed per property object —
   // one expression id serves every property it was applied to.
   // Keyed per record: instances share the wire property but not the record.
-  const memo = rec
-    ? (rec._m || (rec._m = new Map()))
-    : (ctx.memo || (ctx.memo = new Map()));
+  const memo = rec ? (rec._m || (rec._m = new Map())) : ctx.memo;
   const hit = memo.get(p);
   if (hit && hit.f === frame) return hit.v;
 
@@ -111,7 +115,6 @@ function evalExpr(p, frame, ctx, at) {
     memo.set(p, { f: frame, v });
     return v;
   } catch (err) {
-    if (!ctx.logged) ctx.logged = new Set();
     if (!ctx.logged.has(id)) {
       ctx.logged.add(id);
       console.warn(`ulottie: expression E[${id}] threw:`, err.message);
@@ -140,7 +143,7 @@ function baseValue(ctx, p, frame) {
 function thisPropertyFor(ctx, p) {
   // Keyed by offset rather than hung off the property: the property is an
   // integer now, and there is nothing to hang anything on.
-  const cache = ctx.tp || (ctx.tp = new Map());
+  const cache = ctx.tp;
   const hit = cache.get(p);
   if (hit) return hit;
   const src = p.src;

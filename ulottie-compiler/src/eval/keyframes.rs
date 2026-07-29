@@ -36,22 +36,31 @@ pub fn interpolate(kf: &Keyframes, frame: f64) -> Result<Value> {
     let i = find_segment(&kf.t, frame);
     let t0 = kf.t[i];
     let t1 = kf.t[i + 1];
-    let u_lin = if t1 > t0 { (frame - t0) / (t1 - t0) } else { 0.0 };
+    let u_lin = if t1 > t0 {
+        (frame - t0) / (t1 - t0)
+    } else {
+        0.0
+    };
     // Start value. Lottie's "hold-last" pattern sometimes leaves `v[i]` as
     // an empty vector when this keyframe only exists to mark the end of the
     // previous segment — in that case fall back to `e[i-1]` or `v[i-1]`.
     let v0_owned = resolve_start(kf, i);
     let v0: &Value = &v0_owned;
     // End value: prefer Lottie's older `e[i]` if present, else next keyframe.
-    let v1_owned = kf
-        .e
-        .as_ref()
-        .and_then(|e| e.get(i).and_then(|x| x.clone()))
-        .unwrap_or_else(|| resolve_start(kf, i + 1));
+    let v1_owned =
+        kf.e.as_ref()
+            .and_then(|e| e.get(i).and_then(|x| x.clone()))
+            .unwrap_or_else(|| resolve_start(kf, i + 1));
     let v1: &Value = &v1_owned;
 
     // A held keyframe keeps its value for the whole segment.
-    if kf.h.as_ref().and_then(|h| h.get(i)).copied().unwrap_or(false) {
+    if kf
+        .h
+        .as_ref()
+        .and_then(|h| h.get(i))
+        .copied()
+        .unwrap_or(false)
+    {
         return Ok(v0.clone());
     }
 
@@ -98,10 +107,9 @@ fn resolve_start(kf: &Keyframes, i: usize) -> Value {
         return kf.v[i].clone();
     }
     if i > 0 {
-        if let Some(e) = kf
-            .e
-            .as_ref()
-            .and_then(|e| e.get(i - 1).and_then(|x| x.clone()))
+        if let Some(e) =
+            kf.e.as_ref()
+                .and_then(|e| e.get(i - 1).and_then(|x| x.clone()))
         {
             if !is_empty(&e) {
                 return e;
@@ -132,10 +140,9 @@ fn last_valid(kf: &Keyframes) -> Value {
             return kf.v[i].clone();
         }
         if i > 0 {
-            if let Some(e) = kf
-                .e
-                .as_ref()
-                .and_then(|e| e.get(i - 1).and_then(|x| x.clone()))
+            if let Some(e) =
+                kf.e.as_ref()
+                    .and_then(|e| e.get(i - 1).and_then(|x| x.clone()))
             {
                 if !is_empty(&e) {
                     return e;
@@ -280,7 +287,11 @@ fn spatial_bezier(a: &[f64], b: &[f64], to: &[f64], ti: &[f64], u: f64) -> Vec<f
         }
     }
     let span = cumul[hi] - cumul[lo];
-    let frac = if span > 0.0 { (target - cumul[lo]) / span } else { 0.0 };
+    let frac = if span > 0.0 {
+        (target - cumul[lo]) / span
+    } else {
+        0.0
+    };
     (0..n)
         .map(|k| samples[lo][k] + (samples[hi][k] - samples[lo][k]) * frac)
         .collect()

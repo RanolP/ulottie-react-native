@@ -14,7 +14,15 @@ import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { transformSync } from 'esbuild';
 import { describe, expect, test } from 'vitest';
+
+// The payload is read back through the runtime's own decoder and header, not a
+// copy of them: a snapshot test that reimplements the wire format stops
+// checking the moment the format moves, which is exactly what happened when the
+// payload stopped being JSON.
+import { dec } from '../../ulottie-compiler/runtime/vlq.js';
+import { H_PROGRAM } from '../../ulottie-compiler/runtime/wire.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const project = resolve(here, '../..');
@@ -39,6 +47,16 @@ const FIXTURES = readdirSync(fixtureDir)
   .sort();
 
 const scratch = mkdtempSync(join(tmpdir(), 'ulottie-snapshot-'));
+
+/**
+ * The fixture whose module is snapshotted with its markup extracted.
+ *
+ * Extraction changes the module and nothing else — same payload, same bindings,
+ * plus the sprite wiring — so one fixture shows the mode and the rest show the
+ * ordinary form. `lottie-logo` is the one with a track matte, which is the part
+ * of a document worth seeing leave the module.
+ */
+const EXTRACTED = 'lottie-logo';
 
 /**
  * Compile one fixture's document template — standalone SVG, no script.
@@ -127,18 +145,22 @@ function extracted(name: string): { js: string; sprite: string } {
  * shipped, and only a browser test caught it.
  */
 function highestElementIndex(prettyJs: string): number {
-  const i = prettyJs.indexOf('const D = ');
-  if (i < 0) return -1;
-  const rest = prettyJs.slice(i + 10);
-  const end = rest.search(/\n(export |const [A-Z]+ =)/);
-  const D = JSON.parse(rest.slice(0, end < 0 ? rest.length : end).replace(/;\s*$/, ''));
+  const payload = /^const D = "([0-9a-v]*)";$/m.exec(prettyJs);
+  // A fully static animation has no payload and binds nothing.
+  if (!payload) return -1;
+  const S = dec(payload[1]);
+  const prog = S[H_PROGRAM];
+  if (!prog) return -1;
   let max = -1;
-  // The element column is delta-encoded, so it has to be summed to compare.
-  let acc = 0;
-  for (const b of D.b ?? []) max = Math.max(max, (acc += b[1]));
-  for (const u of D.n ?? []) {
-    let local = 0;
-    for (const b of D.q[u[0]].b ?? []) max = Math.max(max, u[1] + (local += b[1]));
+  // `[count, batchOffset × count]`, and each batch is `[count, flags, el…]`
+  // with the element column delta-encoded — so it has to be summed to compare.
+  // Extraction forces instancing off, so the document's own program is all of
+  // it; there are no asset bases to add.
+  for (let k = 0; k < S[prog]; k++) {
+    const base = S[prog + 1 + k];
+    for (let i = 0, acc = 0, n = S[base]; i < n; i++) {
+      max = Math.max(max, (acc += S[base + 2 + i]));
+    }
   }
   return max;
 }
@@ -174,12 +196,29 @@ describe('compiled output', () => {
     // Extern mode only: it is the compiler's own output for this animation.
     // Embedded mode would bury it under the bundled runtime, which changes for
     // reasons that have nothing to do with the animation.
+    if (name === EXTRACTED) continue; // snapshotted extracted, below
     test(name, { timeout: 30_000 }, async () => {
       await expect(compile(name, 'extern')).toMatchFileSnapshot(
         join(snapshotDir, `${name}.js`),
       );
     });
   }
+
+  // These are read as source, so they have to *be* source. The extracted
+  // snapshot used to carry the sprite appended after a comment marker, which
+  // made the one file most worth opening the one file an editor could not
+  // parse.
+  test('every module snapshot is valid JavaScript', () => {
+    const broken: string[] = [];
+    for (const f of readdirSync(snapshotDir).filter((x) => x.endsWith('.js'))) {
+      try {
+        transformSync(readFileSync(join(snapshotDir, f), 'utf8'), { loader: 'js' });
+      } catch (e) {
+        broken.push(`${f}: ${(e as Error).message.split('\n')[0]}`);
+      }
+    }
+    expect(broken).toEqual([]);
+  });
 
   // The document template on its own: every value the compiler could resolve
   // ahead of time, as SVG that renders with no script. Snapshotting it apart
@@ -206,14 +245,16 @@ describe('compiled output', () => {
   // Markup extracted to an external sprite: the module keeps only the `<svg>`
   // shell and clones the symbol's children into it at mount.
   describe('extracted markup', () => {
-    // One worked example, module and sprite side by side, so the shape of the
-    // mode is reviewable. The per-fixture contract is asserted below instead of
-    // snapshotted — eleven more copies of the same markup would not be read.
-    test('lottie-logo', { timeout: 30_000 }, async () => {
-      const { js, sprite } = extracted('lottie-logo');
-      await expect(
-        `${js}\n/* --- sprite: lottie-logo.sprite.svg --- */\n${sprite}\n`,
-      ).toMatchFileSnapshot(join(snapshotDir, 'lottie-logo.extracted.js'));
+    // One worked example, and it stands in for that fixture's ordinary snapshot:
+    // extraction changes the module and nothing else, so snapshotting both
+    // forms would diff the same payload twice. The sprite is not snapshotted
+    // with it — its body is the document, which `<name>.svg` already holds, and
+    // appending it here is what made this file unparseable. The per-fixture
+    // contract is asserted below instead.
+    test(EXTRACTED, { timeout: 30_000 }, async () => {
+      await expect(extracted(EXTRACTED).js).toMatchFileSnapshot(
+        join(snapshotDir, `${EXTRACTED}.js`),
+      );
     });
 
     // Bindings address elements by document-order index, so the sprite has to
@@ -234,6 +275,12 @@ describe('compiled output', () => {
         // The binding contract: every index the module addresses has to exist
         // in the sprite it will be filled from.
         const needed = highestElementIndex(js);
+        // …and the scan has to still be finding them. It read the payload as
+        // JSON, so it silently started answering −1 — passing every fixture —
+        // the day the payload became an integer stream.
+        if (js.includes('const D = "') && needed < 0) {
+          mismatched.push(`${name}: the binding scan found no element index`);
+        }
         if (needed >= inSprite) {
           mismatched.push(
             `${name}: bindings address element ${needed} but the sprite has ${inSprite}`,

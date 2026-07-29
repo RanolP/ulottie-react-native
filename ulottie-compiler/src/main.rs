@@ -4,7 +4,10 @@ use anyhow::Result;
 use clap::Parser;
 
 #[derive(Parser)]
-#[command(name = "ulottie-compiler", about = "AOT compiler for Lottie animations")]
+#[command(
+    name = "ulottie-compiler",
+    about = "AOT compiler for Lottie animations"
+)]
 struct Cli {
     /// Input Lottie JSON file
     input: PathBuf,
@@ -84,7 +87,12 @@ fn symbol_id(cli: &Cli) -> Result<String> {
         .file_stem()
         .and_then(|s| s.to_str())
         .map(String::from)
-        .ok_or_else(|| anyhow::anyhow!("cannot derive a symbol id from {:?}; pass --symbol-id", cli.input))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "cannot derive a symbol id from {:?}; pass --symbol-id",
+                cli.input
+            )
+        })
 }
 
 fn main() -> Result<()> {
@@ -119,7 +127,9 @@ fn main() -> Result<()> {
         } else {
             ulottie_compiler::compile_document(&json)?
         };
-        let output = cli.output.unwrap_or_else(|| cli.input.with_extension("svg"));
+        let output = cli
+            .output
+            .unwrap_or_else(|| cli.input.with_extension("svg"));
         std::fs::write(&output, &svg)?;
         eprintln!("Wrote {} -> {}", cli.input.display(), output.display());
         return Ok(());
@@ -147,11 +157,7 @@ fn main() -> Result<()> {
     let output = cli.output.unwrap_or_else(|| cli.input.with_extension("js"));
     std::fs::write(&output, &js)?;
 
-    eprintln!(
-        "Compiled {} -> {}",
-        cli.input.display(),
-        output.display()
-    );
+    eprintln!("Compiled {} -> {}", cli.input.display(), output.display());
 
     if let (Some(path), ulottie_compiler::MarkupMode::Extracted(id)) = (&cli.extract, &markup) {
         let symbol = ulottie_compiler::compile_symbol(&json, id)?;

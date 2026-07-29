@@ -12,11 +12,7 @@ use serde::Serialize as _;
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    CompileOptions, EmbeddedFeatures, MarkupMode, RuntimeMode,
-    backend,
-    ir,
-    lottie,
-    minified_driver,
+    CompileOptions, EmbeddedFeatures, MarkupMode, RuntimeMode, backend, ir, lottie, minified_driver,
 };
 
 /// Outcome of compiling one Lottie animation. JS reads the byte arrays via
@@ -157,12 +153,16 @@ impl CompileResult {
 /// URLs (the JS side mints Blob URLs from the byte arrays).
 #[wasm_bindgen(js_name = compileRequest)]
 pub fn compile_request(json_text: &str) -> Result<CompileResult, JsError> {
-    let animation: lottie::Animation = serde_json::from_str(json_text)
-        .map_err(|e| JsError::new(&format!("invalid JSON: {e}")))?;
-    let module = ir::lower(&animation)
-        .map_err(|e| JsError::new(&format!("IR lowering failed: {e}")))?;
+    let animation: lottie::Animation =
+        serde_json::from_str(json_text).map_err(|e| JsError::new(&format!("invalid JSON: {e}")))?;
+    let module =
+        ir::lower(&animation).map_err(|e| JsError::new(&format!("IR lowering failed: {e}")))?;
 
-    let (ip, op, name) = (animation.in_point, animation.out_point, animation.name.clone());
+    let (ip, op, name) = (
+        animation.in_point,
+        animation.out_point,
+        animation.name.clone(),
+    );
 
     // Everything the source uses that the backend does not implement. Allowed
     // wholesale here: the page is a viewer, and refusing to show a degraded
@@ -269,12 +269,25 @@ pub fn compile_request(json_text: &str) -> Result<CompileResult, JsError> {
     // Per-feature byte cost: identical formula to the dev server's
     // `feature_costs()` cache, recomputed each request because in wasm the
     // page is single-shot — no point caching across compiles.
-    let all_on = EmbeddedFeatures { expressions: true, trim_path: true, gradient: true };
+    let all_on = EmbeddedFeatures {
+        expressions: true,
+        trim_path: true,
+        gradient: true,
+    };
     let full = crate::embedded_runtime_size(all_on) as i64;
     let cost = |omitted: EmbeddedFeatures| full - crate::embedded_runtime_size(omitted) as i64;
-    let feature_cost_expressions = cost(EmbeddedFeatures { expressions: false, ..all_on });
-    let feature_cost_trim_path = cost(EmbeddedFeatures { trim_path: false, ..all_on });
-    let feature_cost_gradient = cost(EmbeddedFeatures { gradient: false, ..all_on });
+    let feature_cost_expressions = cost(EmbeddedFeatures {
+        expressions: false,
+        ..all_on
+    });
+    let feature_cost_trim_path = cost(EmbeddedFeatures {
+        trim_path: false,
+        ..all_on
+    });
+    let feature_cost_gradient = cost(EmbeddedFeatures {
+        gradient: false,
+        ..all_on
+    });
 
     let features = crate::analyze_features(json_text)
         .ok()

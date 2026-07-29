@@ -63,15 +63,16 @@ pub struct Nested {
     pub offset: f64,
 }
 
-/// One instantiation in the finished scene: an asset plus where its elements,
-/// records and clocks live in the expanded document.
+/// One instantiation in the finished scene: an asset plus where its elements
+/// and clocks live in the expanded document.
+///
+/// It carried a record base and a composition scope until every layer reference
+/// became a literal slot resolved at compile time. Nothing reads either now —
+/// the engine materializes an instance's records from the asset's own table —
+/// so they are not planned and not written.
 pub struct Use {
     pub asset: u32,
     pub el_base: u32,
-    pub rec_base: u32,
     pub slot_base: u32,
     pub parent_slot: u32,
-    pub scope: u32,
 }
-
-

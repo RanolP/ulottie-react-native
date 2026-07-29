@@ -48,10 +48,18 @@ pub struct Composition {
     pub ddd: u8,
 }
 
-fn is_zero_u8(v: &u8) -> bool { *v == 0 }
-fn is_false(v: &bool) -> bool { !*v }
-fn is_zero_u32(v: &u32) -> bool { *v == 0 }
-fn is_one_f64(v: &f64) -> bool { (*v - 1.0).abs() < f64::EPSILON }
+fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
+}
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+fn is_one_f64(v: &f64) -> bool {
+    (*v - 1.0).abs() < f64::EPSILON
+}
 
 // ---------------------------------------------------------------------------
 // Inline property — the core AOT type. No table lookup, no runtime dispatch.
@@ -129,7 +137,9 @@ impl Serialize for Value {
             Value::Vector(v) => {
                 use serde::ser::SerializeSeq;
                 let mut seq = s.serialize_seq(Some(v.len()))?;
-                for n in v { seq.serialize_element(&q(*n))?; }
+                for n in v {
+                    seq.serialize_element(&q(*n))?;
+                }
                 seq.end()
             }
             Value::Path(p) => p.serialize(s),
@@ -152,9 +162,21 @@ impl Serialize for PathValue {
     }
 }
 
-impl From<f64> for Value { fn from(v: f64) -> Self { Value::Scalar(v) } }
-impl From<Vec<f64>> for Value { fn from(v: Vec<f64>) -> Self { Value::Vector(v) } }
-impl From<PathValue> for Value { fn from(v: PathValue) -> Self { Value::Path(v) } }
+impl From<f64> for Value {
+    fn from(v: f64) -> Self {
+        Value::Scalar(v)
+    }
+}
+impl From<Vec<f64>> for Value {
+    fn from(v: Vec<f64>) -> Self {
+        Value::Vector(v)
+    }
+}
+impl From<PathValue> for Value {
+    fn from(v: PathValue) -> Self {
+        Value::Path(v)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Keyframes
@@ -177,24 +199,46 @@ impl Serialize for Keyframes {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         let mut fields = 2;
-        if self.e.is_some() { fields += 1; }
-        if self.oi.is_some() { fields += 1; }
-        if self.to.is_some() { fields += 1; }
-        if self.ti.is_some() { fields += 1; }
-        if self.h.is_some() { fields += 1; }
+        if self.e.is_some() {
+            fields += 1;
+        }
+        if self.oi.is_some() {
+            fields += 1;
+        }
+        if self.to.is_some() {
+            fields += 1;
+        }
+        if self.ti.is_some() {
+            fields += 1;
+        }
+        if self.h.is_some() {
+            fields += 1;
+        }
         let mut st = s.serialize_struct("Keyframes", fields)?;
         let qt: Vec<f64> = self.t.iter().map(|n| q(*n)).collect();
         st.serialize_field("t", &qt)?;
         st.serialize_field("v", &self.v)?;
-        if let Some(e) = &self.e { st.serialize_field("e", e)?; }
-        if let Some(oi) = &self.oi { st.serialize_field("oi", oi)?; }
+        if let Some(e) = &self.e {
+            st.serialize_field("e", e)?;
+        }
+        if let Some(oi) = &self.oi {
+            st.serialize_field("oi", oi)?;
+        }
         if let Some(to) = &self.to {
-            let qto: Vec<Vec<f64>> = to.iter().map(|v| v.iter().map(|n| q(*n)).collect()).collect();
+            let qto: Vec<Vec<f64>> = to
+                .iter()
+                .map(|v| v.iter().map(|n| q(*n)).collect())
+                .collect();
             st.serialize_field("to", &qto)?;
         }
-        if let Some(h) = &self.h { st.serialize_field("h", h)?; }
+        if let Some(h) = &self.h {
+            st.serialize_field("h", h)?;
+        }
         if let Some(ti) = &self.ti {
-            let qti: Vec<Vec<f64>> = ti.iter().map(|v| v.iter().map(|n| q(*n)).collect()).collect();
+            let qti: Vec<Vec<f64>> = ti
+                .iter()
+                .map(|v| v.iter().map(|n| q(*n)).collect())
+                .collect();
             st.serialize_field("ti", &qti)?;
         }
         st.end()
@@ -202,9 +246,15 @@ impl Serialize for Keyframes {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct EasingPair { pub o: EasingHandle, pub i: EasingHandle }
+pub struct EasingPair {
+    pub o: EasingHandle,
+    pub i: EasingHandle,
+}
 #[derive(Debug, Clone, Serialize)]
-pub struct EasingHandle { pub x: EasingComponent, pub y: EasingComponent }
+pub struct EasingHandle {
+    pub x: EasingComponent,
+    pub y: EasingComponent,
+}
 
 #[derive(Debug, Clone)]
 pub enum EasingComponent {
@@ -219,7 +269,9 @@ impl Serialize for EasingComponent {
             EasingComponent::PerComponent(v) => {
                 use serde::ser::SerializeSeq;
                 let mut seq = s.serialize_seq(Some(v.len()))?;
-                for n in v { seq.serialize_element(&q(*n))?; }
+                for n in v {
+                    seq.serialize_element(&q(*n))?;
+                }
                 seq.end()
             }
         }
@@ -244,13 +296,16 @@ pub struct ExprProp {
 pub enum Shape {
     #[serde(rename = "r")]
     Rect {
-        sz: InlineProp, ps: InlineProp, rd: InlineProp,
+        sz: InlineProp,
+        ps: InlineProp,
+        rd: InlineProp,
         #[serde(skip_serializing_if = "Option::is_none")]
         nm: Option<u32>,
     },
     #[serde(rename = "e")]
     Ellipse {
-        sz: InlineProp, ps: InlineProp,
+        sz: InlineProp,
+        ps: InlineProp,
         #[serde(skip_serializing_if = "Option::is_none")]
         nm: Option<u32>,
     },
@@ -263,7 +318,11 @@ pub enum Shape {
     #[serde(rename = "s")]
     PolyStar {
         sy: u8,
-        pt: InlineProp, ps: InlineProp, or: InlineProp, ir: InlineProp, rt: InlineProp,
+        pt: InlineProp,
+        ps: InlineProp,
+        or: InlineProp,
+        ir: InlineProp,
+        rt: InlineProp,
         #[serde(skip_serializing_if = "Option::is_none")]
         os: Option<InlineProp>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -284,20 +343,26 @@ pub enum Style {
     Fill { c: InlineProp, o: InlineProp },
     #[serde(rename = "st")]
     Stroke {
-        c: InlineProp, o: InlineProp, w: InlineProp,
-        lc: u8, lj: u8,
+        c: InlineProp,
+        o: InlineProp,
+        w: InlineProp,
+        lc: u8,
+        lj: u8,
         #[serde(skip_serializing_if = "Option::is_none")]
         ml: Option<f64>,
     },
     #[serde(rename = "gs")]
     GradientStroke {
         g: serde_json::Value,
-        w: InlineProp, o: InlineProp,
+        w: InlineProp,
+        o: InlineProp,
         #[serde(skip_serializing_if = "Option::is_none")]
         s: Option<InlineProp>,
         #[serde(skip_serializing_if = "Option::is_none")]
         e: Option<InlineProp>,
-        gk: u8, lc: u8, lj: u8,
+        gk: u8,
+        lc: u8,
+        lj: u8,
         #[serde(skip_serializing_if = "Option::is_none")]
         ml: Option<f64>,
     },
@@ -309,11 +374,14 @@ pub enum Style {
         s: Option<InlineProp>,
         #[serde(skip_serializing_if = "Option::is_none")]
         e: Option<InlineProp>,
-        gk: u8, fr: u8,
+        gk: u8,
+        fr: u8,
     },
     #[serde(rename = "tm")]
     TrimPath {
-        s: InlineProp, e: InlineProp, o: InlineProp,
+        s: InlineProp,
+        e: InlineProp,
+        o: InlineProp,
         m: u8,
     },
 }
@@ -451,7 +519,8 @@ pub enum Asset {
         u: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         p: Option<String>,
-        w: u32, h: u32,
+        w: u32,
+        h: u32,
         #[serde(skip_serializing_if = "is_zero_u8")]
         e: u8,
     },

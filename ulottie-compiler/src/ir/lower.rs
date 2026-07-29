@@ -15,8 +15,8 @@ use std::hash::{Hash, Hasher};
 
 use anyhow::Result;
 
-use crate::lottie::{self, Animation, GraphicElement, Keyframe as AstKeyframe};
 use crate::lottie::property::Property as AstProperty;
+use crate::lottie::{self, Animation, GraphicElement, Keyframe as AstKeyframe};
 
 use super::types::*;
 
@@ -114,9 +114,7 @@ fn lower_layer(
     id: LayerId,
     src: &lottie::Layer,
 ) -> Result<Layer> {
-    let parent = src
-        .parent
-        .and_then(|ind| ctx.ind_to_id.get(&ind).copied());
+    let parent = src.parent.and_then(|ind| ctx.ind_to_id.get(&ind).copied());
 
     let kind = match src.ty {
         0 => LayerKind::Precomp {
@@ -181,7 +179,9 @@ fn lower_masks(
     module: &mut Module,
     props: Option<&Vec<lottie::MaskProperty>>,
 ) -> Result<Vec<LayerMask>> {
-    let Some(props) = props else { return Ok(Vec::new()); };
+    let Some(props) = props else {
+        return Ok(Vec::new());
+    };
     let mut out = Vec::with_capacity(props.len());
     for m in props {
         let mode = match m.mode.as_str() {
@@ -194,7 +194,12 @@ fn lower_masks(
             Some(p) => Some(lower_prop_scalar(module, p, 100.0)?),
             None => None,
         };
-        out.push(LayerMask { mode, inverted: m.inv, shape, opacity });
+        out.push(LayerMask {
+            mode,
+            inverted: m.inv,
+            shape,
+            opacity,
+        });
     }
     Ok(out)
 }
@@ -245,11 +250,7 @@ fn lower_prop_scalar(
     Ok(wrap_with_expr(module, p, value_source))
 }
 
-fn lower_prop_vec2(
-    module: &mut Module,
-    p: &AstProperty,
-    default: Vec2,
-) -> Result<Property<Vec2>> {
+fn lower_prop_vec2(module: &mut Module, p: &AstProperty, default: Vec2) -> Result<Property<Vec2>> {
     if let Some(split) = p.split() {
         return lower_split_to_vec(module, split, [default[0], default[1], 0.0])
             .map(project_vec3_to_vec2);
@@ -269,11 +270,7 @@ fn lower_prop_vec2(
     Ok(wrap_with_expr(module, p, value_source))
 }
 
-fn lower_prop_vec3(
-    module: &mut Module,
-    p: &AstProperty,
-    default: Vec3,
-) -> Result<Property<Vec3>> {
+fn lower_prop_vec3(module: &mut Module, p: &AstProperty, default: Vec3) -> Result<Property<Vec3>> {
     if let Some(split) = p.split() {
         return lower_split_to_vec(module, split, default);
     }
@@ -314,7 +311,10 @@ fn lower_split_to_vec(
     if let (Some(xs), Some(ys), Some(zs)) = (
         static_scalar(&x_prop),
         static_scalar(&y_prop),
-        z_prop.as_ref().map(static_scalar).unwrap_or(Some(default[2])),
+        z_prop
+            .as_ref()
+            .map(static_scalar)
+            .unwrap_or(Some(default[2])),
     ) {
         return Ok(Property::Static([xs, ys, zs]));
     }
@@ -370,11 +370,7 @@ fn project_vec3_to_vec2(prop: Property<Vec3>) -> Property<Vec2> {
             fallback: match fallback {
                 ValueSource::Static(v) => ValueSource::Static([v[0], v[1]]),
                 ValueSource::Animated(kf) => ValueSource::Animated(Keyframes {
-                    frames: kf
-                        .frames
-                        .into_iter()
-                        .map(project_kf_vec3_to_vec2)
-                        .collect(),
+                    frames: kf.frames.into_iter().map(project_kf_vec3_to_vec2).collect(),
                 }),
             },
             expr,
@@ -405,9 +401,10 @@ fn static_scalar(p: &Property<Scalar>) -> Option<Scalar> {
 fn collect_times(p: &Property<Scalar>) -> Vec<f64> {
     match p {
         Property::Animated(kf) => kf.frames.iter().map(|f| f.time).collect(),
-        Property::Expression { fallback: ValueSource::Animated(kf), .. } => {
-            kf.frames.iter().map(|f| f.time).collect()
-        }
+        Property::Expression {
+            fallback: ValueSource::Animated(kf),
+            ..
+        } => kf.frames.iter().map(|f| f.time).collect(),
         _ => Vec::new(),
     }
 }
@@ -416,10 +413,14 @@ fn eval_scalar_at(p: &Property<Scalar>, t: f64, fallback: Scalar) -> Scalar {
     match p {
         Property::Static(v) => *v,
         Property::Animated(kf) => interpolate_scalar(kf, t, fallback),
-        Property::Expression { fallback: ValueSource::Static(v), .. } => *v,
-        Property::Expression { fallback: ValueSource::Animated(kf), .. } => {
-            interpolate_scalar(kf, t, fallback)
-        }
+        Property::Expression {
+            fallback: ValueSource::Static(v),
+            ..
+        } => *v,
+        Property::Expression {
+            fallback: ValueSource::Animated(kf),
+            ..
+        } => interpolate_scalar(kf, t, fallback),
     }
 }
 
@@ -433,10 +434,7 @@ fn interpolate_scalar(kf: &Keyframes<Scalar>, t: f64, fallback: Scalar) -> Scala
     }
     let last = frames.last().unwrap();
     if t >= last.time {
-        return last
-            .end_value
-            .or(last.value)
-            .unwrap_or(fallback);
+        return last.end_value.or(last.value).unwrap_or(fallback);
     }
     for i in 0..frames.len() - 1 {
         let a = &frames[i];
@@ -475,10 +473,7 @@ fn lower_prop_color(
     Ok(wrap_with_expr(module, p, value_source))
 }
 
-fn lower_prop_path(
-    module: &mut Module,
-    p: &AstProperty,
-) -> Result<Property<PathData>> {
+fn lower_prop_path(module: &mut Module, p: &AstProperty) -> Result<Property<PathData>> {
     let value_source = if p.is_animated() {
         ValueSource::Animated(Keyframes {
             frames: p
@@ -502,7 +497,9 @@ fn wrap_with_expr<T: Clone>(
     value_source: ValueSource<T>,
 ) -> Property<T> {
     if let Some(expr_body) = src.expression() {
-        let id = module.expressions.insert(build_expression(expr_body.to_string()));
+        let id = module
+            .expressions
+            .insert(build_expression(expr_body.to_string()));
         Property::Expression {
             fallback: value_source,
             expr: id,
@@ -519,24 +516,15 @@ fn wrap_with_expr<T: Clone>(
 // Keyframe lowering. The values we extract depend on T; pass the parser in.
 // ---------------------------------------------------------------------------
 
-fn lower_kf<T: Clone>(
-    src: &AstKeyframe,
-    parse: fn(&[f64]) -> Option<T>,
-) -> Keyframe<T> {
+fn lower_kf<T: Clone>(src: &AstKeyframe, parse: fn(&[f64]) -> Option<T>) -> Keyframe<T> {
     Keyframe {
         time: src.time,
         value: src.start_numbers().as_deref().and_then(parse),
         end_value: src.end_numbers().as_deref().and_then(parse),
         easing_in: src.in_tangent.as_ref().map(lower_easing),
         easing_out: src.out_tangent.as_ref().map(lower_easing),
-        spatial_in: src
-            .spatial_tangent_in
-            .as_deref()
-            .and_then(parse_vec3),
-        spatial_out: src
-            .spatial_tangent_to
-            .as_deref()
-            .and_then(parse_vec3),
+        spatial_in: src.spatial_tangent_in.as_deref().and_then(parse_vec3),
+        spatial_out: src.spatial_tangent_to.as_deref().and_then(parse_vec3),
         hold: src.hold == Some(1),
     }
 }
@@ -675,7 +663,6 @@ fn parse_path_opt(v: Option<&serde_json::Value>) -> Option<PathData> {
     })
 }
 
-
 // ---------------------------------------------------------------------------
 // Shape lowering
 // ---------------------------------------------------------------------------
@@ -692,26 +679,50 @@ fn lower_shapes(module: &mut Module, shapes: &[GraphicElement]) -> Result<Vec<Sh
 
 fn lower_shape(module: &mut Module, src: &GraphicElement) -> Result<Option<ShapeNode>> {
     Ok(Some(match src {
-        GraphicElement::Group { name, match_name, it, hidden, .. } => ShapeNode::Group {
+        GraphicElement::Group {
+            name,
+            match_name,
+            it,
+            hidden,
+            ..
+        } => ShapeNode::Group {
             name: name.clone(),
             match_name: match_name.clone(),
             items: lower_shapes(module, it)?,
             hidden: *hidden,
         },
-        GraphicElement::Path { name, ks, hidden, d } => ShapeNode::Path {
+        GraphicElement::Path {
+            name,
+            ks,
+            hidden,
+            d,
+        } => ShapeNode::Path {
             name: name.clone(),
             ks: lower_prop_path(module, ks)?,
             direction: ShapeDirection::from_lottie(*d),
             hidden: *hidden,
         },
-        GraphicElement::Ellipse { name, s, p, hidden, d } => ShapeNode::Ellipse {
+        GraphicElement::Ellipse {
+            name,
+            s,
+            p,
+            hidden,
+            d,
+        } => ShapeNode::Ellipse {
             name: name.clone(),
             size: lower_prop_vec2(module, s, [0.0, 0.0])?,
             position: lower_prop_vec2(module, p, [0.0, 0.0])?,
             direction: ShapeDirection::from_lottie(*d),
             hidden: *hidden,
         },
-        GraphicElement::Rectangle { name, s, p, r, hidden, d } => ShapeNode::Rectangle {
+        GraphicElement::Rectangle {
+            name,
+            s,
+            p,
+            r,
+            hidden,
+            d,
+        } => ShapeNode::Rectangle {
             name: name.clone(),
             size: lower_prop_vec2(module, s, [0.0, 0.0])?,
             position: lower_prop_vec2(module, p, [0.0, 0.0])?,
@@ -720,7 +731,17 @@ fn lower_shape(module: &mut Module, src: &GraphicElement) -> Result<Option<Shape
             hidden: *hidden,
         },
         GraphicElement::PolyStar {
-            name, sy, pt, p, outer_radius, ir, os, inner_roundness, r, hidden, d,
+            name,
+            sy,
+            pt,
+            p,
+            outer_radius,
+            ir,
+            os,
+            inner_roundness,
+            r,
+            hidden,
+            d,
         } => ShapeNode::PolyStar {
             name: name.clone(),
             kind: match sy.unwrap_or(1) {
@@ -747,7 +768,15 @@ fn lower_shape(module: &mut Module, src: &GraphicElement) -> Result<Option<Shape
             hidden: *hidden,
         },
         GraphicElement::Transform {
-            name, p, a, s, r, o, sk, sa, hidden,
+            name,
+            p,
+            a,
+            s,
+            r,
+            o,
+            sk,
+            sa,
+            hidden,
         } => {
             let transform = Transform {
                 anchor: lower_prop_vec3(module, a, [0.0, 0.0, 0.0])?,
@@ -764,9 +793,20 @@ fn lower_shape(module: &mut Module, src: &GraphicElement) -> Result<Option<Shape
                     None => None,
                 },
             };
-            ShapeNode::Transform { name: name.clone(), transform, hidden: *hidden }
+            ShapeNode::Transform {
+                name: name.clone(),
+                transform,
+                hidden: *hidden,
+            }
         }
-        GraphicElement::Fill { name, match_name, c, o, hidden, .. } => ShapeNode::Fill {
+        GraphicElement::Fill {
+            name,
+            match_name,
+            c,
+            o,
+            hidden,
+            ..
+        } => ShapeNode::Fill {
             name: name.clone(),
             match_name: match_name.clone(),
             color: lower_prop_color(module, c, [0.0, 0.0, 0.0, 1.0])?,
@@ -775,7 +815,16 @@ fn lower_shape(module: &mut Module, src: &GraphicElement) -> Result<Option<Shape
             hidden: *hidden,
         },
         GraphicElement::Stroke {
-            name, match_name, c, o, w, lc, lj, ml, hidden, ..
+            name,
+            match_name,
+            c,
+            o,
+            w,
+            lc,
+            lj,
+            ml,
+            hidden,
+            ..
         } => ShapeNode::Stroke {
             name: name.clone(),
             match_name: match_name.clone(),
@@ -788,7 +837,17 @@ fn lower_shape(module: &mut Module, src: &GraphicElement) -> Result<Option<Shape
             hidden: *hidden,
         },
         GraphicElement::GradientStroke {
-            name, g, w, o, s, e, t, lc, lj, ml, hidden,
+            name,
+            g,
+            w,
+            o,
+            s,
+            e,
+            t,
+            lc,
+            lj,
+            ml,
+            hidden,
         } => ShapeNode::GradientStroke {
             name: name.clone(),
             gradient: GradientDef { raw: g.clone() },
@@ -811,7 +870,14 @@ fn lower_shape(module: &mut Module, src: &GraphicElement) -> Result<Option<Shape
             miter_limit: *ml,
             hidden: *hidden,
         },
-        GraphicElement::TrimPath { name, s, e, o, m, hidden } => ShapeNode::TrimPath {
+        GraphicElement::TrimPath {
+            name,
+            s,
+            e,
+            o,
+            m,
+            hidden,
+        } => ShapeNode::TrimPath {
             name: name.clone(),
             start: lower_prop_scalar(module, s, 0.0)?,
             end: lower_prop_scalar(module, e, 100.0)?,
@@ -823,7 +889,14 @@ fn lower_shape(module: &mut Module, src: &GraphicElement) -> Result<Option<Shape
             hidden: *hidden,
         },
         GraphicElement::GradientFill {
-            name, g, o, s, e, t, r, hidden,
+            name,
+            g,
+            o,
+            s,
+            e,
+            t,
+            r,
+            hidden,
         } => ShapeNode::GradientFill {
             name: name.clone(),
             gradient: GradientDef { raw: g.clone() },
@@ -860,12 +933,18 @@ fn lower_effects(module: &mut Module, ef: Option<&serde_json::Value>) -> Result<
     };
     let mut out = Vec::with_capacity(arr.len());
     for ef_val in arr {
-        let Some(ef_obj) = ef_val.as_object() else { continue };
+        let Some(ef_obj) = ef_val.as_object() else {
+            continue;
+        };
         let name = ef_obj.get("nm").and_then(|v| v.as_str()).map(String::from);
         let match_name = ef_obj.get("mn").and_then(|v| v.as_str()).map(String::from);
         let ty = ef_obj.get("ty").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
         let index = ef_obj.get("ix").and_then(|v| v.as_u64()).map(|n| n as u32);
-        let enabled = ef_obj.get("en").and_then(|v| v.as_u64()).map(|n| n != 0).unwrap_or(true);
+        let enabled = ef_obj
+            .get("en")
+            .and_then(|v| v.as_u64())
+            .map(|n| n != 0)
+            .unwrap_or(true);
         let parameters = ef_obj
             .get("ef")
             .and_then(|v| v.as_array())
@@ -890,7 +969,9 @@ fn lower_effects(module: &mut Module, ef: Option<&serde_json::Value>) -> Result<
 }
 
 fn lower_effect_param(module: &mut Module, p: &serde_json::Value) -> Result<Option<EffectParam>> {
-    let Some(obj) = p.as_object() else { return Ok(None) };
+    let Some(obj) = p.as_object() else {
+        return Ok(None);
+    };
     let name = obj.get("nm").and_then(|v| v.as_str()).map(String::from);
     let match_name = obj.get("mn").and_then(|v| v.as_str()).map(String::from);
     let ty = obj.get("ty").and_then(|v| v.as_u64()).unwrap_or(0) as u32;

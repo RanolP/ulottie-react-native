@@ -24,10 +24,10 @@
 
 use std::fmt::Write;
 
-use crate::scene::prop::{Anim, AnimKind, Prop};
-use crate::scene::svg::{n as fmt_num, q, FlatPath};
 use crate::scene::flat::RECORD_DEFAULTS;
-use crate::scene::{op, Arg, Binding, Effect, Scene};
+use crate::scene::prop::{Anim, AnimKind, Prop};
+use crate::scene::svg::{FlatPath, n as fmt_num, q};
+use crate::scene::{Arg, Binding, Effect, Scene, op};
 
 /// A generated value: either a number the compiler knows, or JS that computes
 /// one. Keeping the two apart is what makes constant folding fall out.
@@ -86,7 +86,12 @@ fn paren(v: &Val) -> String {
     match v {
         Val::Lit(x) if *x < 0.0 => format!("({})", fmt_num(*x)),
         Val::Lit(x) => fmt_num(*x),
-        Val::Expr(s) if s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.') => s.clone(),
+        Val::Expr(s)
+            if s.chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '.') =>
+        {
+            s.clone()
+        }
         Val::Expr(s) => format!("({s})"),
     }
 }
@@ -106,6 +111,9 @@ fn op_supported(o: u8) -> bool {
             | op::FILL
             | op::STROKE
             | op::SHAPE
+            | op::SHAPE_RECT
+            | op::SHAPE_ELLIPSE
+            | op::SHAPE_STAR
             | op::RECT
             | op::ELLIPSE
             | op::GRADIENT
@@ -142,7 +150,7 @@ fn args_supported(args: &[Arg]) -> bool {
 /// clocks or visibility gates — sends the module back to the interpreter.
 fn scene_supported(scene: &Scene) -> bool {
     let d = &scene.data;
-    if std::env::var("ULOTTIE_WHY").is_ok() {
+    if super::why() {
         for (name, ok) in [
             ("assets", d.assets.is_empty()),
             ("uses", d.uses.is_empty()),
@@ -151,7 +159,9 @@ fn scene_supported(scene: &Scene) -> bool {
             ("ops", d.b.iter().all(|b| op_supported(b.op))),
             ("args", d.b.iter().all(|b| args_supported(&b.args))),
         ] {
-            if !ok { eprintln!("codegen: falls back on {name}"); }
+            if !ok {
+                eprintln!("codegen: falls back on {name}");
+            }
         }
         for b in &d.b {
             if !args_supported(&b.args) {
@@ -165,9 +175,13 @@ fn scene_supported(scene: &Scene) -> bool {
     // does, and that build still compiles, just the other way.
     d.assets.is_empty()
         && d.uses.is_empty()
-        && d.remaps.iter().all(|r| r.as_ref().is_none_or(prop_supported))
+        && d.remaps
+            .iter()
+            .all(|r| r.as_ref().is_none_or(prop_supported))
         && !d.b.is_empty()
-        && d.b.iter().all(|b| op_supported(b.op) && args_supported(&b.args))
+        && d.b
+            .iter()
+            .all(|b| op_supported(b.op) && args_supported(&b.args))
 }
 
 // ---------------------------------------------------------------------------
@@ -219,8 +233,13 @@ impl Builder {
     /// into it instead of allocating every frame.
     fn scratch(&mut self, bi: usize) -> String {
         let name = format!("k{bi}");
-        if !self.decls.iter().any(|d| d.starts_with(&format!("{name}="))) {
-            self.decls.push(format!("{name}={{v:[],i:null,o:null,c:1}}"));
+        if !self
+            .decls
+            .iter()
+            .any(|d| d.starts_with(&format!("{name}=")))
+        {
+            self.decls
+                .push(format!("{name}={{v:[],i:null,o:null,c:1}}"));
         }
         name
     }
@@ -244,7 +263,10 @@ impl Builder {
     fn path_const(&mut self, p: &FlatPath) -> String {
         let poly = p.i.iter().chain(p.o.iter()).all(|x| *x == 0.0);
         let col = |v: &Vec<f64>| {
-            v.iter().map(|x| fmt_num(q(*x))).collect::<Vec<_>>().join(",")
+            v.iter()
+                .map(|x| fmt_num(q(*x)))
+                .collect::<Vec<_>>()
+                .join(",")
         };
         let body = if poly {
             format!("{{v:[{}],i:null,o:null,c:{}}}", col(&p.v), p.c as u8)
@@ -277,11 +299,16 @@ impl Builder {
             Prop::Anim(a) if a.kind == AnimKind::Path => {
                 self.need("lerpPath");
                 let n = a.t.len();
-                let keys: Vec<String> =
-                    a.paths.iter().map(|fp| self.path_const(fp)).collect();
+                let keys: Vec<String> = a.paths.iter().map(|fp| self.path_const(fp)).collect();
                 let name = self.name();
                 writeln!(self.body, "let {name};").unwrap();
-                writeln!(self.body, "if(f<={}){{{name}={}}}", fmt_num(q(a.t[0])), keys[0]).unwrap();
+                writeln!(
+                    self.body,
+                    "if(f<={}){{{name}={}}}",
+                    fmt_num(q(a.t[0])),
+                    keys[0]
+                )
+                .unwrap();
                 writeln!(
                     self.body,
                     "else if(f>={}){{{name}={}}}",
@@ -292,19 +319,25 @@ impl Builder {
                 for i in 0..n - 1 {
                     let (ta, tb) = (q(a.t[i]), q(a.t[i + 1]));
                     let span = tb - ta;
-                    let held =
-                        a.hold.as_ref().is_some_and(|h| h.get(i).copied().unwrap_or(0) == 1);
+                    let held = a
+                        .hold
+                        .as_ref()
+                        .is_some_and(|h| h.get(i).copied().unwrap_or(0) == 1);
                     if span == 0.0 || held {
-                        writeln!(self.body, "else if(f<{}){{{name}={}}}", fmt_num(tb), keys[i])
-                            .unwrap();
+                        writeln!(
+                            self.body,
+                            "else if(f<{}){{{name}={}}}",
+                            fmt_num(tb),
+                            keys[i]
+                        )
+                        .unwrap();
                         continue;
                     }
-                    let ez = a
-                        .ez
-                        .as_ref()
-                        .and_then(|z| z.get(i).copied())
-                        .and_then(|k| easings.get(k as usize).copied())
-                        .and_then(|e| self.ease(e));
+                    let ez =
+                        a.ez.as_ref()
+                            .and_then(|z| z.get(i).copied())
+                            .and_then(|k| easings.get(k as usize).copied())
+                            .and_then(|e| self.ease(e));
                     let u = match ez {
                         Some(k) => {
                             self.need("EASE");
@@ -351,9 +384,16 @@ impl Builder {
     fn kf_columns(&mut self, a: &Anim, easings: &[[f64; 4]]) -> String {
         let t: Vec<String> = a.t.iter().map(|x| fmt_num(q(*x))).collect();
         let v = if a.kind == AnimKind::Path {
-            a.paths.iter().map(|p| self.path_const(p)).collect::<Vec<_>>().join(",")
+            a.paths
+                .iter()
+                .map(|p| self.path_const(p))
+                .collect::<Vec<_>>()
+                .join(",")
         } else {
-            a.v.iter().map(|x| fmt_num(q(*x))).collect::<Vec<_>>().join(",")
+            a.v.iter()
+                .map(|x| fmt_num(q(*x)))
+                .collect::<Vec<_>>()
+                .join(",")
         };
         let mut out = format!(
             "{{t:[{}],v:[{v}],d:{},kind:{}",
@@ -368,7 +408,10 @@ impl Builder {
                 .map(|k| match easings.get(*k as usize) {
                     Some(e) if *e != [0.0, 0.0, 1.0, 1.0] => format!(
                         "[{},{},{},{}]",
-                        fmt_num(e[0]), fmt_num(e[1]), fmt_num(e[2]), fmt_num(e[3])
+                        fmt_num(e[0]),
+                        fmt_num(e[1]),
+                        fmt_num(e[2]),
+                        fmt_num(e[3])
                     ),
                     _ => "0".into(),
                 })
@@ -394,7 +437,10 @@ impl Builder {
                 self.need("spBuild");
                 self.need("spSample");
                 let col = |v: &Vec<f64>| {
-                    v.iter().map(|x| fmt_num(q(*x))).collect::<Vec<_>>().join(",")
+                    v.iter()
+                        .map(|x| fmt_num(q(*x)))
+                        .collect::<Vec<_>>()
+                        .join(",")
                 };
                 out.push_str(&format!(",to:[{}],ti:[{}]", col(to), col(ti)));
             }
@@ -422,14 +468,22 @@ impl Builder {
             Prop::Vector(v) => {
                 let items: Vec<String> = v.iter().map(|x| fmt_num(q(*x))).collect();
                 // Hoisted, so reading it does not allocate on every frame.
-                writeln!(decl, "const {name}_v=[{}],{name}=()=>{name}_v;", items.join(","))
-                    .unwrap();
+                writeln!(
+                    decl,
+                    "const {name}_v=[{}],{name}=()=>{name}_v;",
+                    items.join(",")
+                )
+                .unwrap();
             }
             Prop::Path(fp) => {
                 let c = self.path_const(fp);
                 writeln!(decl, "const {name}=()=>{c};{name}.pathv={c};").unwrap();
             }
-            Prop::Expr { id, fallback, layer } => {
+            Prop::Expr {
+                id,
+                fallback,
+                layer,
+            } => {
                 let src = match fallback.as_deref() {
                     Some(f) => self.handle(f, easings),
                     None => "null".to_string(),
@@ -486,7 +540,9 @@ impl Builder {
                 if dim.max(1) == 1 {
                     vec![Val::Expr(name)]
                 } else {
-                    (0..dim.max(1)).map(|i| Val::Expr(format!("{name}[{i}]"))).collect()
+                    (0..dim.max(1))
+                        .map(|i| Val::Expr(format!("{name}[{i}]")))
+                        .collect()
                 }
             }
             // Filtered out by `prop_supported`.
@@ -534,22 +590,29 @@ impl Builder {
         for i in 0..n - 1 {
             let (ta, tb) = (q(a.t[i]), q(a.t[i + 1]));
             let span = tb - ta;
-            let held = a.hold.as_ref().is_some_and(|h| h.get(i).copied().unwrap_or(0) == 1);
+            let held = a
+                .hold
+                .as_ref()
+                .is_some_and(|h| h.get(i).copied().unwrap_or(0) == 1);
             let start: Vec<String> = (0..d).map(|c| fmt_num(at(i, c))).collect();
 
             if span == 0.0 || held {
                 // A held segment keeps its start value for the whole span.
-                writeln!(self.body, "else if(f<{}){{{}}}", fmt_num(tb), assign(&names, &start))
-                    .unwrap();
+                writeln!(
+                    self.body,
+                    "else if(f<{}){{{}}}",
+                    fmt_num(tb),
+                    assign(&names, &start)
+                )
+                .unwrap();
                 continue;
             }
 
-            let ez = a
-                .ez
-                .as_ref()
-                .and_then(|z| z.get(i).copied())
-                .and_then(|k| easings.get(k as usize).copied())
-                .and_then(|e| self.ease(e));
+            let ez =
+                a.ez.as_ref()
+                    .and_then(|z| z.get(i).copied())
+                    .and_then(|k| easings.get(k as usize).copied())
+                    .and_then(|e| self.ease(e));
 
             // Spatial tangents bend the segment, and the path is sampled by
             // arc length rather than interpolated straight. The endpoints are
@@ -560,11 +623,23 @@ impl Builder {
                 let any = (0..d).any(|c| g(to, c) != 0.0 || g(ti, c) != 0.0);
                 any.then(|| {
                     let arr = |v: &Vec<f64>| {
-                        (0..d).map(|c| fmt_num(g(v, c))).collect::<Vec<_>>().join(",")
+                        (0..d)
+                            .map(|c| fmt_num(g(v, c)))
+                            .collect::<Vec<_>>()
+                            .join(",")
                     };
-                    let start = (0..d).map(|c| fmt_num(at(i, c))).collect::<Vec<_>>().join(",");
-                    let end = (0..d).map(|c| fmt_num(at(i + 1, c))).collect::<Vec<_>>().join(",");
-                    (format!("[{start}],[{end}],[{}],[{}],{d}", arr(to), arr(ti)), d)
+                    let start = (0..d)
+                        .map(|c| fmt_num(at(i, c)))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let end = (0..d)
+                        .map(|c| fmt_num(at(i + 1, c)))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    (
+                        format!("[{start}],[{end}],[{}],[{}],{d}", arr(to), arr(ti)),
+                        d,
+                    )
                 })
             });
 
@@ -606,7 +681,13 @@ impl Builder {
                     }
                 }
             }
-            writeln!(self.body, "else if(f<{}){{{}}}", fmt_num(tb), parts.join(";")).unwrap();
+            writeln!(
+                self.body,
+                "else if(f<{}){{{}}}",
+                fmt_num(tb),
+                parts.join(";")
+            )
+            .unwrap();
         }
         // The final segment's upper bound is the `f>=tn` clamp above, so the
         // chain needs no trailing branch beyond the last one written.
@@ -642,7 +723,11 @@ pub fn try_emit(scene: &Scene) -> Option<Generated> {
     // planner order, which already puts a parent before its children.
     for (i, t) in scene.data.timelines.iter().enumerate() {
         let parent = t[0] as usize;
-        let src = if parent == 0 { "f".to_string() } else { format!("t{parent}") };
+        let src = if parent == 0 {
+            "f".to_string()
+        } else {
+            format!("t{parent}")
+        };
 
         // A precomp with time remap takes its clock from a property of the
         // parent's time rather than from `parent - offset`, and neither the
@@ -661,7 +746,11 @@ pub fn try_emit(scene: &Scene) -> Option<Generated> {
 
         let off = q(t[1]);
         let (lo, hi) = (q(t[2]), q(t[3]));
-        let shifted = if off == 0.0 { src } else { format!("{src}-{}", fmt_num(off)) };
+        let shifted = if off == 0.0 {
+            src
+        } else {
+            format!("{src}-{}", fmt_num(off))
+        };
         writeln!(g.body, "let t{}={shifted};", i + 1).ok()?;
         if hi - lo > 0.0 {
             writeln!(
@@ -696,7 +785,12 @@ pub fn try_emit(scene: &Scene) -> Option<Generated> {
         for r in &scene.data.layers {
             let mut fields = vec![format!("i:{}", r.i)];
             if let Some(n) = r.n {
-                let name = scene.data.names.get(n as usize).cloned().unwrap_or_default();
+                let name = scene
+                    .data
+                    .names
+                    .get(n as usize)
+                    .cloned()
+                    .unwrap_or_default();
                 fields.push(format!("n:{}", js_string(&name)));
             }
             if let Some(pr) = r.pr {
@@ -712,7 +806,9 @@ pub fn try_emit(scene: &Scene) -> Option<Generated> {
             ] {
                 // A property equal to its default is elided, exactly as on the
                 // wire — the engine and the binders supply the same defaults.
-                let keep = p.as_ref().filter(|p| !default.is_some_and(|d| p.is_exactly(d)));
+                let keep = p
+                    .as_ref()
+                    .filter(|p| !default.is_some_and(|d| p.is_exactly(d)));
                 match keep {
                     Some(p) => {
                         let h = g.handle(p, &easings);
@@ -750,7 +846,20 @@ pub fn try_emit(scene: &Scene) -> Option<Generated> {
         if slot_of != 0 {
             writeln!(g.body, "{{const f=t{slot_of};").ok()?;
         }
-        emit_binding(&mut g, b, el, bi, &easings, &mut slots)?;
+        // Reported rather than silent: `scene_supported` screens the whole
+        // scene, so a binding failing *here* means an op's argument shape and
+        // the generator's reading of it have drifted apart — which shows up
+        // only as the module quietly getting bigger.
+        if emit_binding(&mut g, b, el, bi, &easings, &mut slots).is_none() {
+            if super::why() {
+                eprintln!(
+                    "codegen: binding {bi} (op {}) is not expressible: {}",
+                    b.op,
+                    b.args.iter().map(arg_kind).collect::<Vec<_>>().join(", ")
+                );
+            }
+            return None;
+        }
         if slot_of != 0 {
             writeln!(g.body, "}}").ok()?;
         }
@@ -823,7 +932,7 @@ fn emit_binding(
             // A rotation the planner proved constant collapses the matrix. At
             // zero the linear part is diagonal and the trig disappears entirely.
             let (m0, m1, m2, m3) = match r[0].lit() {
-                Some(deg) if deg == 0.0 => (sx.clone(), Val::Lit(0.0), Val::Lit(0.0), sy.clone()),
+                Some(0.0) => (sx.clone(), Val::Lit(0.0), Val::Lit(0.0), sy.clone()),
                 Some(deg) => {
                     let rad = deg * std::f64::consts::PI / 180.0;
                     let (cs, sn) = (Val::Lit(rad.cos()), Val::Lit(rad.sin()));
@@ -955,16 +1064,8 @@ fn emit_binding(
                 g.write(el, "stroke-width", &value, &sl);
             }
         }
-        op::SHAPE => {
-            let list = match b.args.first() {
-                Some(Arg::List(items)) => items,
-                _ => return None,
-            };
-            let kind = match list.first() {
-                Some(Arg::Tag(t)) => *t,
-                Some(Arg::Num(v)) => *v as u32,
-                _ => return None,
-            };
+        op::SHAPE | op::SHAPE_RECT | op::SHAPE_ELLIPSE | op::SHAPE_STAR => {
+            let list = &b.args;
             let arg = |i: usize| -> Option<&Prop> {
                 match list.get(i) {
                     Some(Arg::Prop(p)) => Some(p),
@@ -974,24 +1075,28 @@ fn emit_binding(
 
             // The geometry generators write into one scratch object per
             // binding, so a steady-state frame allocates nothing.
-            let src = match kind {
-                0 => g.path_prop(arg(1)?, easings)?,
-                1 => {
+            let src = match b.op {
+                op::SHAPE => g.path_prop(arg(0)?, easings)?,
+                op::SHAPE_RECT => {
                     g.need("rectPath");
                     let scratch = g.scratch(bi);
-                    let sz = g.prop(arg(1)?, 2, easings);
-                    let ps = g.prop(arg(2)?, 2, easings);
-                    let rd = g.prop(arg(3)?, 1, easings);
+                    let sz = g.prop(arg(0)?, 2, easings);
+                    let ps = g.prop(arg(1)?, 2, easings);
+                    let rd = g.prop(arg(2)?, 1, easings);
                     format!(
                         "rectPath({scratch},{},{},{},{},{})",
-                        ps[0].js(), ps[1].js(), sz[0].js(), sz[1].js(), rd[0].js()
+                        ps[0].js(),
+                        ps[1].js(),
+                        sz[0].js(),
+                        sz[1].js(),
+                        rd[0].js()
                     )
                 }
-                2 => {
+                op::SHAPE_ELLIPSE => {
                     g.need("ellipsePath");
                     let scratch = g.scratch(bi);
-                    let sz = g.prop(arg(1)?, 2, easings);
-                    let ps = g.prop(arg(2)?, 2, easings);
+                    let sz = g.prop(arg(0)?, 2, easings);
+                    let ps = g.prop(arg(1)?, 2, easings);
                     format!(
                         "ellipsePath({scratch},{},{},{},{})",
                         ps[0].js(),
@@ -1000,31 +1105,37 @@ fn emit_binding(
                         mul(&sz[1], &Val::Lit(0.5)).js()
                     )
                 }
-                3 => {
+                op::SHAPE_STAR => {
                     g.need("starPath");
                     let scratch = g.scratch(bi);
-                    let sy = match list.get(1) {
+                    let sy = match list.first() {
                         Some(Arg::Tag(t)) => *t as f64,
-                        Some(Arg::Num(v)) => *v,
                         _ => return None,
                     };
-                    let pt = g.prop(arg(2)?, 1, easings);
-                    let ps = g.prop(arg(3)?, 2, easings);
-                    let or = g.prop(arg(4)?, 1, easings);
-                    let ir = g.prop(arg(5)?, 1, easings);
-                    let rt = g.prop(arg(6)?, 1, easings);
+                    let pt = g.prop(arg(1)?, 1, easings);
+                    let ps = g.prop(arg(2)?, 2, easings);
+                    let or = g.prop(arg(3)?, 1, easings);
+                    let ir = g.prop(arg(4)?, 1, easings);
+                    let rt = g.prop(arg(5)?, 1, easings);
                     format!(
                         "starPath({scratch},{},{},{},{},{},{},{})",
-                        fmt_num(sy), pt[0].js(), ps[0].js(), ps[1].js(),
-                        or[0].js(), ir[0].js(), rt[0].js()
+                        fmt_num(sy),
+                        pt[0].js(),
+                        ps[0].js(),
+                        ps[1].js(),
+                        or[0].js(),
+                        ir[0].js(),
+                        rt[0].js()
                     )
                 }
+                // Named rather than a catch-all: a new geometry op would
+                // otherwise be code-generated as a polystar, silently.
                 _ => return None,
             };
 
             g.need("pathD");
             let sl = slot(slots, "d");
-            match b.args.get(1) {
+            match b.args.last() {
                 Some(Arg::List(tm)) if tm.len() >= 3 => {
                     let getp = |i: usize| match tm.get(i) {
                         Some(Arg::Prop(p)) => Some(p),
@@ -1037,7 +1148,8 @@ fn emit_binding(
                     g.need("trimApply");
                     // A static source path has one arc-length table for the
                     // whole animation; a moving one has to be re-measured.
-                    let fixed = matches!(list.get(1), Some(Arg::Prop(Prop::Path(_))));
+                    let fixed =
+                        b.op == op::SHAPE && matches!(list.first(), Some(Arg::Prop(Prop::Path(_))));
                     let tab = if fixed {
                         let t = format!("T{}", g.tabs);
                         g.tabs += 1;
@@ -1078,8 +1190,10 @@ if(!hide){{const w=pathD(out||{name});if(w!=={sl}){{{sl}=w;e{el}.setAttribute('d
             let x = sub(&ps[0], &half(&sz[0]));
             let y = sub(&ps[1], &half(&sz[1]));
             for (attr, v, tag) in [
-                ("x", x, "x"), ("y", y, "y"),
-                ("width", sz[0].clone(), "w"), ("height", sz[1].clone(), "h"),
+                ("x", x, "x"),
+                ("y", y, "y"),
+                ("width", sz[0].clone(), "w"),
+                ("height", sz[1].clone(), "h"),
             ] {
                 let value = num(g, &v);
                 let sl = slot(slots, tag);
@@ -1140,7 +1254,11 @@ if(!hide){{const w=pathD(out||{name});if(w!=={sl}){{{sl}=w;e{el}.setAttribute('d
             if radial {
                 let dx = sub(&ep[0], &sp[0]);
                 let dy = sub(&ep[1], &sp[1]);
-                writes.push(("r", Val::Expr(format!("Math.hypot({},{})", dx.js(), dy.js())), "c"));
+                writes.push((
+                    "r",
+                    Val::Expr(format!("Math.hypot({},{})", dx.js(), dy.js())),
+                    "c",
+                ));
             } else {
                 writes.push(("x2", ep[0].clone(), "c"));
                 writes.push(("y2", ep[1].clone(), "d"));
@@ -1154,16 +1272,30 @@ if(!hide){{const w=pathD(out||{name});if(w!=={sl}){{{sl}=w;e{el}.setAttribute('d
         op::LAYER_TX | op::LAYER_OP => {
             // These name a record rather than carrying a second copy of the
             // same keyframes, and every input is a runtime handle — so there is
-            // nothing to fold and nothing to gain from inlining. One call.
+            // nothing to fold and nothing to gain from inlining the arithmetic.
+            // The helper is a direct call taking a record and a frame, the same
+            // one the batched loop makes; only the write is generated here.
             let ri = match b.args.first() {
                 Some(Arg::Num(n)) => *n as usize,
                 _ => return None,
             };
-            let helper = if b.op == op::LAYER_TX { "layerTx" } else { "layerOp" };
-            g.need(if b.op == op::LAYER_TX { "layerTx" } else { "layerOp" });
+            let tx = b.op == op::LAYER_TX;
+            // The record's fields are resolved once, in `init` — the batched
+            // loop does the same at bind time, and for the same reason: asking
+            // the record for its own defaults per frame is four property loads
+            // and four branches on every binding.
+            g.need("lyFields");
             let name = format!("u{bi}");
-            writeln!(g.init, "const {name}={helper}(e{el},ctx.recs[{ri}]);").ok()?;
-            writeln!(g.body, "{name}(f);").ok()?;
+            writeln!(g.init, "const {name}=lyFields(ctx.recs[{ri}]);").ok()?;
+            let sl = slot(slots, if tx { "t" } else { "o" });
+            let value = if tx {
+                g.need("mtx");
+                format!("mtx({name}[0](f),{name}[1](f),{name}[2](f),{name}[3](f))")
+            } else {
+                g.need("r");
+                format!("r({name}[4](f)/100)")
+            };
+            g.write(el, if tx { "transform" } else { "opacity" }, &value, &sl);
         }
         _ => return None,
     }
@@ -1213,31 +1345,51 @@ fn effects_literal(g: &mut Builder, list: &[Effect], easings: &[[f64; 4]]) -> St
     let entries: Vec<String> = list
         .iter()
         .map(|e| {
-            let params: Vec<String> = e
-                .ef
-                .iter()
-                .map(|p| {
-                    let handle = match &p.p {
-                        Some(prop) => g.handle(prop, easings),
-                        None => "null".into(),
-                    };
-                    let v = match p.v {
-                        Some(v) if p.ty == 10 => fmt_num(v),
-                        Some(v) => fmt_num(q(v)),
-                        None => "undefined".into(),
-                    };
-                    format!(
-                        "{{nm:{},mn:{},ty:{},v:{v},p:{handle}}}",
-                        opt(&p.nm),
-                        opt(&p.mn),
-                        p.ty
-                    )
-                })
-                .collect();
-            format!("{{nm:{},mn:{},ef:[{}]}}", opt(&e.nm), opt(&e.mn), params.join(","))
+            let params: Vec<String> =
+                e.ef.iter()
+                    .map(|p| {
+                        let handle = match &p.p {
+                            Some(prop) => g.handle(prop, easings),
+                            None => "null".into(),
+                        };
+                        let v = match p.v {
+                            Some(v) if p.ty == 10 => fmt_num(v),
+                            Some(v) => fmt_num(q(v)),
+                            None => "undefined".into(),
+                        };
+                        format!(
+                            "{{nm:{},mn:{},ty:{},v:{v},p:{handle}}}",
+                            opt(&p.nm),
+                            opt(&p.mn),
+                            p.ty
+                        )
+                    })
+                    .collect();
+            format!(
+                "{{nm:{},mn:{},ef:[{}]}}",
+                opt(&e.nm),
+                opt(&e.mn),
+                params.join(",")
+            )
         })
         .collect();
     format!("[{}]", entries.join(","))
+}
+
+/// An argument's shape, for the `ULOTTIE_WHY` report above.
+fn arg_kind(a: &Arg) -> &'static str {
+    match a {
+        Arg::Prop(Prop::Scalar(_)) => "scalar",
+        Arg::Prop(Prop::Vector(_)) => "vector",
+        Arg::Prop(Prop::Path(_)) => "path",
+        Arg::Prop(Prop::Anim(_)) => "anim",
+        Arg::Prop(Prop::Expr { .. }) => "expr",
+        Arg::Tag(_) => "tag",
+        Arg::Num(_) => "num",
+        Arg::Str(_) => "str",
+        Arg::List(_) => "list",
+        Arg::Null => "null",
+    }
 }
 
 fn js_string(s: &str) -> String {

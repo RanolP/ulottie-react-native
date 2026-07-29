@@ -261,5 +261,4 @@ mod tests {
         };
         assert_eq!(p.to_d(), "M0,0L-10-5");
     }
-
 }

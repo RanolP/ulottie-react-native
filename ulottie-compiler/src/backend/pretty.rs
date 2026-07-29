@@ -213,6 +213,9 @@ mod tests {
         let s = json(&v, 0);
         assert!(s.contains("\n"), "expected a multi-line rendering, got {s}");
         // Inner arrays still fit, so they stay on one line each.
-        assert!(s.contains(r#"[0,1,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]"#), "{s}");
+        assert!(
+            s.contains(r#"[0,1,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]"#),
+            "{s}"
+        );
     }
 }

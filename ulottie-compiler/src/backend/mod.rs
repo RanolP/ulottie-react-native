@@ -15,6 +15,15 @@ pub mod shake;
 
 use anyhow::Result;
 
+/// Whether the compiler should explain the decisions it makes.
+///
+/// `ULOTTIE_WHY=1` turns on the running commentary the backends emit when they
+/// decline something — which binding defeated the generator, which candidate
+/// won on size, which construct sent an expression to the fallback.
+pub(crate) fn why() -> bool {
+    std::env::var("ULOTTIE_WHY").is_ok()
+}
+
 use crate::data;
 use crate::ir;
 use crate::scene;
@@ -67,7 +76,11 @@ fn describe(
     instanced: bool,
     exprs: Option<&layers::Exprs>,
 ) -> Report {
-    let caps: Vec<String> = scene.caps.iter_names().map(|(n, _)| n.to_string()).collect();
+    let caps: Vec<String> = scene
+        .caps
+        .iter_names()
+        .map(|(n, _)| n.to_string())
+        .collect();
     let modules = if scene.is_static() {
         Vec::new()
     } else {
@@ -79,19 +92,22 @@ fn describe(
         .iter()
         .map(|u| scene.data.assets[u.asset as usize].bindings.len())
         .sum();
-    let instance_clocks = scene
-        .data
-        .uses
-        .iter()
-        .any(|u| u.parent_slot != 0 || scene.data.assets[u.asset as usize].slots.iter().any(|s| *s != 0));
+    let instance_clocks = scene.data.uses.iter().any(|u| {
+        u.parent_slot != 0
+            || scene.data.assets[u.asset as usize]
+                .slots
+                .iter()
+                .any(|s| *s != 0)
+    });
     Report {
         caps,
         instance_clocks,
         runtime_slice: if scene.is_static() {
             0
         } else {
-            let helpers: Vec<&'static str> =
-                exprs.map(|e| e.helpers.iter().copied().collect()).unwrap_or_default();
+            let helpers: Vec<&'static str> = exprs
+                .map(|e| e.helpers.iter().copied().collect())
+                .unwrap_or_default();
             emit::runtime_size_with(scene.caps, &helpers)
         },
         modules,
@@ -102,7 +118,12 @@ fn describe(
         bindings: scene.data.b.len() + replays,
         generated: emit::is_generated(scene, exprs),
         records: scene.data.layers.len()
-            + scene.data.assets.iter().map(|a| a.records.len()).sum::<usize>(),
+            + scene
+                .data
+                .assets
+                .iter()
+                .map(|a| a.records.len())
+                .sum::<usize>(),
         js,
     }
 }
@@ -120,14 +141,15 @@ pub fn report(module: &ir::Module, options: &crate::CompileOptions) -> Result<Op
     let bodies: Vec<ir::Expression> = module.expressions.iter().cloned().collect();
 
     let build = |instance| -> Result<Report> {
-        let mut scene =
-            scene::plan_with(&payload, has_exprs, options.inline_limit, instance)?;
+        let mut scene = scene::plan_with(&payload, has_exprs, options.inline_limit, instance)?;
 
         // The layer pass runs *here*, not once for the module, because it
         // resolves references to record indices and the two candidate builds
         // number their records differently — an inlined precomp's layers sit
         // twenty-three places apart, an instanced one's are local to the asset.
-        let exprs = has_exprs.then(|| layers::table(&scene.data, &bodies)).transpose()?;
+        let exprs = has_exprs
+            .then(|| layers::table(&scene.data, &bodies))
+            .transpose()?;
 
         // The planner cannot see inside an expression body, so what the bodies
         // reach for is folded in here.
@@ -224,5 +246,9 @@ fn compressed_len(src: &str) -> usize {
 /// finds on the fixture corpus.
 #[cfg(not(feature = "auto-instancing"))]
 fn compressed_len(src: &str) -> usize {
-    if src.len() > 32 * 1024 { src.len() } else { usize::MAX - src.len() }
+    if src.len() > 32 * 1024 {
+        src.len()
+    } else {
+        usize::MAX - src.len()
+    }
 }

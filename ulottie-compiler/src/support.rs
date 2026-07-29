@@ -107,10 +107,29 @@ impl Feature {
     pub fn from_name(s: &str) -> Option<Feature> {
         use Feature::*;
         const ALL: &[Feature] = &[
-            ImageLayer, TextLayer, UnknownLayerType, TrackMatte, BlendMode, TimeStretch,
-            TimeRemap, AutoOrient, ThreeD, Skew, MaskMode, MaskOpacity, Repeater, MergePaths,
-            RoundedCorners, OffsetPath, PuckerBloat, ZigZag, UnknownShape, ReversedDirection,
-            EvenOddFill, AnimatedGradient, ImageAsset,
+            ImageLayer,
+            TextLayer,
+            UnknownLayerType,
+            TrackMatte,
+            BlendMode,
+            TimeStretch,
+            TimeRemap,
+            AutoOrient,
+            ThreeD,
+            Skew,
+            MaskMode,
+            MaskOpacity,
+            Repeater,
+            MergePaths,
+            RoundedCorners,
+            OffsetPath,
+            PuckerBloat,
+            ZigZag,
+            UnknownShape,
+            ReversedDirection,
+            EvenOddFill,
+            AnimatedGradient,
+            ImageAsset,
         ];
         ALL.iter().copied().find(|f| f.name() == s)
     }
@@ -130,7 +149,9 @@ pub struct Finding {
 }
 
 /// Shape types the backend renders. Anything else is reported.
-const KNOWN_SHAPES: &[&str] = &["gr", "sh", "el", "rc", "sr", "tr", "fl", "st", "gf", "gs", "tm"];
+const KNOWN_SHAPES: &[&str] = &[
+    "gr", "sh", "el", "rc", "sr", "tr", "fl", "st", "gf", "gs", "tm",
+];
 
 /// Walk a Lottie document and report everything the compiler would ignore.
 pub fn scan(doc: &Value) -> Vec<Finding> {
@@ -160,7 +181,10 @@ pub fn scan(doc: &Value) -> Vec<Finding> {
 }
 
 fn push(out: &mut Vec<Finding>, feature: Feature, location: &str) {
-    out.push(Finding { feature, location: location.to_string() });
+    out.push(Finding {
+        feature,
+        location: location.to_string(),
+    });
 }
 
 fn truthy(v: Option<&Value>) -> bool {
@@ -194,7 +218,11 @@ fn scan_layers(layers: &[Value], where_: &str, out: &mut Vec<Finding>) {
         if truthy(l.get("bm")) {
             push(out, Feature::BlendMode, &at);
         }
-        if l.get("sr").and_then(Value::as_f64).map(|s| s != 1.0).unwrap_or(false) {
+        if l.get("sr")
+            .and_then(Value::as_f64)
+            .map(|s| s != 1.0)
+            .unwrap_or(false)
+        {
             push(out, Feature::TimeStretch, &at);
         }
         if truthy(l.get("ao")) {
@@ -225,7 +253,12 @@ fn scan_layers(layers: &[Value], where_: &str, out: &mut Vec<Finding>) {
             }
         }
 
-        for m in l.get("masksProperties").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]) {
+        for m in l
+            .get("masksProperties")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+        {
             match m.get("mode").and_then(Value::as_str) {
                 Some("a") | Some("s") | Some("n") | None => {}
                 Some(_) => push(out, Feature::MaskMode, &at),
@@ -264,7 +297,10 @@ fn scan_shapes(shapes: &[Value], where_: &str, out: &mut Vec<Finding>) {
         if ty == "fl" && s.get("r").and_then(Value::as_u64) == Some(2) {
             push(out, Feature::EvenOddFill, where_);
         }
-        if s.get("g").and_then(|g| g.get("k")).and_then(|k| k.get("a")).and_then(Value::as_u64)
+        if s.get("g")
+            .and_then(|g| g.get("k"))
+            .and_then(|k| k.get("a"))
+            .and_then(Value::as_u64)
             == Some(1)
         {
             push(out, Feature::AnimatedGradient, where_);
@@ -282,7 +318,9 @@ fn property_is_nonzero(p: &Value) -> bool {
     }
     match p.get("k") {
         Some(Value::Number(n)) => n.as_f64().map(|v| v != 0.0).unwrap_or(false),
-        Some(Value::Array(a)) => a.iter().any(|v| v.as_f64().map(|x| x != 0.0).unwrap_or(false)),
+        Some(Value::Array(a)) => a
+            .iter()
+            .any(|v| v.as_f64().map(|x| x != 0.0).unwrap_or(false)),
         _ => false,
     }
 }
@@ -304,7 +342,10 @@ fn property_differs_from(p: &Value, expect: f64) -> bool {
 
 /// Findings not covered by `allow`, formatted as a build error.
 pub fn reject(findings: &[Finding], allow: &BTreeSet<Feature>) -> Option<String> {
-    let blocking: Vec<&Finding> = findings.iter().filter(|f| !allow.contains(&f.feature)).collect();
+    let blocking: Vec<&Finding> = findings
+        .iter()
+        .filter(|f| !allow.contains(&f.feature))
+        .collect();
     if blocking.is_empty() {
         return None;
     }

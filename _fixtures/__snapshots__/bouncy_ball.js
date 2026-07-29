@@ -4,8 +4,9 @@
 // caps: TRANSFORM | KEYFRAMES | EASING
 
 import { mount } from './runtime/core.js';
-import { bTransform } from './runtime/ops/tx.js';
-const B=[bTransform];
+import { bTransform, oTransform } from './runtime/ops/tx.js';
+const P0=(x,B,e,l,q,a)=>[bTransform(x,B[0],e,l,q,a)];
+const A0=(x,S)=>{oTransform(x,S[0])};
 
 const M =
   '<svg viewBox="0 0 512 512" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="overflow:hidden">' +
@@ -14,7 +15,7 @@ const M =
     '</g>' +
   '</svg>';
 
-const D = "0gskt10gopq30i200000o700000600gt7gt7qp20gt7gt700mj5gt7mgi560o7gfmt1kdih2in3mt1kd2424op1il1mgg56u6o7i8ococgh1m7ococ002800s3m5u5k7";
+const D = "0gskt10gopq30q100u70000600gt7gt7qp20gt7gt700mj5gt7mgi560o7gfmt1kdih2in3mt1kd2424op1il1mgg56u6o7i8ococgh1m7ococ00200k3u4m5s62g7";
 
 export const markup = M;
-export const init = (c, o) => mount(M, D, B, c, o);
+export const init = (c, o) => mount(M, D, P0, A0, c, o);

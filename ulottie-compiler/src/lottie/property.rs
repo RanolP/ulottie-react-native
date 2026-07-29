@@ -63,8 +63,11 @@ impl Property {
     pub fn is_animated(&self) -> bool {
         match self {
             Property::Animated(_) => true,
-            Property::Split(s) => s.x.is_animated() || s.y.is_animated()
-                || s.z.as_deref().map(Property::is_animated).unwrap_or(false),
+            Property::Split(s) => {
+                s.x.is_animated()
+                    || s.y.is_animated()
+                    || s.z.as_deref().map(Property::is_animated).unwrap_or(false)
+            }
             _ => false,
         }
     }

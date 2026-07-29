@@ -170,7 +170,9 @@ pub struct Transform2D {
 
 impl Transform2D {
     pub fn identity() -> Self {
-        Self { m: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }
+        Self {
+            m: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        }
     }
 }
 
@@ -212,11 +214,7 @@ fn indent(w: &mut fmt::Formatter<'_>, level: usize) -> fmt::Result {
     Ok(())
 }
 
-fn write_layer(
-    w: &mut fmt::Formatter<'_>,
-    layer: &RenderedLayer,
-    depth: usize,
-) -> fmt::Result {
+fn write_layer(w: &mut fmt::Formatter<'_>, layer: &RenderedLayer, depth: usize) -> fmt::Result {
     indent(w, depth)?;
     write!(w, "Layer #{} ", layer.index)?;
     if let Some(name) = &layer.name {
@@ -282,7 +280,11 @@ fn write_shape(w: &mut fmt::Formatter<'_>, tree: &ShapeTree, depth: usize) -> fm
                 writeln!(w)?;
             }
         }
-        ShapeTree::Group { transform, opacity, children } => {
+        ShapeTree::Group {
+            transform,
+            opacity,
+            children,
+        } => {
             indent(w, depth)?;
             writeln!(
                 w,
@@ -301,10 +303,20 @@ fn write_shape(w: &mut fmt::Formatter<'_>, tree: &ShapeTree, depth: usize) -> fm
 fn write_style(w: &mut fmt::Formatter<'_>, style: &RenderedStyle) -> fmt::Result {
     match style {
         RenderedStyle::Paint(Paint::Solid { color, opacity }) => {
-            write!(w, "Fill color={} opacity={}", fmt_color(*color), f(*opacity))
+            write!(
+                w,
+                "Fill color={} opacity={}",
+                fmt_color(*color),
+                f(*opacity)
+            )
         }
         RenderedStyle::Paint(Paint::Gradient {
-            kind, rule, stops, start, end, opacity,
+            kind,
+            rule,
+            stops,
+            start,
+            end,
+            opacity,
         }) => {
             write!(
                 w,
@@ -320,7 +332,12 @@ fn write_style(w: &mut fmt::Formatter<'_>, style: &RenderedStyle) -> fmt::Result
             )
         }
         RenderedStyle::Stroke {
-            color, opacity, width, linecap, linejoin, miter_limit,
+            color,
+            opacity,
+            width,
+            linecap,
+            linejoin,
+            miter_limit,
         } => {
             write!(
                 w,
@@ -337,7 +354,15 @@ fn write_style(w: &mut fmt::Formatter<'_>, style: &RenderedStyle) -> fmt::Result
             Ok(())
         }
         RenderedStyle::GradientStroke {
-            kind, stops, start, end, opacity, width, linecap, linejoin, miter_limit,
+            kind,
+            stops,
+            start,
+            end,
+            opacity,
+            width,
+            linecap,
+            linejoin,
+            miter_limit,
         } => {
             write!(
                 w,
@@ -358,7 +383,12 @@ fn write_style(w: &mut fmt::Formatter<'_>, style: &RenderedStyle) -> fmt::Result
             }
             Ok(())
         }
-        RenderedStyle::TrimPath { start, end, offset, mode } => {
+        RenderedStyle::TrimPath {
+            start,
+            end,
+            offset,
+            mode,
+        } => {
             write!(
                 w,
                 "TrimPath s={} e={} o={} m={}",
@@ -398,16 +428,18 @@ fn fmt_stops(stops: &[GradientStop]) -> String {
 }
 
 fn fmt_color(c: Color) -> String {
-    format!(
-        "rgba({},{},{},{})",
-        f(c.r), f(c.g), f(c.b), f(c.a)
-    )
+    format!("rgba({},{},{},{})", f(c.r), f(c.g), f(c.b), f(c.a))
 }
 
 fn fmt_xform(t: Transform2D) -> String {
     format!(
         "[{} {} {} {} {} {}]",
-        f(t.m[0]), f(t.m[1]), f(t.m[2]), f(t.m[3]), f(t.m[4]), f(t.m[5])
+        f(t.m[0]),
+        f(t.m[1]),
+        f(t.m[2]),
+        f(t.m[3]),
+        f(t.m[4]),
+        f(t.m[5])
     )
 }
 
@@ -437,7 +469,12 @@ fn path_to_d(p: &BezierPath) -> String {
             let c2 = [vb[0] + ib[0], vb[1] + ib[1]];
             s.push_str(&format!(
                 " C{},{} {},{} {},{}",
-                f(c1[0]), f(c1[1]), f(c2[0]), f(c2[1]), f(vb[0]), f(vb[1])
+                f(c1[0]),
+                f(c1[1]),
+                f(c2[0]),
+                f(c2[1]),
+                f(vb[0]),
+                f(vb[1])
             ));
         }
     }

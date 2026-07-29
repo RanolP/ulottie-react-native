@@ -8,7 +8,7 @@
 //! Which modules get concatenated is decided by the scene's [`Caps`], not by
 //! hoping a tree-shaker finds the dead code afterwards.
 
-use crate::scene::{op, Caps, Scene};
+use crate::scene::{Binding, Caps, Scene, op};
 use crate::{MarkupMode, RuntimeMode};
 
 use super::codegen;
@@ -42,6 +42,8 @@ const MODS: &[Mod] = modules![
     "col.js"     => "../../runtime/col.js",
     "scale.js"   => "../../runtime/scale.js",
     "set.js"     => "../../runtime/set.js",
+    "mtx.js"     => "../../runtime/mtx.js",
+    "batch.js"   => "../../runtime/batch.js",
     "rec.js"     => "../../runtime/rec.js",
     "ids.js"     => "../../runtime/ids.js",
     "tpl.js"     => "../../runtime/tpl.js",
@@ -50,6 +52,7 @@ const MODS: &[Mod] = modules![
     "ease.js"    => "../../runtime/ease.js",
     "spatial.js" => "../../runtime/spatial.js",
     "kfpath.js"  => "../../runtime/kfpath.js",
+    "pv.js"      => "../../runtime/pv.js",
     "expr.js"    => "../../runtime/expr.js",
     "kf.js"      => "../../runtime/kf.js",
     "path.js"    => "../../runtime/path.js",
@@ -75,21 +78,86 @@ pub fn modules() -> &'static [Mod] {
     MODS
 }
 
-/// The binder each op code resolves to, and the module it lives in.
-const BINDERS: [(u8, Caps, &str, &str); 12] = [
-    (op::TRANSFORM, Caps::TRANSFORM, "bTransform", "ops/tx.js"),
-    (op::TRANSLATE, Caps::TRANSLATE, "bTranslate", "ops/txt.js"),
-    (op::OPACITY, Caps::OPACITY, "bOpacity", "ops/opacity.js"),
-    (op::DISPLAY, Caps::DISPLAY, "bDisplay", "ops/display.js"),
-    (op::SHAPE, Caps::SHAPE, "bShape", "ops/shape.js"),
-    (op::RECT, Caps::RECT, "bRect", "ops/rect.js"),
-    (op::ELLIPSE, Caps::ELLIPSE, "bEllipse", "ops/ellipse.js"),
-    (op::FILL, Caps::FILL, "bFill", "ops/fill.js"),
-    (op::STROKE, Caps::STROKE, "bStroke", "ops/stroke.js"),
-    (op::GRADIENT, Caps::GRADIENT, "bGradient", "ops/grad.js"),
-    (op::LAYER_TX, Caps::LAYER_TX, "bLayerTx", "ops/layer.js"),
-    (op::LAYER_OP, Caps::LAYER_OP, "bLayerOpacity", "ops/layer.js"),
+/// Each op's two halves, and the module they live in.
+///
+/// `bXxx` binds a batch once and returns a plain state record; `oXxx(x, s)` is
+/// the frame. Neither closes over anything and no op returns a callback, so the
+/// module calls both by name: nothing maps an op code to an implementation at
+/// mount, and the shaker sees direct references rather than table entries.
+///
+/// Which capability each one needs is [`scene::caps_for_op`], not a column
+/// here — the planner sets the same bits when it binds.
+const OPS: [(u8, &str, &str, &str); 15] = [
+    (op::TRANSFORM, "bTransform", "oTransform", "ops/tx.js"),
+    (op::TRANSLATE, "bTranslate", "oTranslate", "ops/txt.js"),
+    (op::OPACITY, "bOpacity", "oOpacity", "ops/opacity.js"),
+    (op::DISPLAY, "bDisplay", "oDisplay", "ops/display.js"),
+    (op::SHAPE, "bShape", "oShape", "ops/shape.js"),
+    (op::RECT, "bRect", "oRect", "ops/rect.js"),
+    (op::ELLIPSE, "bEllipse", "oEllipse", "ops/ellipse.js"),
+    (op::FILL, "bFill", "oFill", "ops/fill.js"),
+    (op::STROKE, "bStroke", "oStroke", "ops/stroke.js"),
+    (op::GRADIENT, "bGradient", "oGradient", "ops/grad.js"),
+    (op::LAYER_TX, "bLayerTx", "oLayerTx", "ops/layer.js"),
+    (
+        op::LAYER_OP,
+        "bLayerOpacity",
+        "oLayerOpacity",
+        "ops/layer.js",
+    ),
+    (op::SHAPE_RECT, "bShapeRect", "oShapeRect", "ops/shape.js"),
+    (
+        op::SHAPE_ELLIPSE,
+        "bShapeEllipse",
+        "oShapeEllipse",
+        "ops/shape.js",
+    ),
+    (op::SHAPE_STAR, "bShapeStar", "oShapeStar", "ops/shape.js"),
 ];
+
+/// An op's `(bind, apply)` pair. Every code in `scene::op` has one.
+fn op_fn(code: u8) -> (&'static str, &'static str) {
+    OPS.iter()
+        .find(|(c, ..)| *c == code)
+        .map(|(_, bind, apply, _)| (*bind, *apply))
+        .expect("every op code has a runtime loop")
+}
+
+/// An animation's **program**: one call per op batch, in the order
+/// [`scene::program_ops`] fixed, then one call per loop each frame.
+///
+/// This is what replaced the binder table. The op codes never reach the wire —
+/// `mount` hands the program a context and a list of batch offsets, and the
+/// program does the rest with names the minifier and the shaker can both see.
+fn program(k: usize, list: &[Binding]) -> String {
+    let ops = crate::scene::program_ops(list);
+    // A fully-instanced animation has no bindings of its own; the slots still
+    // have to hold something callable.
+    if ops.is_empty() {
+        return format!("const P{k}=()=>0,A{k}=()=>0;\n");
+    }
+    let mut binds = Vec::with_capacity(ops.len());
+    let mut calls = Vec::with_capacity(ops.len());
+    for (i, code) in ops.iter().enumerate() {
+        let (bind, apply) = op_fn(*code);
+        binds.push(format!("{bind}(x,B[{i}],e,l,q,a)"));
+        calls.push(format!("{apply}(x,S[{i}])"));
+    }
+    format!(
+        "const P{k}=(x,B,e,l,q,a)=>[{}];\nconst A{k}=(x,S)=>{{{}}};\n",
+        binds.join(","),
+        calls.join(";")
+    )
+}
+
+/// Every program in a scene: the document's, then one per precomp asset.
+fn programs(scene: &Scene) -> String {
+    let mut out = program(0, &scene.data.b);
+    for (k, a) in scene.data.assets.iter().enumerate() {
+        out.push_str(&program(k + 1, &a.bindings));
+    }
+    out
+}
 
 /// Roots of the reachability walk: the mount entry point, every binder the scene
 /// actually uses, and every runtime function the emitted expression bodies call.
@@ -113,9 +181,10 @@ fn roots(caps: Caps, helpers: &[&'static str]) -> Vec<&'static str> {
     if caps.contains(Caps::TIME_REMAP) {
         r.push("resolve");
     }
-    for (_, cap, name, _) in BINDERS {
-        if caps.contains(cap) {
-            r.push(name);
+    for (code, bind, apply, _) in OPS {
+        if caps.contains(crate::scene::caps_for_op(code)) {
+            r.push(bind);
+            r.push(apply);
         }
     }
     r
@@ -123,7 +192,9 @@ fn roots(caps: Caps, helpers: &[&'static str]) -> Vec<&'static str> {
 
 /// Every top-level declaration in the runtime, in dependency order.
 fn all_declarations() -> Vec<shake::Decl> {
-    MODS.iter().flat_map(|m| shake::declarations(m.src)).collect()
+    MODS.iter()
+        .flat_map(|m| shake::declarations(m.src))
+        .collect()
 }
 
 /// The runtime this scene needs, shaken down to reachable declarations.
@@ -180,7 +251,10 @@ pub fn runtime_size_with(caps: Caps, helpers: &[&'static str]) -> usize {
     // keywords, so without this the module has no exports and no side effects
     // and the minifier correctly deletes all of it — which reported every
     // runtime as 0 bytes, and so every feature as costing nothing.
-    src.push_str(&format!("export {{ {} }};\n", roots(caps, helpers).join(", ")));
+    src.push_str(&format!(
+        "export {{ {} }};\n",
+        roots(caps, helpers).join(", ")
+    ));
     minify(&src).unwrap_or(src).len()
 }
 
@@ -191,29 +265,54 @@ pub fn runtime_size_with(caps: Caps, helpers: &[&'static str]) -> usize {
 /// upper bound on what a page could ever load.
 pub fn driver_source() -> String {
     let mut src = bundle(Caps::all(), EXPR_HELPERS);
-    src.push_str(&binder_table(Caps::all()));
+    // A program naming every op, so the ceiling includes each loop rather than
+    // only the ones some particular animation reaches.
+    src.push_str(&program(0, &every_op()));
     src
+}
+
+/// One binding per op, for the "everything on" reports.
+fn every_op() -> Vec<Binding> {
+    OPS.iter()
+        .map(|(code, ..)| Binding {
+            op: *code,
+            el: 0,
+            el_index: 0,
+            args: Vec::new(),
+        })
+        .collect()
 }
 
 /// Every runtime symbol the expression bodies can be rewritten to call, plus the
 /// fallback surface. Only the "everything on" reports use this; a real module
 /// takes the exact set the layer pass reports for it.
 const EXPR_HELPERS: &[&str] = &[
-    "lyAt", "lyRel", "lyParent", "lyPos", "lyAnchor", "lyScale", "lyRot",
-    "lyOpacity", "lyPath", "lyPoints", "lyClosed", "lyEffect",
-    "toComp", "fromCompToSurface",
+    "lyAt",
+    "lyRel",
+    "lyParent",
+    "lyPos",
+    "lyAnchor",
+    "lyScale",
+    "lyRot",
+    "lyOpacity",
+    "lyPath",
+    "lyPoints",
+    "lyClosed",
+    "lyEffect",
+    "toComp",
+    "fromCompToSurface",
 ];
 
 /// Minified counterpart of [`driver_source`], for size reporting.
 pub fn build_driver() -> String {
     let mut src = driver_source();
-    // Every entry point, not just `mount`/`B`. The optional capabilities reach
+    // Every entry point, not just `mount`. The optional capabilities reach
     // the runtime through the `ext` argument rather than an import, so
     // exporting only `mount` let the minifier drop the expression engine,
     // template expansion and sprite sourcing — and the "all capabilities"
     // figure then understated the runtime by roughly 40%.
     src.push_str(&format!(
-        "export {{ {}, B }};\n",
+        "export {{ {}, P0, A0 }};\n",
         roots(Caps::all(), EXPR_HELPERS).join(", ")
     ));
     minify(&src).unwrap_or(src)
@@ -225,7 +324,9 @@ pub fn build_driver() -> String {
 
 /// The expression helpers a scene's bodies call, as shake roots.
 fn helpers_of(exprs: Option<&Exprs>) -> Vec<&'static str> {
-    exprs.map(|e| e.helpers.iter().copied().collect()).unwrap_or_default()
+    exprs
+        .map(|e| e.helpers.iter().copied().collect())
+        .unwrap_or_default()
 }
 
 pub fn emit(
@@ -279,11 +380,11 @@ pub fn emit(
                 RUNTIME_BASE,
                 &helpers,
             ));
-            src.push_str(&binder_table(scene.caps));
+            src.push_str(&programs(scene));
         }
         RuntimeMode::Embedded => {
             src.push_str(&bundle(caps_of(scene, markup_mode), &helpers));
-            src.push_str(&binder_table(scene.caps));
+            src.push_str(&programs(scene));
         }
     }
     src.push_str(&format!("const M={markup};\nconst D={data};\n"));
@@ -304,11 +405,23 @@ pub fn emit(
     src.push_str("export const markup=M;\n");
     src.push_str(&sprite_export(markup_mode));
     src.push_str(&format!(
-        "export const init=(c,o)=>mount(M,D,B,c,o{});\n",
-        extensions(scene.caps, &scene.data.tpl, !scene.data.strings.is_empty(), exprs, markup_mode)
+        "export const init=(c,o)=>mount(M,D,P0,A0,c,o{});\n",
+        extensions(scene, exprs, markup_mode)
     ));
 
     let interpreted = minify(&src).unwrap_or(src);
+    // Which backend won, and by how much. The choice is a measurement, so it
+    // moves when either side does — and it moves *silently*, as a module that
+    // is quietly two kilobytes bigger than it was.
+    if super::why() {
+        eprintln!(
+            "emit: interpreted {} B, generated {}",
+            interpreted.len(),
+            candidate
+                .as_ref()
+                .map_or("declined".into(), |g| format!("{} B", g.len()))
+        );
+    }
     Ok(match candidate {
         Some(g) if g.len() < interpreted.len() => g,
         _ => interpreted,
@@ -332,18 +445,16 @@ pub fn is_generated(scene: &Scene, exprs: Option<&Exprs>) -> bool {
                 caps_of(scene, &MarkupMode::Inline),
                 &helpers_of(exprs),
             ));
-            src.push_str(&binder_table(scene.caps));
+            src.push_str(&programs(scene));
             if let Ok(data) = serde_json::to_string(&scene.data) {
                 src.push_str(&format!("const M={markup};\nconst D={data};\n"));
             }
             if !scene.data.tpl.is_empty() {
-                let items: Vec<String> =
-                    scene.data.tpl.iter().map(|m| js_string(m)).collect();
+                let items: Vec<String> = scene.data.tpl.iter().map(|m| js_string(m)).collect();
                 src.push_str(&format!("const TPL=[{}];\n", items.join(",")));
             }
             if !scene.data.strings.is_empty() {
-                let items: Vec<String> =
-                    scene.data.strings.iter().map(|m| js_string(m)).collect();
+                let items: Vec<String> = scene.data.strings.iter().map(|m| js_string(m)).collect();
                 src.push_str(&format!("const SP=[{}];\n", items.join(",")));
             }
             if let Some(e) = exprs {
@@ -351,8 +462,8 @@ pub fn is_generated(scene: &Scene, exprs: Option<&Exprs>) -> bool {
             }
             src.push_str("export const markup=M;\n");
             src.push_str(&format!(
-                "export const init=(c,o)=>mount(M,D,B,c,o{});\n",
-                extensions(scene.caps, &scene.data.tpl, !scene.data.strings.is_empty(), exprs, &MarkupMode::Inline)
+                "export const init=(c,o)=>mount(M,D,P0,A0,c,o{});\n",
+                extensions(scene, exprs, &MarkupMode::Inline)
             ));
             g.len() < minify(&src).unwrap_or(src).len()
         }
@@ -574,7 +685,9 @@ fn readable(
     ));
 
     if scene.is_static() {
-        src.push_str("// Fully static after compilation: no runtime, no data table, no frame loop.\n");
+        src.push_str(
+            "// Fully static after compilation: no runtime, no data table, no frame loop.\n",
+        );
     }
 
     let helpers = helpers_of(exprs);
@@ -586,7 +699,7 @@ fn readable(
                     RUNTIME_BASE,
                     &helpers,
                 ));
-                src.push_str(&binder_table(scene.caps));
+                src.push_str(&programs(scene));
                 src.push('\n');
             }
             RuntimeMode::Embedded => {
@@ -595,7 +708,7 @@ fn readable(
                     retained_symbols(caps_of(scene, markup_mode), &helpers).join(", ")
                 ));
                 src.push_str(&bundle(caps_of(scene, markup_mode), &helpers));
-                src.push_str(&binder_table(scene.caps));
+                src.push_str(&programs(scene));
                 src.push('\n');
             }
         }
@@ -652,8 +765,8 @@ fn readable(
         src.push_str(&static_player(scene, markup_mode));
     } else {
         src.push_str(&format!(
-            "export const init = (c, o) => mount(M, D, B, c, o{});\n",
-            extensions(scene.caps, &scene.data.tpl, !scene.data.strings.is_empty(), exprs, markup_mode)
+            "export const init = (c, o) => mount(M, D, P0, A0, c, o{});\n",
+            extensions(scene, exprs, markup_mode)
         ));
     }
     Ok(src)
@@ -663,21 +776,34 @@ fn readable(
 /// animation stop needing (or start needing) a runtime feature.
 fn caps_list(caps: Caps) -> String {
     let names: Vec<&str> = caps.iter_names().map(|(n, _)| n).collect();
-    if names.is_empty() { "none".into() } else { names.join(" | ") }
+    if names.is_empty() {
+        "none".into()
+    } else {
+        names.join(" | ")
+    }
 }
 
 /// The optional-capability argument to `mount`, if any. Passing these rather
 /// than importing them from `core.js` is what keeps an animation from pulling
 /// in code it does not use — a reference inside `core.js` would survive into
 /// every module graph.
-fn extensions(
-    caps: Caps,
-    tpl: &[String],
-    pool: bool,
-    exprs: Option<&Exprs>,
-    markup_mode: &MarkupMode,
-) -> String {
+fn extensions(scene: &Scene, exprs: Option<&Exprs>, markup_mode: &MarkupMode) -> String {
+    let caps = scene.caps;
+    let tpl = &scene.data.tpl;
+    let pool = !scene.data.strings.is_empty();
     let mut parts = Vec::new();
+    // The asset programs, in asset order — a `use` row names its asset and
+    // `mount` replays that program with the instance's bases.
+    if !scene.data.assets.is_empty() {
+        let bind: Vec<String> = (1..=scene.data.assets.len())
+            .map(|k| format!("P{k}"))
+            .collect();
+        let apply: Vec<String> = (1..=scene.data.assets.len())
+            .map(|k| format!("A{k}"))
+            .collect();
+        parts.push(format!("a:[{}]", bind.join(",")));
+        parts.push(format!("b:[{}]", apply.join(",")));
+    }
     if let MarkupMode::Extracted(id) = markup_mode {
         parts.push(format!("s:fromSprite({})", js_string(id)));
     }
@@ -727,7 +853,9 @@ pub fn imported_modules(caps: Caps) -> Vec<String> {
 fn extern_imports(caps: Caps, base: &str, helpers: &[&'static str]) -> String {
     let mut out = format!("import {{ mount }} from '{base}/core.js';\n");
     if caps.contains(Caps::EXTRACTED) {
-        out.push_str(&format!("import {{ fromSprite }} from '{base}/sprite.js';\n"));
+        out.push_str(&format!(
+            "import {{ fromSprite }} from '{base}/sprite.js';\n"
+        ));
     }
     if caps.contains(Caps::EXPRESSIONS) {
         // The bodies call the layer helpers by bare name, so an extern build has
@@ -752,31 +880,14 @@ fn extern_imports(caps: Caps, base: &str, helpers: &[&'static str]) -> String {
     if caps.contains(Caps::TEMPLATES) {
         out.push_str(&format!("import {{ expand }} from '{base}/tpl.js';\n"));
     }
-    for (_, cap, name, module) in BINDERS {
-        if caps.contains(cap) {
-            out.push_str(&format!("import {{ {name} }} from '{base}/{module}';\n"));
+    for (code, bind, apply, module) in OPS {
+        if caps.contains(crate::scene::caps_for_op(code)) {
+            out.push_str(&format!(
+                "import {{ {bind}, {apply} }} from '{base}/{module}';\n"
+            ));
         }
     }
     out
-}
-
-/// Sparse binder table holding only the ops this scene uses. Array holes keep
-/// the indices aligned with `scene::op` without naming the absent binders.
-fn binder_table(caps: Caps) -> String {
-    let last = BINDERS
-        .iter()
-        .filter(|(_, c, _, _)| caps.contains(*c))
-        .map(|(i, _, _, _)| *i)
-        .max()
-        .unwrap_or(0);
-    let mut parts = Vec::new();
-    for (idx, cap, name, _) in BINDERS.iter() {
-        if *idx > last {
-            break;
-        }
-        parts.push(if caps.contains(*cap) { *name } else { "" });
-    }
-    format!("const B=[{}];\n", parts.join(","))
 }
 
 /// Shortest round-trip float, matching what the planner writes into markup.
@@ -819,8 +930,13 @@ mod tests {
     #[test]
     fn a_scene_only_carries_what_it_reaches() {
         let translate_only = retained_symbols(Caps::TRANSLATE, &[]);
+        assert!(translate_only.contains(&"oTranslate".to_string()));
         assert!(translate_only.contains(&"bTranslate".to_string()));
-        assert!(!translate_only.contains(&"bGradient".to_string()));
+        assert!(!translate_only.contains(&"oGradient".to_string()));
+        // An animation with no expressions must not acquire the handle surface
+        // just because every op names `xcol` on the branch that needs one.
+        assert!(!translate_only.contains(&"xcol".to_string()));
+        assert!(!translate_only.contains(&"resolve".to_string()));
         assert!(!translate_only.contains(&"trimApply".to_string()));
         assert!(!translate_only.contains(&"spatial".to_string()));
         // `r` formats plain coordinates; a translate binder uses r2/r5 only.
@@ -832,23 +948,67 @@ mod tests {
     }
 
     #[test]
-    fn extern_imports_name_each_binder_module() {
+    fn extern_imports_name_each_op_module() {
         let imports = extern_imports(Caps::TRANSLATE | Caps::FILL, "./runtime", &[]);
         assert_eq!(
             imports,
             "import { mount } from './runtime/core.js';\n\
-             import { bTranslate } from './runtime/ops/txt.js';\n\
-             import { bFill } from './runtime/ops/fill.js';\n"
+             import { bTranslate, oTranslate } from './runtime/ops/txt.js';\n\
+             import { bFill, oFill } from './runtime/ops/fill.js';\n"
         );
     }
 
+    /// Every op the planner can bind has a loop, and `op_fn` will panic rather
+    /// than emit a call to a name that does not exist. A new op code with no
+    /// entry here would compile and then fail at `init`.
     #[test]
-    fn binder_table_leaves_holes_for_absent_ops() {
-        assert_eq!(binder_table(Caps::TRANSLATE), "const B=[,bTranslate];\n");
+    fn every_op_code_has_a_loop() {
+        let all = [
+            op::TRANSFORM,
+            op::TRANSLATE,
+            op::OPACITY,
+            op::DISPLAY,
+            op::SHAPE,
+            op::RECT,
+            op::ELLIPSE,
+            op::FILL,
+            op::STROKE,
+            op::GRADIENT,
+            op::LAYER_TX,
+            op::LAYER_OP,
+            op::SHAPE_RECT,
+            op::SHAPE_ELLIPSE,
+            op::SHAPE_STAR,
+        ];
         assert_eq!(
-            binder_table(Caps::TRANSFORM | Caps::OPACITY),
-            "const B=[bTransform,,bOpacity];\n"
+            all.len(),
+            OPS.len(),
+            "an op code has no loop, or vice versa"
         );
+        for code in all {
+            let (bind, apply) = op_fn(code);
+            assert!(bind.starts_with('b') && apply.starts_with('o'));
+        }
+    }
+
+    #[test]
+    fn a_program_calls_one_loop_per_op_in_wire_order() {
+        // The order has to match `scene::program_ops`, which is what the
+        // encoder wrote the batches in. A mismatch hands an op another op's
+        // columns and renders nonsense without erroring.
+        let b = |o| Binding {
+            op: o,
+            el: 0,
+            el_index: 0,
+            args: Vec::new(),
+        };
+        assert_eq!(
+            program(0, &[b(op::FILL), b(op::TRANSFORM), b(op::FILL)]),
+            "const P0=(x,B,e,l,q,a)=>[bTransform(x,B[0],e,l,q,a),bFill(x,B[1],e,l,q,a)];\n\
+             const A0=(x,S)=>{oTransform(x,S[0]);oFill(x,S[1])};\n"
+        );
+        // A fully-instanced animation binds nothing itself.
+        assert_eq!(program(0, &[]), "const P0=()=>0,A0=()=>0;\n");
     }
 
     #[test]

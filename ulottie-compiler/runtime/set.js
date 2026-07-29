@@ -6,10 +6,17 @@
 // ones that merely happen not to change on a given frame — keyframe plateaus,
 // held segments, and quantized values that round to the same string.
 
-/** Bind a single attribute on one element, writing only on change. */
-export function attr(el, name) {
-  let last;
-  return (v) => {
-    if (v !== last) { last = v; el.setAttribute(name, v); }
-  };
+/**
+ * Write one attribute of one binding, remembering what was last written.
+ *
+ * `w` is the batch's column of last values, indexed by binding. This used to be
+ * a closure per attribute per binding holding that state in a capture; it is one
+ * array per attribute now, and a single call target for every op that writes.
+ * Generated code inlines the same three lines, because it knows the slot's name.
+ */
+export function put(el, name, v, w, i) {
+  if (v !== w[i]) {
+    w[i] = v;
+    el.setAttribute(name, v);
+  }
 }

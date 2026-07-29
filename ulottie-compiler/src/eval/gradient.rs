@@ -69,14 +69,22 @@ pub fn resolve_stops(g: &Json) -> Result<Vec<GradientStop>> {
         if !alphas.is_empty() {
             c.a = sample_alpha(&alphas, p);
         }
-        out.push(GradientStop { offset: p, color: c });
+        out.push(GradientStop {
+            offset: p,
+            color: c,
+        });
     }
     Ok(out)
 }
 
 fn sample_color(list: &[(f64, Color)], pos: f64) -> Color {
     if list.is_empty() {
-        return Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
+        return Color {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        };
     }
     if pos <= list[0].0 {
         return list[0].1;

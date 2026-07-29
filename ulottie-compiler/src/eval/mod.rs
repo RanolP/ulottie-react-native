@@ -13,17 +13,24 @@ pub mod transform;
 pub mod trim;
 
 pub use frame::{
-    BezierPath, Color, FillRule, Frame, FrameComposition, Geometry, GradientKind,
-    GradientStop, LayerKind, Paint, RenderedLayer, RenderedPrimitive, RenderedStyle,
-    ShapeTree, Transform2D,
+    BezierPath, Color, FillRule, Frame, FrameComposition, Geometry, GradientKind, GradientStop,
+    LayerKind, Paint, RenderedLayer, RenderedPrimitive, RenderedStyle, ShapeTree, Transform2D,
 };
 
 fn gradient_kind(gk: u8) -> GradientKind {
-    if gk == 2 { GradientKind::Radial } else { GradientKind::Linear }
+    if gk == 2 {
+        GradientKind::Radial
+    } else {
+        GradientKind::Linear
+    }
 }
 
 fn fill_rule(fr: u8) -> FillRule {
-    if fr == 2 { FillRule::EvenOdd } else { FillRule::NonZero }
+    if fr == 2 {
+        FillRule::EvenOdd
+    } else {
+        FillRule::NonZero
+    }
 }
 
 use anyhow::{Result, anyhow};
@@ -68,7 +75,9 @@ fn render_layer(payload: &Payload, layer: &data::Layer, frame: f64) -> Result<Re
         3 => LayerKind::Null,
         0 => {
             let refid = layer.rf.as_deref().unwrap_or("");
-            let asset = payload.a.as_ref()
+            let asset = payload
+                .a
+                .as_ref()
                 .and_then(|a| a.get(refid))
                 .ok_or_else(|| anyhow!("precomp ref `{}` not found", refid))?;
             let inner_frame = frame - layer.st.unwrap_or(0.0);
@@ -105,7 +114,12 @@ fn build_masks(masks: &[data::LayerMask], frame: f64) -> Result<Vec<frame::Rende
             None => 1.0,
         };
         let mode = m.m.chars().next().unwrap_or('a');
-        out.push(frame::RenderedMask { mode, inverted: m.inv, path, opacity });
+        out.push(frame::RenderedMask {
+            mode,
+            inverted: m.inv,
+            path,
+            opacity,
+        });
     }
     Ok(out)
 }
@@ -113,17 +127,23 @@ fn build_masks(masks: &[data::LayerMask], frame: f64) -> Result<Vec<frame::Rende
 fn render_shape_ref(payload: &Payload, sr: &ShapeRef, frame: f64) -> Result<ShapeTree> {
     match sr {
         ShapeRef::Prim(prim) => {
-            let shape = payload.s.get(prim.s as usize)
+            let shape = payload
+                .s
+                .get(prim.s as usize)
                 .ok_or_else(|| anyhow!("shape ref {} out of range", prim.s))?;
             let geometry = build_geometry(shape, frame)?;
             let mut styles = Vec::new();
             for &yid in &prim.y {
-                let style = payload.y.get(yid as usize)
+                let style = payload
+                    .y
+                    .get(yid as usize)
                     .ok_or_else(|| anyhow!("style ref {} out of range", yid))?;
                 styles.push(build_style(style, frame)?);
             }
             if let Some(tm) = prim.tm {
-                let style = payload.y.get(tm as usize)
+                let style = payload
+                    .y
+                    .get(tm as usize)
                     .ok_or_else(|| anyhow!("trim style ref {} out of range", tm))?;
                 styles.push(build_style(style, frame)?);
             }
@@ -161,13 +181,23 @@ fn build_geometry(shape: &Shape, frame: f64) -> Result<Geometry> {
             let path = property::eval_path(pt, frame)?;
             Ok(Geometry::Path(path))
         }
-        Shape::PolyStar { sy, pt, ps, or, ir, rt, .. } => {
+        Shape::PolyStar {
+            sy,
+            pt,
+            ps,
+            or,
+            ir,
+            rt,
+            ..
+        } => {
             let points = property::eval_scalar(pt, frame)?;
             let pos = property::eval_vec2(ps, frame)?;
             let outer = property::eval_scalar(or, frame)?;
             let inner = property::eval_scalar(ir, frame)?;
             let rot = property::eval_scalar(rt, frame)?;
-            Ok(Geometry::Path(geometry::polystar_to_path(*sy, pos, points, outer, inner, rot)))
+            Ok(Geometry::Path(geometry::polystar_to_path(
+                *sy, pos, points, outer, inner, rot,
+            )))
         }
     }
 }
@@ -179,32 +209,90 @@ fn build_style(style: &Style, frame: f64) -> Result<RenderedStyle> {
             let opacity = property::eval_scalar(o, frame)?;
             Ok(RenderedStyle::Paint(Paint::Solid { color, opacity }))
         }
-        Style::Stroke { c, o, w, lc, lj, ml } => {
+        Style::Stroke {
+            c,
+            o,
+            w,
+            lc,
+            lj,
+            ml,
+        } => {
             let color = property::eval_color(c, frame)?;
             let opacity = property::eval_scalar(o, frame)?;
             let width = property::eval_scalar(w, frame)?;
-            Ok(RenderedStyle::Stroke { color, opacity, width, linecap: *lc, linejoin: *lj, miter_limit: *ml })
+            Ok(RenderedStyle::Stroke {
+                color,
+                opacity,
+                width,
+                linecap: *lc,
+                linejoin: *lj,
+                miter_limit: *ml,
+            })
         }
         Style::TrimPath { s, e, o, m } => {
             let start = property::eval_scalar(s, frame)?;
             let end = property::eval_scalar(e, frame)?;
             let offset = property::eval_scalar(o, frame)?;
-            Ok(RenderedStyle::TrimPath { start, end, offset, mode: *m })
+            Ok(RenderedStyle::TrimPath {
+                start,
+                end,
+                offset,
+                mode: *m,
+            })
         }
         Style::GradientFill { g, o, s, e, gk, fr } => {
             let stops = gradient::resolve_stops(g)?;
             let opacity = property::eval_scalar(o, frame)?;
-            let start = match s { Some(p) => property::eval_vec2(p, frame)?, None => [0.0, 0.0] };
-            let end = match e { Some(p) => property::eval_vec2(p, frame)?, None => [0.0, 0.0] };
-            Ok(RenderedStyle::Paint(Paint::Gradient { kind: gradient_kind(*gk), rule: fill_rule(*fr), stops, start, end, opacity }))
+            let start = match s {
+                Some(p) => property::eval_vec2(p, frame)?,
+                None => [0.0, 0.0],
+            };
+            let end = match e {
+                Some(p) => property::eval_vec2(p, frame)?,
+                None => [0.0, 0.0],
+            };
+            Ok(RenderedStyle::Paint(Paint::Gradient {
+                kind: gradient_kind(*gk),
+                rule: fill_rule(*fr),
+                stops,
+                start,
+                end,
+                opacity,
+            }))
         }
-        Style::GradientStroke { g, w, o, s, e, gk, lc, lj, ml } => {
+        Style::GradientStroke {
+            g,
+            w,
+            o,
+            s,
+            e,
+            gk,
+            lc,
+            lj,
+            ml,
+        } => {
             let stops = gradient::resolve_stops(g)?;
             let opacity = property::eval_scalar(o, frame)?;
             let width = property::eval_scalar(w, frame)?;
-            let start = match s { Some(p) => property::eval_vec2(p, frame)?, None => [0.0, 0.0] };
-            let end = match e { Some(p) => property::eval_vec2(p, frame)?, None => [0.0, 0.0] };
-            Ok(RenderedStyle::GradientStroke { kind: gradient_kind(*gk), stops, start, end, opacity, width, linecap: *lc, linejoin: *lj, miter_limit: *ml })
+            let start = match s {
+                Some(p) => property::eval_vec2(p, frame)?,
+                None => [0.0, 0.0],
+            };
+            let end = match e {
+                Some(p) => property::eval_vec2(p, frame)?,
+                None => [0.0, 0.0],
+            };
+            Ok(RenderedStyle::GradientStroke {
+                kind: gradient_kind(*gk),
+                stops,
+                start,
+                end,
+                opacity,
+                width,
+                linecap: *lc,
+                linejoin: *lj,
+                miter_limit: *ml,
+            })
         }
     }
 }

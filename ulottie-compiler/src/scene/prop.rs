@@ -234,7 +234,11 @@ impl Serialize for Prop {
             Prop::Vector(v) => Quantized(v).serialize(s),
             Prop::Path(p) => p.serialize(s),
             Prop::Anim(a) => a.serialize(s),
-            Prop::Expr { id, fallback, layer } => {
+            Prop::Expr {
+                id,
+                fallback,
+                layer,
+            } => {
                 let n = 1 + fallback.is_some() as usize + layer.is_some() as usize;
                 let mut m = s.serialize_map(Some(n))?;
                 m.serialize_entry("x", id)?;
@@ -283,7 +287,10 @@ mod tests {
             o: vec![0.5, 0.0, 0.0, 0.0],
             c: false,
         });
-        assert_eq!(json(&p), r#"{"v":[0,0,1,1],"i":[0,0,-0.5,0],"o":[0.5,0,0,0]}"#);
+        assert_eq!(
+            json(&p),
+            r#"{"v":[0,0,1,1],"i":[0,0,-0.5,0],"o":[0.5,0,0,0]}"#
+        );
     }
 
     #[test]

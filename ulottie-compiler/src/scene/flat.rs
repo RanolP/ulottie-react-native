@@ -24,7 +24,7 @@
 use std::collections::HashMap;
 
 use super::prop::{Anim, AnimKind, Prop};
-use super::svg::{q, FlatPath};
+use super::svg::{FlatPath, q};
 
 /// Tag occupies the low 3 bits of a property's first word; the shifts and
 /// flags ride above it.
@@ -108,16 +108,13 @@ pub mod head {
     pub const EASINGS: usize = 5;
     pub const TIMELINES: usize = 6;
     pub const GATES: usize = 7;
-    pub const SLOTS: usize = 8;
-    pub const BIND_GATE: usize = 9;
-    pub const SCOPES: usize = 10;
-    pub const BINDINGS: usize = 11;
-    pub const LAYERS: usize = 12;
-    pub const ASSETS: usize = 13;
-    pub const USES: usize = 14;
-    pub const REMAPS: usize = 15;
-    pub const TEMPLATES: usize = 16;
-    pub const LEN: usize = 17;
+    /// `[count, batchOffset × count]` — the document's bindings, grouped by op.
+    pub const PROGRAM: usize = 8;
+    pub const LAYERS: usize = 9;
+    pub const ASSETS: usize = 10;
+    pub const USES: usize = 11;
+    pub const REMAPS: usize = 12;
+    pub const LEN: usize = 13;
 }
 
 /// Presence bits for a layer record, in its first word.
@@ -261,7 +258,11 @@ impl Flat {
             }
             Prop::Path(fp) => self.encode_path(fp),
             Prop::Anim(a) => self.encode_anim(a),
-            Prop::Expr { id, fallback, layer } => {
+            Prop::Expr {
+                id,
+                fallback,
+                layer,
+            } => {
                 // The fallback is a property in its own right, so it is pooled
                 // like any other and referenced by offset.
                 let fb = fallback.as_deref().map_or(0, |f| self.prop(f));
@@ -283,10 +284,7 @@ impl Flat {
     fn encode_path(&mut self, fp: &FlatPath) -> Vec<i32> {
         let curved = fp.i.iter().chain(fp.o.iter()).any(|x| *x != 0.0);
         let s = shift_for(fp.v.iter().chain(&fp.i).chain(&fp.o).copied());
-        let head = tag::PATH
-            | (s as i32) << 3
-            | (fp.c as i32) << 5
-            | (curved as i32) << 6;
+        let head = tag::PATH | (s as i32) << 3 | (fp.c as i32) << 5 | (curved as i32) << 6;
         let mut out = vec![head, (fp.v.len() / 2) as i32];
         out.extend(fp.v.iter().map(|x| self.scaled(*x, s)));
         if curved {
@@ -315,12 +313,18 @@ impl Flat {
         // Path values live as pooled path properties, referenced by offset, so
         // a shape that recurs across keyframes is stored once.
         let v_offs: Vec<i32> = if path_kind {
-            a.paths.iter().map(|p| self.prop(&Prop::Path(p.clone())) as i32).collect()
+            a.paths
+                .iter()
+                .map(|p| self.prop(&Prop::Path(p.clone())) as i32)
+                .collect()
         } else {
             Vec::new()
         };
         let e_offs: Vec<i32> = match &a.end_paths {
-            Some(ps) => ps.iter().map(|p| self.prop(&Prop::Path(p.clone())) as i32).collect(),
+            Some(ps) => ps
+                .iter()
+                .map(|p| self.prop(&Prop::Path(p.clone())) as i32)
+                .collect(),
             None => Vec::new(),
         };
 
@@ -454,16 +458,6 @@ pub fn flatten(data: &super::SceneData) -> anyhow::Result<Flat> {
     let off = f.gates_section(&data.gates);
     f.set_head(head::GATES, off);
 
-    if data.slots.iter().any(|s| *s != 0) {
-        let off = f.deltas(&data.slots);
-        f.set_head(head::SLOTS, off);
-    }
-    if data.bind_gate.iter().any(|g| *g != 0) {
-        let col: Vec<i32> = data.bind_gate.iter().map(|g| *g as i32).collect();
-        let off = f.counted(col.len(), &col);
-        f.set_head(head::BIND_GATE, off);
-    }
-
     // Layer names are interned before any record is written: a record stores
     // a pool index, and the planner's own name table is a different numbering.
     // Storing the planner's index made `thisComp.layer('name')` look up the
@@ -472,22 +466,21 @@ pub fn flatten(data: &super::SceneData) -> anyhow::Result<Flat> {
     // error in the console.
     let names: Vec<u32> = data.names.iter().map(|n| f.intern(n)).collect();
 
-
-    let off = f.bindings_section(&data.b);
-    f.set_head(head::BINDINGS, off);
+    let off = f.program_section(&data.b, &data.slots, &data.bind_gate);
+    f.set_head(head::PROGRAM, off);
 
     let off = f.records_section(&data.layers, &names);
     f.set_head(head::LAYERS, off);
 
     // Assets are planned once and replayed, so each one carries its own
-    // bindings, slots, timelines and records as independent sections.
-    let mut assets = Vec::with_capacity(data.assets.len() * 5);
+    // program, timelines and records as independent sections. Their bindings
+    // are never gated — a precomp body is replayed whole or not at all.
+    let mut assets = Vec::with_capacity(data.assets.len() * 4);
     for a in &data.assets {
-        let b = f.bindings_section(&a.bindings);
-        let s = if a.slots.iter().any(|x| *x != 0) { f.deltas(&a.slots) } else { 0 };
+        let p = f.program_section(&a.bindings, &a.slots, &[]);
         let t = f.timelines_section(&a.timelines);
         let y = f.records_section(&a.records, &names);
-        assets.extend([a.template as i32, b as i32, s as i32, t as i32, y as i32]);
+        assets.extend([a.template as i32, p as i32, t as i32, y as i32]);
     }
     let off = f.counted(data.assets.len(), &assets);
     f.set_head(head::ASSETS, off);
@@ -495,9 +488,7 @@ pub fn flatten(data: &super::SceneData) -> anyhow::Result<Flat> {
     let uses: Vec<i32> = data
         .uses
         .iter()
-        .flat_map(|u| {
-            [u.asset, u.el_base, u.rec_base, u.slot_base, u.parent_slot, u.scope].map(|v| v as i32)
-        })
+        .flat_map(|u| [u.asset, u.el_base, u.slot_base, u.parent_slot].map(|v| v as i32))
         .collect();
     let off = f.counted(data.uses.len(), &uses);
     f.set_head(head::USES, off);
@@ -519,21 +510,6 @@ pub fn flatten(data: &super::SceneData) -> anyhow::Result<Flat> {
 }
 
 impl Flat {
-    /// An ascending column as first differences, which is what makes an
-    /// instanced asset's indices replayable at any base.
-    fn deltas(&mut self, col: &[u32]) -> u32 {
-        let mut prev = 0i64;
-        let rows: Vec<i32> = col
-            .iter()
-            .map(|v| {
-                let d = *v as i64 - prev;
-                prev = *v as i64;
-                d as i32
-            })
-            .collect();
-        self.counted(rows.len(), &rows)
-    }
-
     /// `[count, shift, (ip, op) × count]` — layer visibility windows, which
     /// are whole frames even more often than clocks are.
     fn gates_section(&mut self, rows: &[[f64; 2]]) -> u32 {
@@ -583,37 +559,103 @@ impl Flat {
         at
     }
 
-    /// `[count, (len, op, elDelta, …args) × count]`.
+    /// `[count, batchOffset × count]` — one batch per op, ascending by op code.
     ///
-    /// The element index and the layer-record index ride as first differences
-    /// for the same reason they did on the old wire: consecutive rows differ by
-    /// a small number where the absolute values are large and all distinct.
-    fn bindings_section(&mut self, list: &[super::Binding]) -> u32 {
-        let mut rows = Vec::new();
-        let (mut el, mut rec) = (0i64, 0i64);
-        for b in list {
-            let e = b.el_index as i64;
-            let mut args = Vec::with_capacity(b.args.len());
-            for (i, a) in b.args.iter().enumerate() {
-                // `LAYER_TX`/`LAYER_OP` take a record index first; everything
-                // else reads its arguments as values.
-                if i == 0 && super::arg0_is_record(b.op) {
-                    if let super::Arg::Num(n) = a {
-                        let v = *n as i64;
-                        args.push((v - rec) as i32);
-                        rec = v;
-                        continue;
-                    }
-                }
-                args.push(self.arg(a));
-            }
-            rows.push(args.len() as i32);
-            rows.push(b.op as i32);
-            rows.push((e - el) as i32);
-            rows.extend(args);
-            el = e;
+    /// Grouping is the whole point. A binding used to be a row carrying its own
+    /// length and op code, which the runtime read back and dispatched on; now
+    /// the op is implied by which batch a binding is in, and the module names
+    /// the op function directly. Two integers per binding leave the wire, and
+    /// the binder table leaves the module.
+    fn program_section(&mut self, list: &[super::Binding], slots: &[u32], gates: &[u32]) -> u32 {
+        if list.is_empty() {
+            return 0;
         }
-        self.counted(list.len(), &rows)
+        let ops = super::program_ops(list);
+        let mut offs = Vec::with_capacity(ops.len());
+        for op in &ops {
+            let mut rows: Vec<(&super::Binding, u32, u32)> = list
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| b.op == *op)
+                .map(|(i, b)| {
+                    (
+                        b,
+                        gates.get(i).copied().unwrap_or(0),
+                        slots.get(i).copied().unwrap_or(0),
+                    )
+                })
+                .collect();
+            // Document order within a batch, so the element column ascends and
+            // its first differences stay small and non-negative. The planner's
+            // own order is nearly this already — only `<defs>`, which is
+            // emitted last, arrives out of turn.
+            rows.sort_by_key(|(b, _, _)| b.el_index);
+            let off = self.batch_section(*op, &rows);
+            offs.push(off as i32);
+        }
+        self.counted(offs.len(), &offs)
+    }
+
+    /// One op's bindings, transposed.
+    ///
+    /// ```text
+    /// [count, flags,
+    ///  el…      count, first differences
+    ///  gate…    count, when flags & 1
+    ///  slot…    count, when flags & 2
+    ///  arg0…    count
+    ///  …
+    ///  argK…    count]
+    /// ```
+    ///
+    /// Transposition pays here where it did not for the old row-major table:
+    /// the rows are homogeneous now, so a column is one kind of number all the
+    /// way down — offsets into the property pool, which repeat, next to element
+    /// deltas, which are tiny. Interleaved, every row was unique.
+    fn batch_section(&mut self, op: u8, rows: &[(&super::Binding, u32, u32)]) -> u32 {
+        let n = rows.len();
+        let k = rows[0].0.args.len();
+        debug_assert!(
+            rows.iter().all(|(b, _, _)| b.args.len() == k),
+            "op {op} has a variable argument count; a batch column needs a fixed one"
+        );
+
+        let gated = rows.iter().any(|(_, g, _)| *g != 0);
+        let clocked = rows.iter().any(|(_, _, s)| *s != 0);
+
+        let mut body: Vec<i32> = Vec::with_capacity(2 + n * (3 + k));
+        body.push(n as i32);
+        body.push(gated as i32 | (clocked as i32) << 1);
+
+        diffs(&mut body, rows.iter().map(|(b, _, _)| b.el_index as i64));
+        if gated {
+            body.extend(rows.iter().map(|(_, g, _)| *g as i32));
+        }
+        if clocked {
+            body.extend(rows.iter().map(|(_, _, s)| *s as i32));
+        }
+
+        for j in 0..k {
+            // `LAYER_TX`/`LAYER_OP` take a record index first, and that column
+            // ascends across an inlined precomp's copies — the one shape first
+            // differences suit. Everything else is a value, and values repeat,
+            // which is worth more to the compressor than small magnitudes are.
+            if j == 0 && super::arg0_is_record(op) {
+                diffs(
+                    &mut body,
+                    rows.iter().map(|(b, _, _)| match b.args[0] {
+                        super::Arg::Num(x) => x as i64,
+                        _ => 0,
+                    }),
+                );
+                continue;
+            }
+            for (b, _, _) in rows {
+                let v = self.arg(&b.args[j]);
+                body.push(v);
+            }
+        }
+        self.section(&body)
     }
 
     /// One binding argument as a single integer.
@@ -719,12 +761,9 @@ impl Flat {
         let at = self.ints.len() as u32;
         let base = at + 1 + list.len() as u32;
         self.ints.push(list.len() as i32);
-        let mut prev = 0i64;
-        for i in &index {
-            let abs = base as i64 + *i as i64;
-            self.ints.push((abs - prev) as i32);
-            prev = abs;
-        }
+        let mut col = Vec::with_capacity(index.len());
+        diffs(&mut col, index.iter().map(|i| base as i64 + *i as i64));
+        self.ints.extend_from_slice(&col);
         self.ints.extend_from_slice(&rows);
         at
     }
@@ -760,6 +799,19 @@ impl Flat {
             }
         }
         self.counted(list.len(), &rows)
+    }
+}
+
+/// Append a column as first differences.
+///
+/// The format's one shared trick, and the only shape it suits: a column that
+/// ascends and rarely repeats. Everything that *does* repeat is left absolute,
+/// because repetition is worth more to the compressor than small magnitudes.
+fn diffs(out: &mut Vec<i32>, vals: impl IntoIterator<Item = i64>) {
+    let mut prev = 0i64;
+    for v in vals {
+        out.push((v - prev) as i32);
+        prev = v;
     }
 }
 
@@ -824,15 +876,30 @@ mod tests {
     #[test]
     fn vlq_round_trips_the_interesting_magnitudes() {
         let vals: Vec<i32> = vec![
-            0, 1, -1, 15, 16, -16, 255, -255, 1000, -1000, 65535, -65536,
-            i32::MAX, i32::MIN + 1, i32::MIN,
+            0,
+            1,
+            -1,
+            15,
+            16,
+            -16,
+            255,
+            -255,
+            1000,
+            -1000,
+            65535,
+            -65536,
+            i32::MAX,
+            i32::MIN + 1,
+            i32::MIN,
         ];
         assert_eq!(decode_ints(&encode_ints(&vals)), vals);
     }
 
     #[test]
     fn vlq_round_trips_a_long_sweep() {
-        let vals: Vec<i32> = (0..5000).map(|i| (i * 2654435761u64 as i64 % 200003) as i32 - 100000).collect();
+        let vals: Vec<i32> = (0..5000)
+            .map(|i| (i * 2654435761u64 as i64 % 200003) as i32 - 100000)
+            .collect();
         assert_eq!(decode_ints(&encode_ints(&vals)), vals);
     }
 

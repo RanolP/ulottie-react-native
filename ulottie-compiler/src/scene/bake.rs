@@ -39,7 +39,7 @@ use std::collections::HashMap;
 
 use super::prop::{Anim, AnimKind, Easing};
 use super::svg::FlatPath;
-use super::{Arg, Binding, Planner, Prop, geo, op, svg};
+use super::{Arg, Binding, Planner, Prop, op, svg};
 
 /// Extra attributes per element, keyed by arena id. Applied while serializing
 /// the document, so the module's own copy of the markup stays lean.
@@ -145,9 +145,10 @@ impl Planner<'_> {
                 ));
             }
 
-            op::OPACITY => {
-                out.push(("opacity".into(), svg::n(self.scalar(prop(0), f, 100.0) / 100.0)))
-            }
+            op::OPACITY => out.push((
+                "opacity".into(),
+                svg::n(self.scalar(prop(0), f, 100.0) / 100.0),
+            )),
 
             // The runtime clears the inline display when the layer is on, so
             // an attribute is only written when it is off.
@@ -157,7 +158,9 @@ impl Planner<'_> {
                 }
             }
 
-            op::SHAPE => self.bake_shape(b, f, out),
+            op::SHAPE | op::SHAPE_RECT | op::SHAPE_ELLIPSE | op::SHAPE_STAR => {
+                self.bake_shape(b, f, out)
+            }
 
             op::RECT => {
                 let s = self.vec2(prop(0), f, [0.0, 0.0]);
@@ -227,7 +230,9 @@ impl Planner<'_> {
             // the same keyframes. A missing field was elided as equal to its
             // default — the defaults here match `flat::RECORD_DEFAULTS`.
             op::LAYER_TX => {
-                let Some(rec) = self.layers.get(num(0) as usize) else { return };
+                let Some(rec) = self.layers.get(num(0) as usize) else {
+                    return;
+                };
                 out.push(matrix_attr(
                     self.vec2(rec.p.as_ref(), f, [0.0, 0.0]),
                     self.vec2(rec.a.as_ref(), f, [0.0, 0.0]),
@@ -237,7 +242,9 @@ impl Planner<'_> {
             }
 
             op::LAYER_OP => {
-                let Some(rec) = self.layers.get(num(0) as usize) else { return };
+                let Some(rec) = self.layers.get(num(0) as usize) else {
+                    return;
+                };
                 out.push((
                     "opacity".into(),
                     svg::n(self.scalar(rec.o.as_ref(), f, 100.0) / 100.0),
@@ -250,7 +257,9 @@ impl Planner<'_> {
 
     /// Geometry, optionally trimmed, as a `d`. Mirrors `bShape`.
     fn bake_shape(&self, b: &Binding, f: f64, out: &mut Vec<(String, String)>) {
-        let Some(Arg::List(g)) = b.args.first() else { return };
+        // The generator is the op; the arguments are the descriptor, minus the
+        // tag that used to lead it.
+        let g = &b.args;
         let at = |i: usize| match g.get(i) {
             Some(Arg::Prop(p)) => Some(self.value_at(p, f)),
             _ => None,
@@ -258,38 +267,38 @@ impl Planner<'_> {
         let v2 = |i: usize| match at(i) {
             Some(p) => {
                 let v = p.as_vec().map(|v| v.to_vec()).unwrap_or_default();
-                [v.first().copied().unwrap_or(0.0), v.get(1).copied().unwrap_or(0.0)]
+                [
+                    v.first().copied().unwrap_or(0.0),
+                    v.get(1).copied().unwrap_or(0.0),
+                ]
             }
             None => [0.0, 0.0],
         };
         let n1 = |i: usize| at(i).and_then(|p| p.as_scalar()).unwrap_or(0.0);
-        let tag = match g.first() {
-            Some(Arg::Num(n)) => *n as u8,
-            _ => return,
-        };
 
-        let path = match tag {
-            geo::PATH => match at(1) {
+        let path = match b.op {
+            op::SHAPE => match at(0) {
                 Some(Prop::Path(p)) => p,
                 _ => return,
             },
-            geo::RECT => flat(crate::eval::geometry::rect_to_path(v2(2), v2(1), n1(3))),
-            geo::ELLIPSE => flat(crate::eval::geometry::ellipse_to_path(v2(2), v2(1))),
-            geo::POLYSTAR => flat(crate::eval::geometry::polystar_to_path(
-                match g.get(1) {
-                    Some(Arg::Num(n)) => *n as u8,
+            op::SHAPE_RECT => flat(crate::eval::geometry::rect_to_path(v2(1), v2(0), n1(2))),
+            op::SHAPE_ELLIPSE => flat(crate::eval::geometry::ellipse_to_path(v2(1), v2(0))),
+            op::SHAPE_STAR => flat(crate::eval::geometry::polystar_to_path(
+                match g.first() {
+                    Some(Arg::Tag(t)) => *t as u8,
                     _ => 1,
                 },
-                v2(3),
-                n1(2),
+                v2(2),
+                n1(1),
+                n1(3),
                 n1(4),
                 n1(5),
-                n1(6),
             )),
             _ => return,
         };
 
-        let Some(Arg::List(t)) = b.args.get(1) else {
+        // The trim triple is always the last argument, and `Null` when absent.
+        let Some(Arg::List(t)) = b.args.last() else {
             out.push(("d".into(), path.to_d()));
             return;
         };
@@ -308,7 +317,13 @@ impl Planner<'_> {
             crate::eval::trim::Trimmed::Empty => out.push(hidden()),
             crate::eval::trim::Trimmed::Path(p) => out.push((
                 "d".into(),
-                FlatPath { v: p.v, i: p.i, o: p.o, c: p.c }.to_d(),
+                FlatPath {
+                    v: p.v,
+                    i: p.i,
+                    o: p.o,
+                    c: p.c,
+                }
+                .to_d(),
             )),
         }
     }
@@ -381,7 +396,10 @@ impl Planner<'_> {
         if span == 0.0 {
             return at(i + 1);
         }
-        if a.hold.as_ref().is_some_and(|h| h.get(i).copied().unwrap_or(0) != 0) {
+        if a.hold
+            .as_ref()
+            .is_some_and(|h| h.get(i).copied().unwrap_or(0) != 0)
+        {
             return at(i);
         }
 
@@ -427,7 +445,9 @@ impl Planner<'_> {
         match (start, end) {
             (Prop::Scalar(x), Prop::Scalar(y)) => Prop::Scalar(x + (y - x) * u),
             (Prop::Vector(x), Prop::Vector(y)) => Prop::Vector(
-                (0..x.len().min(y.len())).map(|k| x[k] + (y[k] - x[k]) * u).collect(),
+                (0..x.len().min(y.len()))
+                    .map(|k| x[k] + (y[k] - x[k]) * u)
+                    .collect(),
             ),
             (Prop::Path(x), Prop::Path(y)) => Prop::Path(lerp_path(&x, &y, u)),
             (x, _) => x,
@@ -442,7 +462,11 @@ fn key_value(a: &Anim, v: &[f64], paths: &[FlatPath], i: usize) -> Prop {
         AnimKind::Scalar => Prop::Scalar(v.get(i).copied().unwrap_or(0.0)),
         AnimKind::Vector => {
             let base = i * a.dim;
-            Prop::Vector((0..a.dim).map(|k| v.get(base + k).copied().unwrap_or(0.0)).collect())
+            Prop::Vector(
+                (0..a.dim)
+                    .map(|k| v.get(base + k).copied().unwrap_or(0.0))
+                    .collect(),
+            )
         }
     }
 }
@@ -521,7 +545,10 @@ fn lerp_path(a: &FlatPath, b: &FlatPath, u: f64) -> FlatPath {
     let mix = |x: &[f64], y: &[f64]| -> Vec<f64> {
         (0..a.v.len())
             .map(|k| {
-                let (p, q) = (x.get(k).copied().unwrap_or(0.0), y.get(k).copied().unwrap_or(0.0));
+                let (p, q) = (
+                    x.get(k).copied().unwrap_or(0.0),
+                    y.get(k).copied().unwrap_or(0.0),
+                );
                 p + (q - p) * u
             })
             .collect()
@@ -576,7 +603,11 @@ fn spatial(a: &[f64], b: &[f64], to: &[f64], ti: &[f64], u: f64) -> Vec<f64> {
         }
     }
     let span = cum[hi] - cum[lo];
-    let frac = if span > 0.0 { (target - cum[lo]) / span } else { 0.0 };
+    let frac = if span > 0.0 {
+        (target - cum[lo]) / span
+    } else {
+        0.0
+    };
     (0..d)
         .map(|j| {
             let x = pts[lo * d + j];

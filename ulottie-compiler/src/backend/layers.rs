@@ -53,13 +53,55 @@ pub enum Table {
     Asset(u32),
 }
 
+/// What `thisProperty` is, for a property carrying a body.
+///
+/// The runtime picks one of three shapes from the expression's value source
+/// (`expr::thisPropertyFor`), and they do not offer the same accessors: a path
+/// property has the geometry ones and *not* `key`/`nearestKey`/`valueAtTime`/
+/// `velocityAtTime`/`loopOut`. Which one it is has never been a run-time
+/// question — it follows from the fallback the planner already resolved.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Surface {
+    /// A keyframed value source: the key / velocity / loop API, and a real
+    /// `numKeys`.
+    Keyed,
+    /// A path value source: the geometry accessors, and none of the key ones.
+    Path,
+    /// Anything else — a static source, a keyframed *path*, or none at all.
+    /// The key API is stubbed, so it answers rather than being absent.
+    Stub,
+}
+
+impl Surface {
+    /// Which shape the runtime will build for this value source.
+    ///
+    /// Mirrors `resolve` in `runtime/kf.js`: only a `T_PATH` property is handed
+    /// a `pathv`, and only a non-path `Anim` is handed a `kf`, so a keyframed
+    /// path lands on the stub.
+    fn of(fallback: Option<&Prop>) -> Self {
+        match fallback {
+            Some(Prop::Path(_)) => Surface::Path,
+            Some(Prop::Anim(a)) if a.kind != crate::scene::prop::AnimKind::Path => Surface::Keyed,
+            _ => Surface::Stub,
+        }
+    }
+
+    /// Whether `key`, `nearestKey`, `valueAtTime`, `velocityAtTime` and
+    /// `loopOut` exist on it.
+    pub fn has_keys(self) -> bool {
+        !matches!(self, Surface::Path)
+    }
+}
+
 /// One property carrying an expression: which table it is addressed against,
-/// which record owns it, and which composition that record sits in.
+/// which record owns it, which composition that record sits in, and what
+/// `thisProperty` will be there.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Site {
     pub table: Table,
     pub owner: u32,
     pub scope: u32,
+    pub surface: Surface,
 }
 
 /// Every expression site in the scene, grouped by expression id.
@@ -105,11 +147,12 @@ pub fn sites(data: &SceneData) -> BTreeMap<u32, Vec<Option<Site>>> {
     let mut out: BTreeMap<u32, Vec<Option<Site>>> = BTreeMap::new();
 
     let mut note = |p: &Prop, table: Table, scopes: &[u32]| {
-        walk_prop(p, &mut |id, layer| {
+        walk_prop(p, &mut |id, layer, surface| {
             let site = layer.map(|owner| Site {
                 table,
                 owner,
                 scope: scopes.get(owner as usize).copied().unwrap_or(0),
+                surface,
             });
             out.entry(id).or_default().push(site);
         });
@@ -159,7 +202,6 @@ pub fn sites(data: &SceneData) -> BTreeMap<u32, Vec<Option<Site>>> {
                 note(p, table, &asset.scopes);
             }
         }
-
     }
     out
 }
@@ -167,11 +209,23 @@ pub fn sites(data: &SceneData) -> BTreeMap<u32, Vec<Option<Site>>> {
 /// Every property hanging off a layer record, transforms and effect parameters
 /// alike. Shared with the site walk so the two cannot drift.
 fn record_props(r: &crate::scene::LayerRecord) -> impl Iterator<Item = &Prop> {
-    let crate::scene::LayerRecord { p, a, sc, r: rot, o, h, ef, i: _, n: _, pr: _, offs: _ } = r;
-    [p, a, sc, rot, o, h]
-        .into_iter()
-        .flatten()
-        .chain(ef.iter().flat_map(|e| e.ef.iter().filter_map(|p| p.p.as_ref())))
+    let crate::scene::LayerRecord {
+        p,
+        a,
+        sc,
+        r: rot,
+        o,
+        h,
+        ef,
+        i: _,
+        n: _,
+        pr: _,
+        offs: _,
+    } = r;
+    [p, a, sc, rot, o, h].into_iter().flatten().chain(
+        ef.iter()
+            .flat_map(|e| e.ef.iter().filter_map(|p| p.p.as_ref())),
+    )
 }
 
 fn walk_arg(a: &Arg, f: &mut impl FnMut(&Prop)) {
@@ -188,9 +242,14 @@ fn walk_arg(a: &Arg, f: &mut impl FnMut(&Prop)) {
 
 /// Every `Prop::Expr` reachable from `p`, fallbacks included — a fallback is a
 /// property in its own right and can carry an expression of its own.
-fn walk_prop(p: &Prop, f: &mut impl FnMut(u32, Option<u32>)) {
-    if let Prop::Expr { id, fallback, layer } = p {
-        f(*id, *layer);
+fn walk_prop(p: &Prop, f: &mut impl FnMut(u32, Option<u32>, Surface)) {
+    if let Prop::Expr {
+        id,
+        fallback,
+        layer,
+    } = p
+    {
+        f(*id, *layer, Surface::of(fallback.as_deref()));
         if let Some(fb) = fallback {
             walk_prop(fb, f);
         }
@@ -213,7 +272,10 @@ pub struct Index {
 
 impl Index {
     pub fn build(data: &SceneData) -> Index {
-        let mut ix = Index { by_name: BTreeMap::new(), by_ind: BTreeMap::new() };
+        let mut ix = Index {
+            by_name: BTreeMap::new(),
+            by_ind: BTreeMap::new(),
+        };
         ix.add(Table::Doc, &data.layers, &data.scopes, &data.names);
         for (k, a) in data.assets.iter().enumerate() {
             ix.add(Table::Asset(k as u32), &a.records, &a.scopes, &data.names);
@@ -288,11 +350,13 @@ mod rewrite_tests {
         // There is no fallback: a reference the pass cannot resolve fails the
         // compile. So this is the gate that says the pass still covers the
         // corpus — run with ULOTTIE_WHY=1 to see which construct defeated it.
-        for (name, inst) in
-            [("lights", false), ("starfish", false), ("ripple", false), ("ripple", true)]
-        {
-            plans(name, inst)
-                .unwrap_or_else(|e| panic!("{name} instanced={inst}: {e}"));
+        for (name, inst) in [
+            ("lights", false),
+            ("starfish", false),
+            ("ripple", false),
+            ("ripple", true),
+        ] {
+            plans(name, inst).unwrap_or_else(|e| panic!("{name} instanced={inst}: {e}"));
         }
     }
 
@@ -322,16 +386,38 @@ mod rewrite_tests {
         // flattened twenty-three times and one body serves all of them, so no
         // absolute literal is valid and only the owner-relative offset is.
         let inlined = plans("ripple", false).unwrap();
-        assert!(flat(&inlined[0]).contains("lyRel(thisLayer, 3)"), "{}", inlined[0].body);
-        assert!(flat(&inlined[2]).contains("lyRel(thisLayer, 2)"), "{}", inlined[2].body);
-        assert_eq!(flat(&inlined[3]), "var $bm_rt; $bm_rt = lyPos(lyRel(thisLayer, -2), frame);");
-        assert!(flat(&inlined[4]).contains("lyEffect(lyRel(thisLayer, -3),"), "{}", inlined[4].body);
+        assert!(
+            flat(&inlined[0]).contains("lyRel(thisLayer, 3)"),
+            "{}",
+            inlined[0].body
+        );
+        assert!(
+            flat(&inlined[2]).contains("lyRel(thisLayer, 2)"),
+            "{}",
+            inlined[2].body
+        );
+        assert_eq!(
+            flat(&inlined[3]),
+            "var $bm_rt; $bm_rt = lyPos(lyRel(thisLayer, -2), frame);"
+        );
+        assert!(
+            flat(&inlined[4]).contains("lyEffect(lyRel(thisLayer, -3),"),
+            "{}",
+            inlined[4].body
+        );
 
         // Instanced, the asset is planned once with indices local to it, so the
         // absolute slot is the same for all forty-eight instantiations.
         let instanced = plans("ripple", true).unwrap();
-        assert!(flat(&instanced[0]).contains("lyAt(thisLayer, 3)"), "{}", instanced[0].body);
-        assert_eq!(flat(&instanced[3]), "var $bm_rt; $bm_rt = lyPos(lyAt(thisLayer, 0), frame);");
+        assert!(
+            flat(&instanced[0]).contains("lyAt(thisLayer, 3)"),
+            "{}",
+            instanced[0].body
+        );
+        assert_eq!(
+            flat(&instanced[3]),
+            "var $bm_rt; $bm_rt = lyPos(lyAt(thisLayer, 0), frame);"
+        );
     }
 
     #[test]
@@ -347,11 +433,17 @@ mod rewrite_tests {
             "{}",
             lights.body
         );
-        assert!(flat(lights).contains("getNullLayers.push(nullLayerNames[i]);"), "{}", lights.body);
+        assert!(
+            flat(lights).contains("getNullLayers.push(nullLayerNames[i]);"),
+            "{}",
+            lights.body
+        );
 
         let starfish = &plans("starfish", false).unwrap()[2];
-        let want: Vec<String> =
-            (5..=14).rev().map(|i| format!("lyAt(thisLayer, {i})")).collect();
+        let want: Vec<String> = (5..=14)
+            .rev()
+            .map(|i| format!("lyAt(thisLayer, {i})"))
+            .collect();
         assert!(
             flat(starfish).contains(&format!("var nullLayerNames = [{}];", want.join(", "))),
             "{}",
@@ -366,7 +458,10 @@ mod rewrite_tests {
         // `getNullLayers[i]` off a layer. Same spelling, different objects.
         let p = &plans("lights", false).unwrap()[3];
         let body = flat(p);
-        assert!(body.contains("var origPoints = origPath.points();"), "{body}");
+        assert!(
+            body.contains("var origPoints = origPath.points();"),
+            "{body}"
+        );
         assert!(body.contains("origPath.inTangents()"), "{body}");
         assert!(body.contains("origPath.isClosed()"), "{body}");
         // …while the layer half did move.
@@ -408,9 +503,15 @@ mod rewrite_tests {
         // corpus, and without it the shipped module would still scan an effect
         // list by string once per frame, per binding.
         let inlined = &plans("ripple", false).unwrap()[4];
-        assert_eq!(flat(inlined), "var $bm_rt; $bm_rt = lyEffect(lyRel(thisLayer, -3), 0, 0, frame);");
+        assert_eq!(
+            flat(inlined),
+            "var $bm_rt; $bm_rt = lyEffect(lyRel(thisLayer, -3), 0, 0, frame);"
+        );
         let instanced = &plans("ripple", true).unwrap()[4];
-        assert_eq!(flat(instanced), "var $bm_rt; $bm_rt = lyEffect(lyAt(thisLayer, 0), 0, 0, frame);");
+        assert_eq!(
+            flat(instanced),
+            "var $bm_rt; $bm_rt = lyEffect(lyAt(thisLayer, 0), 0, 0, frame);"
+        );
     }
 
     #[test]
@@ -462,7 +563,10 @@ mod index_tests {
         let ix = Index::build(&s.data);
         // `wire`'s three `ADBE Layer Control-0001` parameters hold comp indices
         // 4, 3 and 2, which are records 3, 2 and 1.
-        let got: Vec<_> = [4, 3, 2].iter().map(|i| ix.by_index(Table::Doc, 0, *i)).collect();
+        let got: Vec<_> = [4, 3, 2]
+            .iter()
+            .map(|i| ix.by_index(Table::Doc, 0, *i))
+            .collect();
         assert_eq!(got, [Some(3), Some(2), Some(1)]);
     }
 
@@ -516,28 +620,50 @@ mod index_tests {
 
     #[test]
     fn agreement_prefers_an_absolute_slot_and_falls_back_to_a_delta() {
-        let site = |owner| Site { table: Table::Doc, owner, scope: 0 };
+        let site = |owner| Site {
+            table: Table::Doc,
+            owner,
+            scope: 0,
+            surface: Surface::Stub,
+        };
         let rec = |o: u32| (site(o), Target::Rec(8));
         // lights: five owners, one target.
         let lights: Vec<_> = [0, 4, 5, 6, 7].iter().map(|o| rec(*o)).collect();
         assert_eq!(agree(&lights), Some(Handle::At(8)));
         // ripple inlined: the target moves with the owner, so only the offset
         // is shared. No absolute literal is valid here at all.
-        let ripple: Vec<_> =
-            [2u32, 7, 12].iter().map(|o| (site(*o), Target::Rec(o + 3))).collect();
+        let ripple: Vec<_> = [2u32, 7, 12]
+            .iter()
+            .map(|o| (site(*o), Target::Rec(o + 3)))
+            .collect();
         assert_eq!(agree(&ripple), Some(Handle::Rel(3)));
         // Neither: refuse rather than pick.
-        assert_eq!(agree(&[(site(0), Target::Rec(8)), (site(1), Target::Rec(20))]), None);
+        assert_eq!(
+            agree(&[(site(0), Target::Rec(8)), (site(1), Target::Rec(20))]),
+            None
+        );
         // Found here, absent there, is not an agreement either — one use would
         // take the guarded branch and the other would not.
-        assert_eq!(agree(&[(site(0), Target::Rec(8)), (site(4), Target::NoLayer)]), None);
+        assert_eq!(
+            agree(&[(site(0), Target::Rec(8)), (site(4), Target::NoLayer)]),
+            None
+        );
         // Nor is a reference every use agrees resolves to *nothing*. There is
         // no spelling for it: the free functions are null-safe, so neither
         // `null` nor `0` would throw the way the proxy did, and the body would
         // compute on a fabricated value instead of falling back. See `Handle`.
-        assert_eq!(agree(&[(site(0), Target::NoLayer), (site(4), Target::NoLayer)]), None);
-        assert_eq!(agree(&[(site(0), Target::NoEffect), (site(4), Target::NoLayer)]), None);
-        assert_eq!(agree(&[(site(0), Target::NoEffect), (site(4), Target::NoEffect)]), None);
+        assert_eq!(
+            agree(&[(site(0), Target::NoLayer), (site(4), Target::NoLayer)]),
+            None
+        );
+        assert_eq!(
+            agree(&[(site(0), Target::NoEffect), (site(4), Target::NoLayer)]),
+            None
+        );
+        assert_eq!(
+            agree(&[(site(0), Target::NoEffect), (site(4), Target::NoEffect)]),
+            None
+        );
     }
 }
 
@@ -635,17 +761,20 @@ pub fn agree(per_use: &[(Site, Target)]) -> Option<Handle> {
     }
     let delta = |(s, t): &(Site, Target)| Some(slot(*t)? as i64 - s.owner as i64);
     let d = delta(&first)?;
-    per_use.iter().all(|u| delta(u) == Some(d)).then_some(Handle::Rel(d))
+    per_use
+        .iter()
+        .all(|u| delta(u) == Some(d))
+        .then_some(Handle::Rel(d))
 }
 
 // ---------------------------------------------------------------------------
 // Rewriting a body
 // ---------------------------------------------------------------------------
 
+use anyhow::Result;
 use oxc_allocator::Allocator;
 use oxc_ast::ast;
 use oxc_parser::Parser;
-use anyhow::Result;
 use oxc_span::{GetSpan, SourceType};
 
 /// What the backend needs to emit one body.
@@ -656,6 +785,12 @@ pub struct Plan {
     pub helpers: BTreeSet<&'static str>,
     /// `thisComp.frameDuration` was rewritten to a bare name.
     pub frame_duration: bool,
+    /// What `thisProperty` is, when every property using this body agrees.
+    ///
+    /// `None` when they do not — bodies are deduplicated across every property
+    /// they were applied to, so one preamble has to be right for all of them.
+    /// The same rule as [`agree`]: fold only what every use site says.
+    pub surface: Option<Surface>,
 }
 
 /// The expression table for one scene: the source, plus what emitting it costs.
@@ -734,11 +869,15 @@ pub fn table(data: &SceneData, exprs: &[ir::Expression]) -> Result<Exprs> {
     }
     src.push_str("];\n");
 
-    Ok(Exprs { src, helpers, bodies })
+    Ok(Exprs {
+        src,
+        helpers,
+        bodies,
+    })
 }
 
 fn why(id: u32, reason: &str) {
-    if std::env::var("ULOTTIE_WHY").is_ok() {
+    if super::why() {
         eprintln!("layers: E[{id}] falls back — {reason}");
     }
 }
@@ -772,6 +911,8 @@ struct Rw<'a> {
 }
 
 fn rewrite(body: &str, uses: &[Site], index: &Index, data: &SceneData, id: u32) -> Option<Plan> {
+    let first = uses.first().map(|u| u.surface);
+    let surface = first.filter(|s| uses.iter().all(|u| u.surface == *s));
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, body, SourceType::cjs()).parse();
     if !parsed.errors.is_empty() {
@@ -823,7 +964,12 @@ fn rewrite(body: &str, uses: &[Site], index: &Index, data: &SceneData, id: u32) 
         why(id, "a layer member survived the rewrite");
         return None;
     }
-    Some(Plan { body: out, helpers: rw.helpers, frame_duration: rw.frame_duration })
+    Some(Plan {
+        body: out,
+        helpers: rw.helpers,
+        frame_duration: rw.frame_duration,
+        surface,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -844,7 +990,14 @@ fn layer_control_tables(program: &ast::Program) -> BTreeMap<String, LayerTable> 
     used.into_iter()
         .filter_map(|(name, param)| {
             let (elems, span) = arrays.get(&name)?;
-            Some((name, LayerTable { param: param?, elems: elems.clone(), span: *span }))
+            Some((
+                name,
+                LayerTable {
+                    param: param?,
+                    elems: elems.clone(),
+                    span: *span,
+                },
+            ))
         })
         .collect()
 }
@@ -907,9 +1060,15 @@ fn collect_tables_one(
 /// `effect(t[i])(<int>)` anywhere under `e`.
 fn find_table_use(e: &ast::Expression, used: &mut BTreeMap<String, Option<u32>>) {
     each_sub_expr(e, &mut |x| find_table_use(x, used));
-    let ast::Expression::CallExpression(outer) = e else { return };
-    let Some(param) = int_arg(&outer.arguments) else { return };
-    let ast::Expression::CallExpression(inner) = &outer.callee else { return };
+    let ast::Expression::CallExpression(outer) = e else {
+        return;
+    };
+    let Some(param) = int_arg(&outer.arguments) else {
+        return;
+    };
+    let ast::Expression::CallExpression(inner) = &outer.callee else {
+        return;
+    };
     if !is_bare_effect(&inner.callee) || inner.arguments.len() != 1 {
         return;
     }
@@ -918,7 +1077,9 @@ fn find_table_use(e: &ast::Expression, used: &mut BTreeMap<String, Option<u32>>)
     else {
         return;
     };
-    let ast::Expression::Identifier(id) = &m.object else { return };
+    let ast::Expression::Identifier(id) = &m.object else {
+        return;
+    };
     // Two different parameter slots off one table is a shape After Effects
     // does not generate, and one literal cannot serve both.
     used.entry(id.name.to_string())
@@ -967,7 +1128,9 @@ impl Rw<'_> {
     fn infer_stmt(&mut self, s: &ast::Statement) {
         if let ast::Statement::VariableDeclaration(d) = s {
             for decl in &d.declarations {
-                let Some(id) = decl.id.get_binding_identifier() else { continue };
+                let Some(id) = decl.id.get_binding_identifier() else {
+                    continue;
+                };
                 let name = id.name.to_string();
                 if self.tables.contains_key(&name) {
                     self.bind(&name, Ty::LayerArray);
@@ -978,7 +1141,11 @@ impl Rw<'_> {
                     // pushed into it, so it stays unknown until the push is seen.
                     Some(ast::Expression::ArrayExpression(a)) if a.elements.is_empty() => {}
                     Some(e) => {
-                        let ty = if self.is_layer(e) { Ty::Layer } else { Ty::Other };
+                        let ty = if self.is_layer(e) {
+                            Ty::Layer
+                        } else {
+                            Ty::Other
+                        };
                         self.bind(&name, ty);
                     }
                     None => {}
@@ -991,7 +1158,11 @@ impl Rw<'_> {
             match e {
                 ast::Expression::AssignmentExpression(a) => {
                     if let Some(id) = a.left.get_identifier_name() {
-                        let ty = if self.is_layer(&a.right) { Ty::Layer } else { Ty::Other };
+                        let ty = if self.is_layer(&a.right) {
+                            Ty::Layer
+                        } else {
+                            Ty::Other
+                        };
                         let name = id.to_string();
                         self.bind(&name, ty);
                     }
@@ -1030,8 +1201,10 @@ impl Rw<'_> {
             }
             ast::Expression::ParenthesizedExpression(p) => self.is_layer(&p.expression),
             ast::Expression::StaticMemberExpression(m) => {
-                matches!(m.property.name.as_str(), "transform" | "path" | "parentLayer")
-                    && self.is_layer(&m.object)
+                matches!(
+                    m.property.name.as_str(),
+                    "transform" | "path" | "parentLayer"
+                ) && self.is_layer(&m.object)
             }
             ast::Expression::ComputedMemberExpression(m) => match &m.object {
                 ast::Expression::Identifier(id) => self.ty_of_name(&id.name) == Ty::LayerArray,
@@ -1062,7 +1235,9 @@ impl Rw<'_> {
     /// and the source text of the index expression.
     fn layer_control_call(&self, c: &ast::CallExpression) -> Option<String> {
         let param = int_arg(&c.arguments)?;
-        let ast::Expression::CallExpression(inner) = &c.callee else { return None };
+        let ast::Expression::CallExpression(inner) = &c.callee else {
+            return None;
+        };
         if !is_bare_effect(&inner.callee) || inner.arguments.len() != 1 {
             return None;
         }
@@ -1071,7 +1246,9 @@ impl Rw<'_> {
         else {
             return None;
         };
-        let ast::Expression::Identifier(id) = &m.object else { return None };
+        let ast::Expression::Identifier(id) = &m.object else {
+            return None;
+        };
         (self.tables.get(id.name.as_str()).map(|t| t.param) == Some(param))
             .then(|| self.text(m.span()))
     }
@@ -1134,7 +1311,9 @@ impl Sel {
 
 /// `thisComp.layer('name')` — the literal name.
 fn comp_layer_name(c: &ast::CallExpression) -> Option<String> {
-    let ast::Expression::StaticMemberExpression(m) = &c.callee else { return None };
+    let ast::Expression::StaticMemberExpression(m) = &c.callee else {
+        return None;
+    };
     if m.property.name != "layer" {
         return None;
     }
@@ -1222,9 +1401,7 @@ impl Rw<'_> {
             "index" => Some(format!("{obj}.i")),
             // Reading a name means the name table has to survive, whatever the
             // rest of this analysis concluded.
-            "name" => {
-                Some(format!("({obj}.n ?? null)"))
-            }
+            "name" => Some(format!("({obj}.n ?? null)")),
             _ => {
                 self.refuse("an unrecognised layer member");
                 None
@@ -1270,7 +1447,11 @@ impl Rw<'_> {
             }
             "pointOnPath" | "tangentOnPath" => {
                 let u = arg(self)?;
-                let sym = if m.property.name == "pointOnPath" { "pointOnPath" } else { "tangentOnPath" };
+                let sym = if m.property.name == "pointOnPath" {
+                    "pointOnPath"
+                } else {
+                    "tangentOnPath"
+                };
                 self.need(sym);
                 self.need("lyPath");
                 Some(format!("{sym}(lyPath({obj}, frame), {u})"))
@@ -1313,7 +1494,9 @@ impl Rw<'_> {
         if c.arguments.len() != 1 {
             return None;
         }
-        let ast::Expression::CallExpression(inner) = &c.callee else { return None };
+        let ast::Expression::CallExpression(inner) = &c.callee else {
+            return None;
+        };
         if inner.arguments.len() != 1 {
             return None;
         }
@@ -1384,7 +1567,11 @@ impl Rw<'_> {
                 self.refuse("an effect read on a layer that would not resolve");
                 return None;
             };
-            let names: Vec<_> = rec.ef.iter().map(|e| (e.nm.as_deref(), e.mn.as_deref())).collect();
+            let names: Vec<_> = rec
+                .ef
+                .iter()
+                .map(|e| (e.nm.as_deref(), e.mn.as_deref()))
+                .collect();
             let Some(es) = nsel.find(&names) else {
                 self.refuse("two effects answer to one name");
                 return None;
@@ -1394,8 +1581,11 @@ impl Rw<'_> {
                 continue;
             };
             let effect = &rec.ef[ei as usize];
-            let params: Vec<_> =
-                effect.ef.iter().map(|p| (p.nm.as_deref(), p.mn.as_deref())).collect();
+            let params: Vec<_> = effect
+                .ef
+                .iter()
+                .map(|p| (p.nm.as_deref(), p.mn.as_deref()))
+                .collect();
             let Some(ps) = psel.find(&params) else {
                 self.refuse("two parameters answer to one name");
                 return None;
@@ -1568,17 +1758,23 @@ impl Rw<'_> {
             Table::Asset(i) => &self.data.assets[i as usize].records,
         };
         let rec = recs.get(site.owner as usize)?;
-        let Some(ep) = rec.ef.get(k as usize).and_then(|e| e.ef.get(param as usize)) else {
+        let Some(ep) = rec
+            .ef
+            .get(k as usize)
+            .and_then(|e| e.ef.get(param as usize))
+        else {
             return Some(Target::NoEffect);
         };
         if ep.ty != 10 {
             return None;
         }
         let v = ep.v?;
-        Some(match self.index.by_index(site.table, site.scope, v as u32) {
-            Some(r) => Target::Rec(r),
-            None => Target::NoLayer,
-        })
+        Some(
+            match self.index.by_index(site.table, site.scope, v as u32) {
+                Some(r) => Target::Rec(r),
+                None => Target::NoLayer,
+            },
+        )
     }
 
     /// `thisComp.layer('name')`, resolved once per using property.
@@ -1853,7 +2049,10 @@ fn whole_word(body: &str, i: usize, len: usize) -> bool {
 /// with the walk cannot share its blind spot.
 pub fn verify(body: &str) -> bool {
     for w in FALLBACK_ONLY {
-        if body.match_indices(w).any(|(i, _)| whole_word(body, i, w.len())) {
+        if body
+            .match_indices(w)
+            .any(|(i, _)| whole_word(body, i, w.len()))
+        {
             return true;
         }
     }
@@ -1894,8 +2093,7 @@ mod verify_tests {
         let index = Index::build(&scene.data);
         // Whatever the first body's properties are; all that matters here is
         // that the sites are real and agree.
-        let uses: Vec<Site> =
-            sites(&scene.data)[&0].iter().map(|u| u.unwrap()).collect();
+        let uses: Vec<Site> = sites(&scene.data)[&0].iter().map(|u| u.unwrap()).collect();
         rewrite(body, &uses, &index, &scene.data, 0)
     }
 
@@ -1916,7 +2114,9 @@ mod verify_tests {
         // `points`/`isClosed` on `thisProperty` are not layer members, and a
         // verifier that treated them as such would push every path-rewriting
         // body onto a refusal for nothing.
-        assert!(!verify("$bm_rt = createPath(thisProperty.points(), 0, 0, thisProperty.isClosed());"));
+        assert!(!verify(
+            "$bm_rt = createPath(thisProperty.points(), 0, 0, thisProperty.isClosed());"
+        ));
         assert!(!verify("$bm_rt = nearestKey(time).index;"));
         // A decimal point is not a member access.
         assert!(!verify("$bm_rt = 1.5;"));
@@ -1964,7 +2164,10 @@ mod verify_tests {
         // where the proxy handed back a layer, so `.index` on the result would
         // read `undefined` instead of a number. Nothing catches that
         // downstream: `index` is not a layer member the verifier knows.
-        let p = rewrite_against("lights", "$bm_rt = thisComp.layer('wire').effect(0)(0).index;");
+        let p = rewrite_against(
+            "lights",
+            "$bm_rt = thisComp.layer('wire').effect(0)(0).index;",
+        );
         assert!(p.is_none());
         // The parameter next to it is an ordinary value and still folds.
         let ok = rewrite_against("lights", "$bm_rt = effect(0)(0);");

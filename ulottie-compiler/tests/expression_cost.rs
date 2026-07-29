@@ -20,8 +20,7 @@ use std::path::Path;
 mod common;
 
 /// Capability names that exist only to serve expressions.
-const EXPR_CAPS: &[&str] =
-    &["EXPRESSIONS", "EXPR_PROPERTY", "EXPR_COMP", "EXPR_PATH"];
+const EXPR_CAPS: &[&str] = &["EXPRESSIONS", "EXPR_PROPERTY", "EXPR_COMP", "EXPR_PATH"];
 
 #[test]
 fn expression_machinery_cost() {
@@ -46,7 +45,9 @@ fn expression_machinery_cost() {
             allow: common::allowances(&name),
             ..Default::default()
         };
-        let Ok(report) = ulottie_compiler::compile_report(&json, &opts) else { continue };
+        let Ok(report) = ulottie_compiler::compile_report(&json, &opts) else {
+            continue;
+        };
         if !report.caps.iter().any(|c| c == "EXPRESSIONS") {
             continue;
         }
@@ -64,8 +65,7 @@ fn expression_machinery_cost() {
             .filter(|c| !EXPR_CAPS.contains(&c.as_str()))
             .cloned()
             .collect();
-        let engine =
-            report.runtime_slice - ulottie_compiler::runtime_slice(&without).len();
+        let engine = report.runtime_slice - ulottie_compiler::runtime_slice(&without).len();
 
         // Both measured on the shipped bytes. The bodies are real JavaScript
         // and the minifier does shrink them, so taking them off the unminified
@@ -78,7 +78,10 @@ fn expression_machinery_cost() {
         // is only *mostly* expression overhead — hence the sample.
         let pretty = ulottie_compiler::compile_report(
             &json,
-            &ulottie_compiler::CompileOptions { minify: false, ..opts.clone() },
+            &ulottie_compiler::CompileOptions {
+                minify: false,
+                ..opts.clone()
+            },
         )
         .map(|r| r.js)
         .unwrap_or_default();
@@ -93,8 +96,14 @@ fn expression_machinery_cost() {
         // The markers are shapes in minified output, so they are exactly the
         // kind of thing that stops matching quietly. A zero here is the
         // measurement breaking, not the overhead going away.
-        assert!(engine > 0, "{name}: no engine in the slice, but EXPRESSIONS is set");
-        assert!(bodies > 0, "{name}: expression bodies not found — `bracketed` marker is stale");
+        assert!(
+            engine > 0,
+            "{name}: no engine in the slice, but EXPRESSIONS is set"
+        );
+        assert!(
+            bodies > 0,
+            "{name}: expression bodies not found — `bracketed` marker is stale"
+        );
         // A string table can legitimately be gone now: once every lookup in
         // every body is an index, there is nothing left to name. So this only
         // holds the marker to account when the unminified build shows one.
@@ -127,7 +136,9 @@ fn expression_machinery_cost() {
 /// the minifier renames every binding. A marker that stops matching prints 0,
 /// which is the intended failure: a silently wrong number would be worse.
 fn bracketed(src: &str, marker: &str) -> usize {
-    let Some(start) = src.find(marker) else { return 0 };
+    let Some(start) = src.find(marker) else {
+        return 0;
+    };
     let open = src[start..].find('[').map(|i| start + i).unwrap();
     let mut depth = 0usize;
     for (i, c) in src[open..].char_indices() {
@@ -147,8 +158,12 @@ fn bracketed(src: &str, marker: &str) -> usize {
 
 /// The interned strings the payload carries.
 fn string_table(pretty: &str) -> Vec<String> {
-    let Some(i) = pretty.find("\"s\": [") else { return Vec::new() };
+    let Some(i) = pretty.find("\"s\": [") else {
+        return Vec::new();
+    };
     let rest = &pretty[i + 5..];
-    let Some(j) = rest.find("\n  ]") else { return Vec::new() };
+    let Some(j) = rest.find("\n  ]") else {
+        return Vec::new();
+    };
     serde_json::from_str::<Vec<String>>(&rest[..j + 4].trim()).unwrap_or_default()
 }

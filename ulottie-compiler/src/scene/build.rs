@@ -13,7 +13,7 @@ use super::prop::{Anim, AnimKind, Prop};
 use super::svg::{self, FlatPath};
 use std::collections::HashMap;
 
-use super::{geo, op, Arg, Binding, Caps, Effect, EffectParam, LayerRecord, Planner};
+use super::{Arg, Binding, Caps, Effect, EffectParam, LayerRecord, Planner, op};
 
 /// Clock a subtree runs on.
 #[derive(Clone, Copy)]
@@ -121,14 +121,20 @@ impl Planner<'_> {
                 // be seen — drop the whole subtree.
                 if layer.op <= c_ip || layer.ip >= c_op {
                     let outer = self.el("g");
-                    return Ok(LayerNode { outer, mounted: outer, dead: true, record: None });
+                    return Ok(LayerNode {
+                        outer,
+                        mounted: outer,
+                        dead: true,
+                        record: None,
+                    });
                 }
                 let hides = layer.ip > c_ip || layer.op < c_op;
                 (0u32, hides)
             }
             TimeCtx::Inner { parent, offset } => {
                 self.caps |= Caps::TIMELINE;
-                self.timelines.push([parent as f64, offset, layer.ip, layer.op]);
+                self.timelines
+                    .push([parent as f64, offset, layer.ip, layer.op]);
                 (self.timelines.len() as u32, false)
             }
         };
@@ -137,9 +143,15 @@ impl Planner<'_> {
         // the record index into every expression they carry.
         let record = if self.has_exprs {
             let idx = self.layers.len() as u32;
-            let name = layer.n.and_then(|i| self.payload.st.get(i as usize).cloned());
+            let name = layer
+                .n
+                .and_then(|i| self.payload.st.get(i as usize).cloned());
             let n = name.map(|s| self.intern_name(&s));
-            self.layers.push(LayerRecord { i: layer.i, n, ..Default::default() });
+            self.layers.push(LayerRecord {
+                i: layer.i,
+                n,
+                ..Default::default()
+            });
             // Parallel column, not a record field — see `SceneData::scopes`.
             self.scopes.push(self.scope);
             Some(idx)
@@ -188,7 +200,9 @@ impl Planner<'_> {
 
             let dp = pp.clone().unwrap_or(Prop::Vector(vec![0.0, 0.0, 0.0]));
             let da = ap.clone().unwrap_or(Prop::Vector(vec![0.0, 0.0, 0.0]));
-            let ds = sp.clone().unwrap_or(Prop::Vector(vec![100.0, 100.0, 100.0]));
+            let ds = sp
+                .clone()
+                .unwrap_or(Prop::Vector(vec![100.0, 100.0, 100.0]));
             let dr = rp.clone().unwrap_or(Prop::Scalar(0.0));
             if dp.is_static() && da.is_static() && ds.is_static() && dr.is_static() {
                 let m = matrix(&dp, &da, &ds, &dr);
@@ -249,7 +263,11 @@ impl Planner<'_> {
                 let rect = self.el("rect");
                 self.set(rect, "width", svg::n(layer.sw.unwrap_or(0) as f64));
                 self.set(rect, "height", svg::n(layer.sh.unwrap_or(0) as f64));
-                self.set(rect, "fill", layer.cl.clone().unwrap_or_else(|| "#000".into()));
+                self.set(
+                    rect,
+                    "fill",
+                    layer.cl.clone().unwrap_or_else(|| "#000".into()),
+                );
                 self.els[inner].children.push(rect);
             }
             0 => {
@@ -279,7 +297,10 @@ impl Planner<'_> {
                             if let Some(l) = inner_layers {
                                 let kids = self.build_layer_forest(
                                     &l,
-                                    TimeCtx::Inner { parent: slot, offset },
+                                    TimeCtx::Inner {
+                                        parent: slot,
+                                        offset,
+                                    },
                                 )?;
                                 self.els[inner].children.extend(kids);
                             }
@@ -300,7 +321,12 @@ impl Planner<'_> {
 
         self.gate = outer_gate;
         self.layer_rec = outer_rec;
-        Ok(LayerNode { outer, mounted: outer, dead: false, record })
+        Ok(LayerNode {
+            outer,
+            mounted: outer,
+            dead: false,
+            record,
+        })
     }
 
     /// Effects, in the shape `thisLayer.effect('name')('param')` reads.
@@ -356,7 +382,9 @@ impl Planner<'_> {
     /// Place one use of a precomp. The asset is planned the first time it is
     /// seen; a use is just a position, resolved once planning finishes.
     fn instantiate(&mut self, id: &str, parent_slot: u32, offset: f64) -> Result<Option<usize>> {
-        let Some(asset) = self.plan_asset(id)? else { return Ok(None) };
+        let Some(asset) = self.plan_asset(id)? else {
+            return Ok(None);
+        };
         let node = self.el("g");
         self.els[node].instance = Some(asset);
         self.pending.push(super::instance::Nested {
@@ -380,7 +408,8 @@ impl Planner<'_> {
         let tr = layer.tr.as_ref()?;
         let prop = self.classify(tr, 1);
         self.caps |= Caps::TIMELINE | Caps::TIME_REMAP;
-        self.timelines.push([parent as f64, 0.0, layer.ip, layer.op]);
+        self.timelines
+            .push([parent as f64, 0.0, layer.ip, layer.op]);
         let slot = self.timelines.len() as u32;
         self.remaps.resize(self.timelines.len(), None);
         self.remaps[slot as usize - 1] = Some(prop);
@@ -396,12 +425,7 @@ impl Planner<'_> {
         if !self.instance_precomps || self.uninstanceable.contains(id) {
             return Ok(None);
         }
-        let layers: Vec<data::Layer> = match self
-            .payload
-            .a
-            .as_ref()
-            .and_then(|a| a.get(id))
-        {
+        let layers: Vec<data::Layer> = match self.payload.a.as_ref().and_then(|a| a.get(id)) {
             Some(data::Asset::Precomp { l }) => l.clone(),
             _ => return Ok(None),
         };
@@ -420,7 +444,13 @@ impl Planner<'_> {
         // The asset is one template with one root; pruning must not splice it
         // away the way it would an ordinary transparent group.
         self.els[root].pinned = true;
-        let kids = self.build_layer_forest(&layers, TimeCtx::Inner { parent: 0, offset: 0.0 })?;
+        let kids = self.build_layer_forest(
+            &layers,
+            TimeCtx::Inner {
+                parent: 0,
+                offset: 0.0,
+            },
+        )?;
         self.els[root].children.extend(kids);
         self.layer_rec = outer_rec;
 
@@ -466,11 +496,20 @@ impl Planner<'_> {
         // bake. Nothing is lost — instancing and the standalone forms never
         // co-occur (see `backend::report`, and `compile_document`, which plans
         // fully expanded).
-        self.emit_el(root, &mut markup, &mut counter, &mut local, &Default::default());
+        self.emit_el(
+            root,
+            &mut markup,
+            &mut counter,
+            &mut local,
+            &Default::default(),
+        );
         let mut inline_counter = 0u32;
         let mut inline_markup = String::new();
         self.emit_inline_el(root, &mut inline_markup, &mut inline_counter);
-        debug_assert_eq!(counter, inline_counter, "element count must not depend on form");
+        debug_assert_eq!(
+            counter, inline_counter,
+            "element count must not depend on form"
+        );
 
         let mut bindings: Vec<Binding> = self.bindings.drain(bind_start..).collect();
         for b in &mut bindings {
@@ -527,7 +566,11 @@ impl Planner<'_> {
             .timelines
             .drain(tl_start..)
             .map(|t| {
-                let parent = if t[0] == 0.0 { 0.0 } else { t[0] - tl_start as f64 };
+                let parent = if t[0] == 0.0 {
+                    0.0
+                } else {
+                    t[0] - tl_start as f64
+                };
                 [parent, t[1], t[2], t[3]]
             })
             .collect();
@@ -628,7 +671,11 @@ impl Planner<'_> {
         self.set(f, "width", svg::n(cw));
         self.set(f, "height", svg::n(ch));
         let t = self.el("feComponentTransfer");
-        for ch_name in if alpha { &["feFuncA"][..] } else { &["feFuncR", "feFuncG", "feFuncB"][..] } {
+        for ch_name in if alpha {
+            &["feFuncA"][..]
+        } else {
+            &["feFuncR", "feFuncG", "feFuncB"][..]
+        } {
             let fun = self.el(ch_name);
             self.set(fun, "type", "table");
             self.set(fun, "tableValues", "1 0");
@@ -667,12 +714,7 @@ impl Planner<'_> {
                 }
                 _ => {
                     self.caps |= Caps::PATH_D;
-                    self.bind(
-                        op::SHAPE,
-                        p,
-                        vec![Arg::List(vec![Arg::Num(geo::PATH as f64), Arg::Prop(shape)]), Arg::Null],
-                        slot,
-                    );
+                    self.bind(op::SHAPE, p, vec![Arg::Prop(shape), Arg::Null], slot);
                 }
             }
             self.els[mask].children.push(p);
@@ -697,9 +739,15 @@ impl Planner<'_> {
         slot: u32,
     ) {
         let dim = if self.keep_z { 3 } else { 2 };
-        let pp = p.map(|x| self.classify(x, dim)).unwrap_or(Prop::Vector(vec![0.0, 0.0]));
-        let ap = a.map(|x| self.classify(x, dim)).unwrap_or(Prop::Vector(vec![0.0, 0.0]));
-        let sp = s.map(|x| self.classify(x, dim)).unwrap_or(Prop::Vector(vec![100.0, 100.0]));
+        let pp = p
+            .map(|x| self.classify(x, dim))
+            .unwrap_or(Prop::Vector(vec![0.0, 0.0]));
+        let ap = a
+            .map(|x| self.classify(x, dim))
+            .unwrap_or(Prop::Vector(vec![0.0, 0.0]));
+        let sp = s
+            .map(|x| self.classify(x, dim))
+            .unwrap_or(Prop::Vector(vec![100.0, 100.0]));
         let rp = r.map(|x| self.classify(x, 1)).unwrap_or(Prop::Scalar(0.0));
 
         let rest_static = ap.is_static() && sp.is_static() && rp.is_static();
@@ -751,7 +799,9 @@ impl Planner<'_> {
     }
 
     fn emit_opacity(&mut self, el: usize, o: Option<&InlineProp>, slot: u32) {
-        let op_prop = o.map(|x| self.classify(x, 1)).unwrap_or(Prop::Scalar(100.0));
+        let op_prop = o
+            .map(|x| self.classify(x, 1))
+            .unwrap_or(Prop::Scalar(100.0));
         match op_prop.as_scalar() {
             Some(v) if op_prop.is_static() => {
                 if (v - 100.0).abs() > 1e-6 {
@@ -789,7 +839,9 @@ impl Planner<'_> {
                 let Some(shape) = self.payload.s.get(prim.s as usize).cloned() else {
                     return Ok(());
                 };
-                let trim = prim.tm.and_then(|id| self.payload.y.get(id as usize).cloned());
+                let trim = prim
+                    .tm
+                    .and_then(|id| self.payload.y.get(id as usize).cloned());
                 let node = self.build_primitive(&shape, trim.as_ref(), slot);
                 let Some(node) = node else { return Ok(()) };
                 self.els[parent].children.push(node);
@@ -801,12 +853,7 @@ impl Planner<'_> {
 
     /// Emit the element for one shape primitive, baking its geometry when
     /// every input is static.
-    fn build_primitive(
-        &mut self,
-        shape: &Shape,
-        trim: Option<&Style>,
-        slot: u32,
-    ) -> Option<usize> {
+    fn build_primitive(&mut self, shape: &Shape, trim: Option<&Style>, slot: u32) -> Option<usize> {
         let trimmed = trim.is_some();
 
         // A trimmed shape always renders through <path>, since trimming turns
@@ -863,7 +910,7 @@ impl Planner<'_> {
             }
             _ => {
                 let el = self.el("path");
-                let g = self.geo_descriptor(shape);
+                let (geo_op, g) = self.geo_descriptor(shape);
                 let baked = self.bake_geometry(shape, &g);
                 match (baked, trim) {
                     // Fully static and untrimmed: the `d` is a literal.
@@ -888,8 +935,12 @@ impl Planner<'_> {
                                 }
                                 crate::eval::trim::Trimmed::Empty => return None,
                                 crate::eval::trim::Trimmed::Path(out) => {
-                                    let baked =
-                                        FlatPath { v: out.v, i: out.i, o: out.o, c: out.c };
+                                    let baked = FlatPath {
+                                        v: out.v,
+                                        i: out.i,
+                                        o: out.o,
+                                        c: out.c,
+                                    };
                                     self.set(el, "d", baked.to_d());
                                 }
                             }
@@ -902,13 +953,7 @@ impl Planner<'_> {
                         self.bind(
                             op::SHAPE,
                             el,
-                            vec![
-                                Arg::List(vec![
-                                    Arg::Num(geo::PATH as f64),
-                                    Arg::Prop(Prop::Path(path)),
-                                ]),
-                                trim_arg,
-                            ],
+                            vec![Arg::Prop(Prop::Path(path)), trim_arg],
                             slot,
                         );
                     }
@@ -923,7 +968,9 @@ impl Planner<'_> {
                             }
                             None => Arg::Null,
                         };
-                        self.bind(op::SHAPE, el, vec![Arg::List(g), trim_arg], slot);
+                        let mut args = g;
+                        args.push(trim_arg);
+                        self.bind(geo_op, el, args, slot);
                     }
                 }
                 Some(el)
@@ -931,42 +978,64 @@ impl Planner<'_> {
         }
     }
 
-    /// Build the geometry descriptor for a shape, classifying each input.
-    fn geo_descriptor(&mut self, shape: &Shape) -> Vec<Arg> {
+    /// A shape's geometry op and its arguments, each input classified.
+    ///
+    /// The op *is* the kind — there is no tag in the argument list, and none on
+    /// the wire. That is also what lets [`Self::bake_geometry`] and
+    /// `bake::bake_shape` index the same list at the same offsets; they read one
+    /// shape's inputs at two different indices for as long as a tag led it, and
+    /// that off-by-one family is what produced two of this pass's three bugs.
+    fn geo_descriptor(&mut self, shape: &Shape) -> (u8, Vec<Arg>) {
         match shape {
             Shape::Path { pt, .. } => {
                 let p = self.classify(pt, 2);
                 if !p.is_static() {
                     self.caps |= Caps::PATH_KF;
                 }
-                vec![Arg::Num(geo::PATH as f64), Arg::Prop(p)]
+                (op::SHAPE, vec![Arg::Prop(p)])
             }
             Shape::Rect { sz, ps, rd, .. } => {
                 let a = self.classify(sz, 2);
                 let b = self.classify(ps, 2);
                 let c = self.classify(rd, 1);
-                vec![Arg::Num(geo::RECT as f64), Arg::Prop(a), Arg::Prop(b), Arg::Prop(c)]
+                (
+                    op::SHAPE_RECT,
+                    vec![Arg::Prop(a), Arg::Prop(b), Arg::Prop(c)],
+                )
             }
             Shape::Ellipse { sz, ps, .. } => {
                 let a = self.classify(sz, 2);
                 let b = self.classify(ps, 2);
-                vec![Arg::Num(geo::ELLIPSE as f64), Arg::Prop(a), Arg::Prop(b)]
+                (op::SHAPE_ELLIPSE, vec![Arg::Prop(a), Arg::Prop(b)])
             }
-            Shape::PolyStar { sy, pt, ps, or, ir, rt, .. } => {
+            Shape::PolyStar {
+                sy,
+                pt,
+                ps,
+                or,
+                ir,
+                rt,
+                ..
+            } => {
                 let pt = self.classify(pt, 1);
                 let ps = self.classify(ps, 2);
                 let or = self.classify(or, 1);
                 let ir = self.classify(ir, 1);
                 let rt = self.classify(rt, 1);
-                vec![
-                    Arg::Num(geo::POLYSTAR as f64),
-                    Arg::Num(*sy as f64),
-                    Arg::Prop(pt),
-                    Arg::Prop(ps),
-                    Arg::Prop(or),
-                    Arg::Prop(ir),
-                    Arg::Prop(rt),
-                ]
+                (
+                    op::SHAPE_STAR,
+                    vec![
+                        // `Tag`, not `Num`: the star type is an enumeration, and
+                        // a `Num` is a measurement the encoder scales by a
+                        // thousand.
+                        Arg::Tag(*sy as u32),
+                        Arg::Prop(pt),
+                        Arg::Prop(ps),
+                        Arg::Prop(or),
+                        Arg::Prop(ir),
+                        Arg::Prop(rt),
+                    ],
+                )
             }
         }
     }
@@ -984,7 +1053,7 @@ impl Planner<'_> {
         let num = |i: usize| -> Option<f64> {
             match g.get(i)? {
                 Arg::Prop(p) => p.as_scalar(),
-                Arg::Num(n) => Some(*n),
+                Arg::Tag(t) => Some(*t as f64),
                 _ => None,
             }
         };
@@ -998,19 +1067,19 @@ impl Planner<'_> {
             }
         };
         let path = match shape {
-            Shape::Path { .. } => match g.get(1)? {
+            Shape::Path { .. } => match g.first()? {
                 Arg::Prop(Prop::Path(p)) => return Some(p.clone()),
                 _ => return None,
             },
-            Shape::Rect { .. } => geometry::rect_to_path(vec2(2)?, vec2(1)?, num(3)?),
-            Shape::Ellipse { .. } => geometry::ellipse_to_path(vec2(2)?, vec2(1)?),
+            Shape::Rect { .. } => geometry::rect_to_path(vec2(1)?, vec2(0)?, num(2)?),
+            Shape::Ellipse { .. } => geometry::ellipse_to_path(vec2(1)?, vec2(0)?),
             Shape::PolyStar { .. } => geometry::polystar_to_path(
-                num(1)? as u8,
-                vec2(3)?,
-                num(2)?,
+                num(0)? as u8,
+                vec2(2)?,
+                num(1)?,
+                num(3)?,
                 num(4)?,
                 num(5)?,
-                num(6)?,
             ),
         };
         Some(FlatPath::from_parts(
@@ -1050,7 +1119,9 @@ impl Planner<'_> {
         let mut fill: Option<Style> = None;
         let mut stroke: Option<Style> = None;
         for id in ids {
-            let Some(st) = self.payload.y.get(*id as usize) else { continue };
+            let Some(st) = self.payload.y.get(*id as usize) else {
+                continue;
+            };
             match st {
                 Style::Fill { .. } | Style::GradientFill { .. } if fill.is_none() => {
                     fill = Some(st.clone());
@@ -1109,14 +1180,45 @@ impl Planner<'_> {
 
     fn emit_stroke(&mut self, el: usize, style: &Style, slot: u32) {
         let (paint, opacity, width, lc, lj, ml) = match style {
-            Style::Stroke { c, o, w, lc, lj, ml } => {
+            Style::Stroke {
+                c,
+                o,
+                w,
+                lc,
+                lj,
+                ml,
+            } => {
                 let cp = self.classify(c, 4);
-                (Some(cp), self.classify(o, 1), self.classify(w, 1), *lc, *lj, *ml)
+                (
+                    Some(cp),
+                    self.classify(o, 1),
+                    self.classify(w, 1),
+                    *lc,
+                    *lj,
+                    *ml,
+                )
             }
-            Style::GradientStroke { g, w, o, s, e, gk, lc, lj, ml } => {
+            Style::GradientStroke {
+                g,
+                w,
+                o,
+                s,
+                e,
+                gk,
+                lc,
+                lj,
+                ml,
+            } => {
                 let id = self.emit_gradient(g, *gk, s.as_ref(), e.as_ref(), slot);
                 self.set(el, "stroke", format!("url(#{id})"));
-                (None, self.classify(o, 1), self.classify(w, 1), *lc, *lj, *ml)
+                (
+                    None,
+                    self.classify(o, 1),
+                    self.classify(w, 1),
+                    *lc,
+                    *lj,
+                    *ml,
+                )
             }
             _ => return,
         };
@@ -1177,12 +1279,20 @@ impl Planner<'_> {
         self.caps |= Caps::GRADIENT;
         let id = self.next_id("g");
         let radial = gk == 2;
-        let node = self.el(if radial { "radialGradient" } else { "linearGradient" });
+        let node = self.el(if radial {
+            "radialGradient"
+        } else {
+            "linearGradient"
+        });
         self.set(node, "id", id.clone());
         self.set(node, "gradientUnits", "userSpaceOnUse");
 
-        let sp = s.map(|x| self.classify(x, 2)).unwrap_or(Prop::Vector(vec![0.0, 0.0]));
-        let ep = e.map(|x| self.classify(x, 2)).unwrap_or(Prop::Vector(vec![0.0, 0.0]));
+        let sp = s
+            .map(|x| self.classify(x, 2))
+            .unwrap_or(Prop::Vector(vec![0.0, 0.0]));
+        let ep = e
+            .map(|x| self.classify(x, 2))
+            .unwrap_or(Prop::Vector(vec![0.0, 0.0]));
         if sp.is_static() && ep.is_static() {
             let a = sp.as_vec().unwrap_or(&[0.0, 0.0]);
             let b = ep.as_vec().unwrap_or(&[0.0, 0.0]);
@@ -1230,7 +1340,11 @@ impl Planner<'_> {
         if radial {
             self.set(node, "cx", svg::n(sx));
             self.set(node, "cy", svg::n(sy));
-            self.set(node, "r", svg::n(((ex - sx).powi(2) + (ey - sy).powi(2)).sqrt()));
+            self.set(
+                node,
+                "r",
+                svg::n(((ex - sx).powi(2) + (ey - sy).powi(2)).sqrt()),
+            );
         } else {
             self.set(node, "x1", svg::n(sx));
             self.set(node, "y1", svg::n(sy));
@@ -1256,7 +1370,11 @@ impl Planner<'_> {
                 } else {
                     e.fb.as_ref().map(|v| Box::new(static_prop(v, dim)))
                 };
-                Prop::Expr { id: e.e, fallback, layer: self.layer_rec }
+                Prop::Expr {
+                    id: e.e,
+                    fallback,
+                    layer: self.layer_rec,
+                }
             }
         }
     }
@@ -1318,12 +1436,12 @@ impl Planner<'_> {
         }
 
         let (v, paths) = match kind {
-            AnimKind::Path => (
-                Vec::new(),
-                values.iter().map(path_of).collect::<Vec<_>>(),
-            ),
+            AnimKind::Path => (Vec::new(), values.iter().map(path_of).collect::<Vec<_>>()),
             _ => (
-                values.iter().flat_map(|v| flatten(v, dim)).collect::<Vec<_>>(),
+                values
+                    .iter()
+                    .flat_map(|v| flatten(v, dim))
+                    .collect::<Vec<_>>(),
                 Vec::new(),
             ),
         };
@@ -1366,7 +1484,10 @@ impl Planner<'_> {
         let mut to = None;
         let mut ti = None;
         if let (Some(a), Some(b)) = (&kf.to, &kf.ti) {
-            let nonzero = a.iter().chain(b.iter()).any(|v| v.iter().any(|x| *x != 0.0));
+            let nonzero = a
+                .iter()
+                .chain(b.iter())
+                .any(|v| v.iter().any(|x| *x != 0.0));
             if nonzero && kind == AnimKind::Vector {
                 self.caps |= Caps::SPATIAL;
                 to = Some(flatten_rows(a, segments, dim));
@@ -1400,12 +1521,7 @@ impl Planner<'_> {
             return 0;
         }
         let e = [ox, oy, ix, iy];
-        let key = [
-            ox.to_bits(),
-            oy.to_bits(),
-            ix.to_bits(),
-            iy.to_bits(),
-        ];
+        let key = [ox.to_bits(), oy.to_bits(), ix.to_bits(), iy.to_bits()];
         if let Some(&i) = self.easing_index.get(&key) {
             return i;
         }
@@ -1422,7 +1538,10 @@ impl Planner<'_> {
 
 /// Shift every layer reference in a property by `delta`.
 fn rebase_prop(p: &mut Prop, delta: u32) {
-    if let Prop::Expr { layer, fallback, .. } = p {
+    if let Prop::Expr {
+        layer, fallback, ..
+    } = p
+    {
         if let Some(l) = layer {
             *l -= delta;
         }
@@ -1456,7 +1575,9 @@ fn runtime_geometry(shape: &Shape) -> Caps {
 
 /// `(start, end, offset)` when a trim style never moves.
 fn static_trim_range(style: &Style) -> Option<(f64, f64, f64)> {
-    let Style::TrimPath { s, e, o, .. } = style else { return None };
+    let Style::TrimPath { s, e, o, .. } = style else {
+        return None;
+    };
     let one = |p: &InlineProp| match p {
         InlineProp::Static(Value::Scalar(n)) => Some(*n),
         InlineProp::Static(Value::Vector(v)) => v.first().copied(),
@@ -1538,7 +1659,9 @@ fn resolve_at(kf: &data::Keyframes, i: usize) -> Value {
         return kf.v[i].clone();
     }
     if i > 0 {
-        if let Some(e) = kf.e.as_ref().and_then(|e| e.get(i - 1).and_then(|x| x.clone()))
+        if let Some(e) =
+            kf.e.as_ref()
+                .and_then(|e| e.get(i - 1).and_then(|x| x.clone()))
             && !is_value_empty(&e)
         {
             return e;
@@ -1594,5 +1717,3 @@ pub(super) fn is_identity(m: &[f64; 6]) -> bool {
         && m[4].abs() < 1e-6
         && m[5].abs() < 1e-6
 }
-
-

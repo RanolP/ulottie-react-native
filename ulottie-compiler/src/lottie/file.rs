@@ -92,27 +92,23 @@ impl TransformBlock {
     }
 
     pub fn opacity(&self) -> &Property {
-        static DEFAULT_OPACITY: std::sync::LazyLock<Property> = std::sync::LazyLock::new(|| {
-            serde_json::from_str(r#"{"a":0,"k":100}"#).unwrap()
-        });
+        static DEFAULT_OPACITY: std::sync::LazyLock<Property> =
+            std::sync::LazyLock::new(|| serde_json::from_str(r#"{"a":0,"k":100}"#).unwrap());
         self.o.as_ref().unwrap_or(&DEFAULT_OPACITY)
     }
     pub fn rotation(&self) -> &Property {
-        static DEFAULT: std::sync::LazyLock<Property> = std::sync::LazyLock::new(|| {
-            serde_json::from_str(r#"{"a":0,"k":0}"#).unwrap()
-        });
+        static DEFAULT: std::sync::LazyLock<Property> =
+            std::sync::LazyLock::new(|| serde_json::from_str(r#"{"a":0,"k":0}"#).unwrap());
         self.r.as_ref().unwrap_or(&DEFAULT)
     }
     pub fn position(&self) -> &Property {
-        static DEFAULT: std::sync::LazyLock<Property> = std::sync::LazyLock::new(|| {
-            serde_json::from_str(r#"{"a":0,"k":[0,0,0]}"#).unwrap()
-        });
+        static DEFAULT: std::sync::LazyLock<Property> =
+            std::sync::LazyLock::new(|| serde_json::from_str(r#"{"a":0,"k":[0,0,0]}"#).unwrap());
         self.p.as_ref().unwrap_or(&DEFAULT)
     }
     pub fn anchor(&self) -> &Property {
-        static DEFAULT: std::sync::LazyLock<Property> = std::sync::LazyLock::new(|| {
-            serde_json::from_str(r#"{"a":0,"k":[0,0,0]}"#).unwrap()
-        });
+        static DEFAULT: std::sync::LazyLock<Property> =
+            std::sync::LazyLock::new(|| serde_json::from_str(r#"{"a":0,"k":[0,0,0]}"#).unwrap());
         self.a.as_ref().unwrap_or(&DEFAULT)
     }
     pub fn scale(&self) -> &Property {

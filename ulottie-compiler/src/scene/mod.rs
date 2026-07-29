@@ -18,8 +18,8 @@ mod build;
 pub mod flat;
 mod instance;
 pub mod prop;
-mod template;
 pub mod svg;
+mod template;
 
 use std::collections::HashMap;
 
@@ -31,7 +31,7 @@ use serde::{Serialize, Serializer};
 use crate::data::Payload;
 
 pub use instance::AssetPlan;
-use prop::{Easing, Prop, LINEAR};
+use prop::{Easing, LINEAR, Prop};
 use svg::ID_MARK;
 
 // ---------------------------------------------------------------------------
@@ -46,7 +46,13 @@ pub mod op {
     pub const TRANSLATE: u8 = 1;
     pub const OPACITY: u8 = 2;
     pub const DISPLAY: u8 = 3;
+    /// Write `d` from a bezier path property. The three generated forms below
+    /// are separate ops rather than a tag inside this one: which generator a
+    /// shape needs is a compile-time fact, so an animation that draws only
+    /// paths should neither ship the polystar generator nor branch past it two
+    /// hundred times a frame.
     pub const SHAPE: u8 = 4;
+    /// Native `<rect>`/`<ellipse>` attributes — not a generated outline.
     pub const RECT: u8 = 5;
     pub const ELLIPSE: u8 = 6;
     pub const FILL: u8 = 7;
@@ -56,14 +62,10 @@ pub mod op {
     /// keyframes are stored once instead of once per consumer.
     pub const LAYER_TX: u8 = 10;
     pub const LAYER_OP: u8 = 11;
-}
-
-/// Geometry descriptor tags used inside a `SHAPE` binding.
-pub mod geo {
-    pub const PATH: u8 = 0;
-    pub const RECT: u8 = 1;
-    pub const ELLIPSE: u8 = 2;
-    pub const POLYSTAR: u8 = 3;
+    /// Write `d` from a generated outline.
+    pub const SHAPE_RECT: u8 = 12;
+    pub const SHAPE_ELLIPSE: u8 = 13;
+    pub const SHAPE_STAR: u8 = 14;
 }
 
 bitflags! {
@@ -183,7 +185,11 @@ impl Scene {
         // instantiation replays. Walking only the document's left the
         // instanced candidate shipping every name — two dead `Pseudo/ADBE …`
         // strings on `ripple`, which is the candidate that wins.
-        let assets = self.data.assets.iter_mut().flat_map(|a| a.records.iter_mut());
+        let assets = self
+            .data
+            .assets
+            .iter_mut()
+            .flat_map(|a| a.records.iter_mut());
         for rec in self.data.layers.iter_mut().chain(assets) {
             for e in &mut rec.ef {
                 cull(&mut e.nm);
@@ -229,8 +235,7 @@ impl Scene {
     /// True when the animation has nothing to update — the module can skip the
     /// entire player.
     pub fn is_static(&self) -> bool {
-        self.data.b.is_empty()
-            && self.data.assets.iter().all(|a| a.bindings.is_empty())
+        self.data.b.is_empty() && self.data.assets.iter().all(|a| a.bindings.is_empty())
     }
 }
 
@@ -414,8 +419,6 @@ impl Serialize for SceneData {
     }
 }
 
-
-
 /// One dynamic binding, serialized as `[op, elementIndex, …args]`.
 pub struct Binding {
     pub op: u8,
@@ -456,40 +459,81 @@ impl Serialize for Arg {
     }
 }
 
-
-
 /// Ops whose first argument is an index into the layer-record table, and so
-/// wants the same delta treatment as the element index. Every other binder
-/// reads its arguments as values.
+/// wants the same delta treatment as the element index. Every other op reads
+/// its arguments as values.
 ///
-/// `mount` spells this `b[0] > 9` to save bytes, which is only correct while
-/// these stay the highest op codes — [`record_ops_are_the_highest`] pins it.
+/// Each op knows its own argument shape, so this is asked once per batch at
+/// compile time rather than decoded per binding at mount.
 fn arg0_is_record(op: u8) -> bool {
     op == op::LAYER_TX || op == op::LAYER_OP
 }
 
-#[cfg(test)]
-#[test]
-fn record_ops_are_the_highest() {
-    // core.js decodes the record-index column for `b[0] > 9`. If a new op took
-    // a code above these, the runtime would start accumulating a value that is
-    // not an index and every layer binding after it would read the wrong
-    // record — silently, and only in animations that use expressions.
-    let all = [
-        op::TRANSFORM, op::TRANSLATE, op::OPACITY, op::DISPLAY,
-        op::SHAPE, op::RECT, op::ELLIPSE, op::FILL, op::STROKE,
-        op::GRADIENT, op::LAYER_TX, op::LAYER_OP,
-    ];
-    for o in all {
-        assert_eq!(
-            arg0_is_record(o),
-            o > 9,
-            "op {o} disagrees with the `b[0] > 9` test in runtime/core.js"
-        );
+/// The runtime capability an op needs.
+///
+/// One mapping, asked by both sides: the planner sets it when it binds, and the
+/// emitter uses it to decide which loops to import and retain. The three
+/// generated-outline ops share `Caps::GEOM_*` with the generator each one
+/// calls — an op and the outline it builds are never present separately.
+pub fn caps_for_op(op: u8) -> Caps {
+    match op {
+        op::TRANSFORM => Caps::TRANSFORM,
+        op::TRANSLATE => Caps::TRANSLATE,
+        op::OPACITY => Caps::OPACITY,
+        op::DISPLAY => Caps::DISPLAY,
+        op::SHAPE => Caps::SHAPE,
+        op::RECT => Caps::RECT,
+        op::ELLIPSE => Caps::ELLIPSE,
+        op::FILL => Caps::FILL,
+        op::STROKE => Caps::STROKE,
+        op::GRADIENT => Caps::GRADIENT,
+        op::LAYER_TX => Caps::LAYER_TX,
+        op::LAYER_OP => Caps::LAYER_OP,
+        op::SHAPE_RECT => Caps::GEOM_RECT,
+        op::SHAPE_ELLIPSE => Caps::GEOM_ELLIPSE,
+        op::SHAPE_STAR => Caps::GEOM_STAR,
+        _ => Caps::empty(),
     }
 }
 
+/// The ops a binding list uses, ascending and deduplicated.
+///
+/// This is the whole contract between the encoder and the emitter. `flat.rs`
+/// writes one struct-of-arrays batch per entry, in this order; `emit.rs` writes
+/// one call per entry, in this order, naming the op function directly. Neither
+/// side needs the op code on the wire, and nothing looks a binder up at mount.
+pub fn program_ops(list: &[Binding]) -> Vec<u8> {
+    let mut ops: Vec<u8> = list.iter().map(|b| b.op).collect();
+    ops.sort_unstable();
+    ops.dedup();
+    ops
+}
 
+#[cfg(test)]
+#[test]
+fn a_program_names_each_op_once_in_a_fixed_order() {
+    // The order is the only thing keeping the emitted calls lined up with the
+    // encoded batches. Sorting by op code makes it a property of the op set
+    // rather than of the order the planner happened to bind things in.
+    let b = |op| Binding {
+        op,
+        el: 0,
+        el_index: 0,
+        args: Vec::new(),
+    };
+    let list = [
+        b(op::FILL),
+        b(op::TRANSFORM),
+        b(op::FILL),
+        b(op::OPACITY),
+        b(op::TRANSFORM),
+    ];
+    assert_eq!(
+        program_ops(&list),
+        vec![op::TRANSFORM, op::OPACITY, op::FILL]
+    );
+    assert!(program_ops(&[]).is_empty());
+}
 
 /// Emit the document with precomp instances left as placeholders the runtime
 /// expands. Used for the inlined markup; the standalone document is always
@@ -563,7 +607,10 @@ pub fn merge_sprite(existing: &str, symbol: &str, id: &str) -> String {
         }
         // Tolerate leading whitespace: a `--pretty` sprite is indented, and it
         // still has to merge with the next animation compiled into it.
-        if !part.trim_start().starts_with(&format!("<symbol id=\"{id}\"")) {
+        if !part
+            .trim_start()
+            .starts_with(&format!("<symbol id=\"{id}\""))
+        {
             kept.push(part.to_string());
         }
     }
@@ -611,10 +658,10 @@ pub const DEFAULT_INLINE_LIMIT: usize = 24 * 1024;
 /// `Instancing::Auto` skips its second compile for everything else — which is
 /// most of the corpus.
 pub fn has_reusable_precomps(payload: &Payload) -> bool {
-    payload
-        .a
-        .as_ref()
-        .is_some_and(|a| a.values().any(|x| matches!(x, crate::data::Asset::Precomp { .. })))
+    payload.a.as_ref().is_some_and(|a| {
+        a.values()
+            .any(|x| matches!(x, crate::data::Asset::Precomp { .. }))
+    })
 }
 
 pub fn plan_with(
@@ -651,7 +698,6 @@ pub fn plan_with(
         uninstanceable: Default::default(),
         pending: Vec::new(),
         uses: Vec::new(),
-        rec_high: 0,
         el_index: HashMap::new(),
         templates: Vec::new(),
         defs: Vec::new(),
@@ -689,8 +735,6 @@ pub fn plan_with(
         p.caps |= Caps::TEMPLATES;
     }
     let templates = tpl;
-    // Records for the document itself come first; instantiations follow.
-    p.rec_high = p.layers.len() as u32;
     p.expand_uses();
     let assets = std::mem::take(&mut p.assets);
     let uses = std::mem::take(&mut p.uses);
@@ -698,7 +742,11 @@ pub fn plan_with(
     let caps = p.caps;
     let uses_ids = p.uses_ids;
     let uses_clone_ids = p.uses_clone_ids;
-    let easings = if p.easings.len() > 1 { p.easings.clone() } else { Vec::new() };
+    let easings = if p.easings.len() > 1 {
+        p.easings.clone()
+    } else {
+        Vec::new()
+    };
     let timelines = p.timelines.clone();
     let slots = p.slots.clone();
     let gates = p.gates.clone();
@@ -710,7 +758,11 @@ pub fn plan_with(
     // The two are one table split in half, and `plan_asset` drains both. A
     // mismatch here means a record is about to answer with a neighbour's scope,
     // which resolves `thisComp.layer()` to a layer in the wrong composition.
-    debug_assert_eq!(scopes.len(), layers.len(), "scopes must stay parallel to layers");
+    debug_assert_eq!(
+        scopes.len(),
+        layers.len(),
+        "scopes must stay parallel to layers"
+    );
     debug_assert!(
         assets.iter().all(|a| a.scopes.len() == a.records.len()),
         "an asset's scopes must stay parallel to its records"
@@ -798,8 +850,6 @@ pub(crate) struct Planner<'a> {
     pub(crate) pending: Vec<instance::Nested>,
     /// The finished, fully-expanded list of instantiations.
     pub(crate) uses: Vec<instance::Use>,
-    /// Next free layer-record slot, once the document's own records are placed.
-    pub(crate) rec_high: u32,
     /// Element index of every node in the inlined document.
     pub(crate) el_index: HashMap<usize, u32>,
     /// Template markup, shared by precomp instances and by the repeated-subtree
@@ -843,24 +893,15 @@ impl<'a> Planner<'a> {
 
     fn bind(&mut self, op: u8, el: usize, args: Vec<Arg>, slot: u32) {
         self.els[el].pinned = true;
-        self.bindings.push(Binding { op, el, el_index: 0, args });
+        self.bindings.push(Binding {
+            op,
+            el,
+            el_index: 0,
+            args,
+        });
         self.slots.push(slot);
         self.bind_gate.push(self.gate);
-        self.caps |= match op {
-            op::TRANSFORM => Caps::TRANSFORM,
-            op::TRANSLATE => Caps::TRANSLATE,
-            op::OPACITY => Caps::OPACITY,
-            op::DISPLAY => Caps::DISPLAY,
-            op::SHAPE => Caps::SHAPE,
-            op::RECT => Caps::RECT,
-            op::ELLIPSE => Caps::ELLIPSE,
-            op::FILL => Caps::FILL,
-            op::STROKE => Caps::STROKE,
-            op::GRADIENT => Caps::GRADIENT,
-            op::LAYER_TX => Caps::LAYER_TX,
-            op::LAYER_OP => Caps::LAYER_OP,
-            _ => Caps::empty(),
-        };
+        self.caps |= caps_for_op(op);
     }
 
     // -- pruning ------------------------------------------------------------
@@ -1084,9 +1125,6 @@ impl<'a> Planner<'a> {
 
     fn expand_one(&mut self, asset: u32, el_base: u32, parent_slot: u32, offset: f64) {
         let slot_base = self.timelines.len() as u32;
-        let rec_base = self.rec_high;
-        self.rec_high += self.assets[asset as usize].records.len() as u32;
-        let scope = self.next_scope();
 
         let specs = self.assets[asset as usize].timelines.clone();
         for spec in &specs {
@@ -1096,16 +1134,15 @@ impl<'a> Planner<'a> {
             } else {
                 slot_base as f64 + spec[0]
             };
-            self.timelines.push([parent, spec[1] + offset, spec[2], spec[3]]);
+            self.timelines
+                .push([parent, spec[1] + offset, spec[2], spec[3]]);
         }
 
         self.uses.push(instance::Use {
             asset,
             el_base,
-            rec_base,
             slot_base,
             parent_slot,
-            scope,
         });
 
         let nested = std::mem::take(&mut self.assets[asset as usize].nested);
@@ -1180,7 +1217,12 @@ mod sprite_tests {
     #[test]
     fn shell_and_symbol_together_reconstruct_the_document() {
         let s = symbol(DOC, "anim");
-        let body = s.split_once('>').unwrap().1.strip_suffix("</symbol>").unwrap();
+        let body = s
+            .split_once('>')
+            .unwrap()
+            .1
+            .strip_suffix("</symbol>")
+            .unwrap();
         let rebuilt = shell(DOC).replace("></svg>", &format!(">{body}</svg>"));
         assert_eq!(rebuilt, DOC);
     }
@@ -1192,11 +1234,15 @@ mod sprite_tests {
         // along inside it, so they have to be legal XML characters.
         let out = sprite(&[symbol(DOC, "a")]);
         assert!(
-            !out.chars().any(|c| c.is_control() && c != '\t' && c != '\n' && c != '\r'),
+            !out.chars()
+                .any(|c| c.is_control() && c != '\t' && c != '\n' && c != '\r'),
             "sprite carries a character XML 1.0 forbids"
         );
         for mark in [svg::ID_MARK, svg::CLONE_MARK] {
-            assert!(mark.chars().all(|c| c.is_ascii_graphic()), "{mark:?} is not XML-safe");
+            assert!(
+                mark.chars().all(|c| c.is_ascii_graphic()),
+                "{mark:?} is not XML-safe"
+            );
         }
     }
 
@@ -1221,14 +1267,19 @@ mod sprite_tests {
         // there instead of failing.
         let one = crate::backend::pretty::markup_plain(&sprite(&[symbol(DOC, "a")]));
         let two = merge_sprite(&one, &symbol(DOC, "b"), "b");
-        assert!(two.contains("id=\"a\""), "merging into a formatted sprite lost `a`");
+        assert!(
+            two.contains("id=\"a\""),
+            "merging into a formatted sprite lost `a`"
+        );
         assert_eq!(two.matches("<symbol ").count(), 2);
     }
 
     #[test]
     fn a_sprite_holds_several_symbols_and_does_not_render() {
         let out = sprite(&[symbol(DOC, "a"), symbol(DOC, "b")]);
-        assert!(out.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\" style=\"display:none\">"));
+        assert!(
+            out.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\" style=\"display:none\">")
+        );
         assert!(out.contains("id=\"a\"") && out.contains("id=\"b\""));
         assert!(out.ends_with("</svg>"));
     }

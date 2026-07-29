@@ -16,8 +16,8 @@ fn fixtures_dir() -> std::path::PathBuf {
 
 fn lower_fixture(name: &str) -> ir::Module {
     let path = fixtures_dir().join(format!("{name}.json"));
-    let json = fs::read_to_string(&path)
-        .unwrap_or_else(|_| panic!("missing fixture: {}", path.display()));
+    let json =
+        fs::read_to_string(&path).unwrap_or_else(|_| panic!("missing fixture: {}", path.display()));
     let anim: Animation = serde_json::from_str(&json).expect("parse animation");
     ir::lower(&anim).expect("lower should succeed")
 }
@@ -70,7 +70,12 @@ fn assert_module_well_formed(m: &ir::Module) {
                     check_prop(size, expr_count);
                     check_prop(position, expr_count);
                 }
-                ir::ShapeNode::Rectangle { size, position, radius, .. } => {
+                ir::ShapeNode::Rectangle {
+                    size,
+                    position,
+                    radius,
+                    ..
+                } => {
                     check_prop(size, expr_count);
                     check_prop(position, expr_count);
                     check_prop(radius, expr_count);

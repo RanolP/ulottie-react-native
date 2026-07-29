@@ -263,7 +263,7 @@ pub enum ShapeNode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShapeDirection {
-    Normal,  // 1
+    Normal,   // 1
     Reversed, // 3
 }
 
@@ -416,19 +416,13 @@ pub enum LayerKind {
         height: u32,
     },
     /// Type 2: image asset.
-    Image {
-        asset: String,
-    },
+    Image { asset: String },
     /// Type 3: null (no visible content; serves as parent or scaffolding).
     Null,
     /// Type 4: shape-bearing layer.
-    Shape {
-        shapes: Vec<ShapeNode>,
-    },
+    Shape { shapes: Vec<ShapeNode> },
     /// Anything else we don't yet model (text, audio, camera, …).
-    Other {
-        ty: u32,
-    },
+    Other { ty: u32 },
 }
 
 // ---------------------------------------------------------------------------
@@ -527,7 +521,10 @@ impl ExprTable {
     pub(crate) fn retain(&mut self, keep: &std::collections::BTreeSet<u32>) -> HashMap<u32, u32> {
         let mut map = HashMap::new();
         let mut kept = Vec::with_capacity(keep.len());
-        for (i, e) in std::mem::take(&mut self.expressions).into_iter().enumerate() {
+        for (i, e) in std::mem::take(&mut self.expressions)
+            .into_iter()
+            .enumerate()
+        {
             if keep.contains(&(i as u32)) {
                 map.insert(i as u32, kept.len() as u32);
                 kept.push(e);
@@ -590,8 +587,16 @@ pub struct Asset {
 
 #[derive(Debug, Clone)]
 pub enum AssetKind {
-    Precomp { layers: Vec<Layer> },
-    Image { path: Option<String>, filename: Option<String>, width: u32, height: u32, embedded: bool },
+    Precomp {
+        layers: Vec<Layer>,
+    },
+    Image {
+        path: Option<String>,
+        filename: Option<String>,
+        width: u32,
+        height: u32,
+        embedded: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------

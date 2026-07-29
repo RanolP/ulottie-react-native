@@ -32,14 +32,23 @@ use crate::ir;
 /// rewrite is a splice.
 pub enum Ref {
     /// `effect('name')('param')` — the literals are right there.
-    Direct { name: Span, param: Span, name_str: String, param_str: String },
+    Direct {
+        name: Span,
+        param: Span,
+        name_str: String,
+        param_str: String,
+    },
     /// `var names = ['a', 'b', …]` indexed into `effect(names[i])('param')`.
     ///
     /// After Effects generates this for anything applied across a set of
     /// layers: the names are constants, the loop bound is `names.length`, and
     /// only the index varies. Replacing the elements with effect indices makes
     /// the lookup positional without touching the loop.
-    Table { elems: Vec<(Span, String)>, param: Span, param_str: String },
+    Table {
+        elems: Vec<(Span, String)>,
+        param: Span,
+        param_str: String,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -66,12 +75,18 @@ impl Ref {
     /// effects disagree about where the parameter sits.
     pub fn resolve(&self, effects: &[ir::Effect]) -> Option<Vec<u32>> {
         match self {
-            Ref::Direct { name_str, param_str, .. } => {
+            Ref::Direct {
+                name_str,
+                param_str,
+                ..
+            } => {
                 let e = effect_index(effects, name_str)?;
                 let p = param_index(&effects[e as usize], param_str)?;
                 Some(vec![e, p])
             }
-            Ref::Table { elems, param_str, .. } => {
+            Ref::Table {
+                elems, param_str, ..
+            } => {
                 let mut out = Vec::with_capacity(elems.len() + 1);
                 let mut param = None;
                 for (_, name) in elems {
@@ -172,7 +187,9 @@ pub fn literals(body: &str) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
     let mut chars = body.chars().peekable();
     while let Some(c) = chars.next() {
-        let Some(quote) = (matches!(c, '\'' | '"' | '`')).then_some(c) else { continue };
+        let Some(quote) = (matches!(c, '\'' | '"' | '`')).then_some(c) else {
+            continue;
+        };
         let mut lit = String::new();
         while let Some(c) = chars.next() {
             match c {
@@ -364,7 +381,9 @@ fn tables(out: &mut Out) {
     for (name, param, param_str) in indexed {
         // One table, one parameter literal. Two uses would need two rewrites
         // of the same elements, which is a case AE does not generate.
-        let Some(elems) = out.arrays.remove(&name) else { continue };
+        let Some(elems) = out.arrays.remove(&name) else {
+            continue;
+        };
         let escapes = out
             .idents
             .iter()
@@ -372,7 +391,11 @@ fn tables(out: &mut Out) {
         if escapes {
             continue;
         }
-        out.refs.push(Ref::Table { elems, param, param_str });
+        out.refs.push(Ref::Table {
+            elems,
+            param,
+            param_str,
+        });
     }
 }
 
@@ -380,16 +403,19 @@ fn tables(out: &mut Out) {
 /// parameter literal.
 fn as_table_use<'a>(c: &ast::CallExpression<'a>) -> Option<(String, Span, Span, String)> {
     let param = only_string(&c.arguments)?;
-    let ast::Expression::CallExpression(inner) = &c.callee else { return None };
+    let ast::Expression::CallExpression(inner) = &c.callee else {
+        return None;
+    };
     if !is_own_effect(&inner.callee) || inner.arguments.len() != 1 {
         return None;
     }
-    let ast::Expression::ComputedMemberExpression(m) =
-        inner.arguments.first()?.as_expression()?
+    let ast::Expression::ComputedMemberExpression(m) = inner.arguments.first()?.as_expression()?
     else {
         return None;
     };
-    let ast::Expression::Identifier(id) = &m.object else { return None };
+    let ast::Expression::Identifier(id) = &m.object else {
+        return None;
+    };
     Some((
         id.name.to_string(),
         span_at(id.span()),
@@ -413,7 +439,9 @@ fn all_strings<'a>(a: &ast::ArrayExpression<'a>) -> Option<Vec<(Span, String)>> 
 /// `effect(<string>)(<string>)`, on the owning layer.
 fn as_ref<'a>(c: &ast::CallExpression<'a>) -> Option<Ref> {
     let param = only_string(&c.arguments)?;
-    let ast::Expression::CallExpression(inner) = &c.callee else { return None };
+    let ast::Expression::CallExpression(inner) = &c.callee else {
+        return None;
+    };
     if !is_own_effect(&inner.callee) {
         return None;
     }
@@ -456,7 +484,10 @@ fn span_of(s: &ast::StringLiteral) -> Span {
 }
 
 fn span_at(sp: oxc_span::Span) -> Span {
-    Span { start: sp.start as usize, end: sp.end as usize }
+    Span {
+        start: sp.start as usize,
+        end: sp.end as usize,
+    }
 }
 
 #[cfg(test)]
@@ -465,7 +496,8 @@ mod tests {
 
     #[test]
     fn it_finds_a_reference_to_the_owning_layer() {
-        let body = "var $bm_rt;\n$bm_rt = effect('Position - Overshoot')('ADBE Slider Control-0001');";
+        let body =
+            "var $bm_rt;\n$bm_rt = effect('Position - Overshoot')('ADBE Slider Control-0001');";
         let r = refs(body);
         assert_eq!(r.len(), 1);
         assert!(matches!(&r[0], Ref::Direct { name_str, param_str, .. }
@@ -482,7 +514,8 @@ mod tests {
     fn it_leaves_another_layers_effects_alone() {
         // Resolving this against the owning layer's table would point it at
         // whatever happens to sit at that index on the wrong layer.
-        let body = "var $bm_rt;\n$bm_rt = thisComp.layer('traceNull').effect('Trace Path')('Progress');";
+        let body =
+            "var $bm_rt;\n$bm_rt = thisComp.layer('traceNull').effect('Trace Path')('Progress');";
         assert!(refs(body).is_empty());
     }
 
@@ -544,7 +577,10 @@ $bm_rt = out;
         // every effect puts the parameter in the same slot.
         let fx = [
             effect("Shape Layer 1: Path 1 [1.0]", &["ADBE Layer Control-0001"]),
-            effect("Shape Layer 1: Path 1 [1.1]", &["x", "ADBE Layer Control-0001"]),
+            effect(
+                "Shape Layer 1: Path 1 [1.1]",
+                &["x", "ADBE Layer Control-0001"],
+            ),
         ];
         assert_eq!(refs(TABLE)[0].resolve(&fx), None);
     }
@@ -613,7 +649,10 @@ $bm_rt = label;
     #[test]
     fn literals_are_found_whatever_quotes_them() {
         let lits = literals("var a = 'x', b = \"y\", c = `z`;");
-        assert_eq!(lits.iter().map(String::as_str).collect::<Vec<_>>(), ["x", "y", "z"]);
+        assert_eq!(
+            lits.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["x", "y", "z"]
+        );
     }
 
     #[test]
@@ -625,7 +664,8 @@ $bm_rt = label;
 
     #[test]
     fn rewriting_replaces_both_literals() {
-        let body = "var $bm_rt;\n$bm_rt = effect('Position - Overshoot')('ADBE Slider Control-0001');";
+        let body =
+            "var $bm_rt;\n$bm_rt = effect('Position - Overshoot')('ADBE Slider Control-0001');";
         let r = refs(body);
         let out = rewrite(body, &[(&r[0], vec![2, 0])]);
         assert_eq!(out, "var $bm_rt;\n$bm_rt = effect(2)(0);");
@@ -636,7 +676,10 @@ $bm_rt = label;
         let body = "var $bm_rt;\n$bm_rt = sum(effect('A')('x'), effect('B')('y'));";
         let r = refs(body);
         let out = rewrite(body, &[(&r[0], vec![0, 1]), (&r[1], vec![2, 3])]);
-        assert_eq!(out, "var $bm_rt;\n$bm_rt = sum(effect(0)(1), effect(2)(3));");
+        assert_eq!(
+            out,
+            "var $bm_rt;\n$bm_rt = sum(effect(0)(1), effect(2)(3));"
+        );
     }
 }
 
@@ -702,7 +745,9 @@ pub fn branches(body: &str) -> Vec<Branch> {
     }
     let mut out = Vec::new();
     for stmt in &parsed.program.body {
-        let ast::Statement::IfStatement(s) = stmt else { continue };
+        let ast::Statement::IfStatement(s) = stmt else {
+            continue;
+        };
         let test = span_at(s.test.span());
         let src = &body[test.start..test.end];
         if locals.iter().any(|l| mentions_word(src, l)) {
@@ -720,9 +765,14 @@ pub fn branches(body: &str) -> Vec<Branch> {
 
 /// An arm's statements, without the block that held them.
 fn arm_span(stmt: &ast::Statement) -> Span {
-    let ast::Statement::BlockStatement(b) = stmt else { return span_at(stmt.span()) };
+    let ast::Statement::BlockStatement(b) = stmt else {
+        return span_at(stmt.span());
+    };
     match (b.body.first(), b.body.last()) {
-        (Some(f), Some(l)) => Span { start: f.span().start as usize, end: l.span().end as usize },
+        (Some(f), Some(l)) => Span {
+            start: f.span().start as usize,
+            end: l.span().end as usize,
+        },
         // An empty block: a span that selects nothing.
         _ => Span { start: 0, end: 0 },
     }
