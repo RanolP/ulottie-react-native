@@ -166,6 +166,11 @@ pub struct Layer {
     pub masks_properties: Option<Vec<MaskProperty>>,
     pub td: Option<u8>,
     pub tt: Option<u8>,
+    /// Which layer mattes this one, by `ind`. Newer exports name it outright
+    /// rather than relying on it being the layer immediately above — and when
+    /// they do it need not be adjacent, and one source may matte several
+    /// layers.
+    pub tp: Option<u32>,
     /// Time remap (precomp layers): the composition's own time, in **seconds**,
     /// as a function of the parent's time. Multiply by the frame rate to get
     /// the inner frame.

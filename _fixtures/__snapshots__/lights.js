@@ -12,8 +12,13 @@ const A0=(x,S)=>{oShape(x,S[0]);oLayerTx(x,S[1])};
 
 const M =
   '<svg viewBox="0 0 800 600" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="overflow:hidden">' +
-    '<g transform="translate(400,300)">' +
-      '<path fill="none" stroke="#1a221b" stroke-width="4"/>' +
+    '<g>' +
+      '<g transform="translate(222.11,-59.24)">' +
+        '<g transform="translate(-226.38,67.81)">' +
+          '<rect x="-3.875" y="-2.438" width="7.75" height="4.875" rx="1" ry="1" fill="#3d3d3d"/>' +
+        '</g>' +
+        '<path d="M-224,72C-228,72-229.5,72.5-229.5,72.5C-229.5,72.5-236,75.5-236,80.5C-236,85.5-231.5,97-227.5,98.5C-223.5,100-218,85.5-217.5,82.5C-217,79.5-220,72-224,72Z" fill="#f88311"/>' +
+      '</g>' +
     '</g>' +
     '<g>' +
       '<g transform="translate(225.56,-58)">' +
@@ -47,18 +52,12 @@ const M =
         '<path d="M-224,72C-228,72-229.5,72.5-229.5,72.5C-229.5,72.5-236,75.5-236,80.5C-236,85.5-231.5,97-227.5,98.5C-223.5,100-218,85.5-217.5,82.5C-217,79.5-220,72-224,72Z" fill="#f82c11"/>' +
       '</g>' +
     '</g>' +
-    '<g/>' +
-    '<g>' +
-      '<g transform="translate(222.11,-59.24)">' +
-        '<g transform="translate(-226.38,67.81)">' +
-          '<rect x="-3.875" y="-2.438" width="7.75" height="4.875" rx="1" ry="1" fill="#3d3d3d"/>' +
-        '</g>' +
-        '<path d="M-224,72C-228,72-229.5,72.5-229.5,72.5C-229.5,72.5-236,75.5-236,80.5C-236,85.5-231.5,97-227.5,98.5C-223.5,100-218,85.5-217.5,82.5C-217,79.5-220,72-224,72Z" fill="#f88311"/>' +
-      '</g>' +
+    '<g transform="translate(400,300)">' +
+      '<path fill="none" stroke="#1a221b" stroke-width="4"/>' +
     '</g>' +
   '</svg>';
 
-const D = "0gskt10gsni90q100q8gh3000600gt7gt7gj70io6io6ki40io6io6k86tl2v25v2gp2v200jm100000km100086k3i1202s50c04aaaa2e111334k6u62004000ikv1000eiqf06002000iooj10002000ighn20002000ighn202004000iqru5000eiqf02004000ikko4000eiqf02004000iguu2000eiqf02004000ignn1000eiqf0600200k1i1000200k1e000200k1a02004000ioqh60000202004000igiu40000202004000iosi30000202004000imku100002026gi3ol2080gv120082ig2226gr5oi20mgi980o7om1sn1qh3oi20qh3qh30qh3qh30qh3oi2020484oh2626icoi2080gv1a82ig2a80gv1c82ig2c80gv1e82ig2e80gv1g182ig2g1i36luj1uvp20i36lkru6uruv10kdavnh1gq5tuh1qq5vmi1qk6lsh1ir7tvg1in6g50000j6v4t19s3v40000k6g5u1ar3i36usk2upp30i36ofuqp30i36hh9upp30i36vgk2quv20s1ui3c8a8ccccaeeeeos22qv1mg2ig2g9o84ug2ig2oo26ik2ig2sao88qk2ig2os2akl2sl2ig2udos2ckm2sm2ig2qfos2ekn2sn2ig2mh1os2g1ko2so2ig2ij1og3i1gv1s5uk1sh3k18kp2up2oq2go1sh3m1aou2up2oq2sp1sh3o1civ2up2oq2or1sh3q1esv2up2oq2kt1sh1s10mg3up2oq2";
+const D = "0gskt10gsni90q100m8sg3000600gt7gt7gj70io6io6ki40io6io6k86tl2v25v2gp2v200jm100000km100086k3i120k3s50a00aaaa0e1114k6u62004000ikv1000eiqf06002000iooj10002000ighn20002000ighn202004000iqru5000eiqf02004000ikko4000eiqf02004000iguu2000eiqf02004000ignn1000eiqf0600200k1i1000200k1e000200k1a02004000ioqh60000202004000igiu40000202004000iosi30000202004000imku100002026gi3ol2080su120082uv1226gr5oi20mgi980o7om1sn1qh3oi20qh3qh30qh3qh30qh3oi2020484kh2626icoi2080su1a82uv1a80su1c82uv1c80su1e82uv1e80su1g182uv1g1i36luj1uvp20i36lkru6uruv10kdavnh1gq5tuh1qq5vmi1qk6lsh1ir7tvg1in6g50000j6v4t19s3v40000k6g5u1ar3i36usk2upp30i36ofuqp30i36hh9upp30i36vgk2quv20s1qi3c8a8ccccaeeeeos22mv1ig2uv1s8o84qg2uv1oo26uj2uv1oao88mk2uv1os2agl2ol2uv1qdos2cgm2om2uv1mfos2egn2on2uv1ih1os2g1go2oo2uv1ui1og3i1su1s5qk1sh3k18gp2qp2kq2sn1sh3m1aku2qp2kq2op1sh3o1cuu2qp2kq2kr1sh3q1eov2qp2kq2gt1sh1s10ig3qp2kq2";
 
 const E = [
   function(value, thisLayer, thisProperty, frame, ctx) {

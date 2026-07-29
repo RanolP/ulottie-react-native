@@ -77,8 +77,8 @@ impl Planner<'_> {
 
     /// The frame each clock slot reads at composition frame `f`. Mirrors the
     /// `T` loop in core.js: slot 0 is the composition itself, and every other
-    /// slot is its parent shifted by the instance's start time and wrapped to
-    /// the precomp's own span — unless a time remap replaces both.
+    /// slot is its parent less that layer's own start time — unless a time
+    /// remap replaces the clock outright.
     fn slot_times(&self, f: f64) -> Vec<f64> {
         let mut t = Vec::with_capacity(self.timelines.len() + 1);
         t.push(f);
@@ -90,13 +90,7 @@ impl Planner<'_> {
                 t.push(secs * self.payload.c.fr);
                 continue;
             }
-            let mut x = parent - row[1];
-            let (lo, hi) = (row[2], row[3]);
-            let period = hi - lo;
-            if period > 0.0 && x >= hi {
-                x = lo + (x - lo) % period;
-            }
-            t.push(x);
+            t.push(parent - row[1]);
         }
         t
     }
@@ -224,6 +218,23 @@ impl Planner<'_> {
                     out.push(("x2".into(), svg::n(b2[0])));
                     out.push(("y2".into(), svg::n(b2[1])));
                 }
+            }
+
+            // One stop of a keyframed ramp. Mirrors `oRamp`, which writes no
+            // `stop-opacity` — see there for why a ramp with alpha stops does
+            // not take this path at all.
+            op::RAMP => {
+                let v = self.vector(prop(0), f, &[0.0, 0.0, 0.0, 0.0]);
+                out.push(("offset".into(), svg::n(v[0])));
+                out.push((
+                    "stop-color".into(),
+                    format!(
+                        "rgb({},{},{})",
+                        (v[1] * 255.0 + 0.5) as i64,
+                        (v[2] * 255.0 + 0.5) as i64,
+                        (v[3] * 255.0 + 0.5) as i64
+                    ),
+                ));
             }
 
             // These read the layer table rather than carrying a second copy of

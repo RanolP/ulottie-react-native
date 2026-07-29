@@ -18,11 +18,16 @@ use super::{Arg, Binding, Caps, Effect, EffectParam, LayerRecord, Planner, op};
 /// Clock a subtree runs on.
 #[derive(Clone, Copy)]
 pub enum TimeCtx {
-    /// The composition clock; layers hide themselves outside `[ip, op)`.
+    /// The composition clock, slot 0.
     Root,
-    /// Inside a precomp: shifted by the instance's start time, wrapped to each
-    /// layer's own span, and never range-hidden (matching the reference
-    /// renderer's precomp behaviour).
+    /// Inside a precomp: the parent's clock, shifted by the precomp layer's
+    /// own start time.
+    ///
+    /// A layer's `st` shifts *nothing else*. The reference renderer subtracts
+    /// it from the frame and from every keyframe time it is compared against,
+    /// so the two cancel — which is why `car-5` keyframes a layer at t=55..70
+    /// and gives it `st: 55` and still means composition time. The one place
+    /// it survives is here, where a precomp hands a clock to its children.
     Inner { parent: u32, offset: f64 },
 }
 
@@ -36,6 +41,9 @@ struct LayerNode {
     dead: bool,
     /// Index into the expression layer table, when one was built.
     record: Option<u32>,
+    /// Timeline slot the layer's own bindings run on. Kept so a *different*
+    /// layer can re-emit this one's transform — see `wrap_ancestors`.
+    slot: u32,
 }
 
 impl Planner<'_> {
@@ -54,11 +62,50 @@ impl Planner<'_> {
             TimeCtx::Root => 0,
             TimeCtx::Inner { .. } => self.next_scope(),
         };
+        // Parenting contributes a transform and nothing else — in After Effects
+        // a layer is painted at its own place in the list whether or not it has
+        // a parent. Nesting the child inside the parent's group is the cheap way
+        // to inherit that transform, and it is sound only while it leaves the
+        // layers in the order they have to be painted in. When it does not, each
+        // child stays where it belongs and carries its ancestors' transforms on
+        // wrappers of its own.
+        //
+        // The decision comes first because it changes what `build_layer` emits:
+        // whether a layer can be seen at all is a question about its span and
+        // the composition's, which needs nothing built.
+        // A layer is hidden when its span is narrower than the composition it
+        // is in. The document's is on the payload; a precomp asset does not
+        // carry one, so it is taken to be the union of its layers' — which is
+        // what makes "covers the whole composition" mean "always on" in both.
+        let span = match ctx {
+            TimeCtx::Root => (self.payload.c.ip, self.payload.c.op),
+            TimeCtx::Inner { .. } => layers.iter().fold((f64::MAX, f64::MIN), |(lo, hi), l| {
+                (lo.min(l.ip), hi.max(l.op))
+            }),
+        };
+        let dead: Vec<bool> = match ctx {
+            TimeCtx::Root => layers
+                .iter()
+                .map(|l| l.op <= span.0 || l.ip >= span.1)
+                .collect(),
+            // A precomp's clock is the instance's, so no layer of it can be
+            // ruled out at compile time the way a root layer can.
+            TimeCtx::Inner { .. } => vec![false; layers.len()],
+        };
+        let nested = nesting_preserves_order(layers, &dead);
+
+        // A null draws nothing: it is in the document only so its children can
+        // inherit its transform. Flat mode gives them wrappers of their own, so
+        // the null's own group would be an empty node writing a matrix nobody
+        // reads — starfish parents thirteen layers to one. Suppressing the
+        // transform leaves the group empty and unpinned, which pruning removes.
+        let inert = |i: usize| !nested && layers[i].ty == 3;
+
         let outer_scope = self.scope;
         self.scope = scope;
         let mut nodes = Vec::with_capacity(layers.len());
-        for l in layers {
-            nodes.push(self.build_layer(l, ctx)?);
+        for (i, l) in layers.iter().enumerate() {
+            nodes.push(self.build_layer(l, ctx, inert(i), span)?);
         }
         self.scope = outer_scope;
 
@@ -73,48 +120,224 @@ impl Planner<'_> {
                 }
             }
         }
-        // Track mattes. A layer carrying `td` is never drawn on its own: it is
-        // the matte for the layer immediately after it in the list, which
-        // carries `tt` with the mode. Turning the pair into a `<mask>` has to
-        // happen before roots are collected, so the matte source is diverted
-        // into `<defs>` rather than into the picture.
+        // Track mattes. A layer carrying `td` is a matte: it is never drawn on
+        // its own, it masks another layer, which carries `tt` with the mode.
+        // Turning the pair into a `<mask>` has to happen before roots are
+        // collected, so the matte source goes into `<defs>` rather than into
+        // the picture.
+        //
+        // Which layer it mattes is `tp`, naming it by `ind` — and only when
+        // that is absent is it the layer immediately above. `car-13` relies on
+        // both halves of that: one of its mattes is four layers away from what
+        // it masks, and another masks two layers at once.
         let mut matte_source = vec![false; layers.len()];
+        // Layers whose ancestor transforms are already on wrappers of their
+        // own, and so must not be put under a shared one as well.
+        let mut chained = vec![false; layers.len()];
+        // Masks built so far, by (source layer, mode). A source can serve
+        // several layers, and a mask is referenced by id, so the second one to
+        // ask for it reuses the first's rather than needing its own copy of a
+        // subtree that can only be in one place.
+        let mut masks: HashMap<(usize, u8), String> = HashMap::new();
         for i in 0..layers.len() {
             let Some(tt) = layers[i].tt else { continue };
-            let Some(j) = i.checked_sub(1) else { continue };
-            if layers[j].td.is_none() || nodes[i].dead || nodes[j].dead {
+            let Some(j) = layers[i]
+                .tp
+                .map(|p| p as usize)
+                .or_else(|| i.checked_sub(1))
+                .filter(|&j| j < layers.len())
+            else {
+                continue;
+            };
+            if nodes[i].dead || nodes[j].dead {
                 continue;
             }
-            nodes[i].mounted = self.apply_matte(nodes[i].outer, nodes[j].outer, tt);
+            if !nested {
+                // A mask is resolved in composition space, and both halves of
+                // the pair have to be *in* it before they meet: the matte is a
+                // sibling, authored where it is drawn. So each gets its chain
+                // privately, under the mask rather than over it — which is
+                // also why neither can join a shared wrapper afterwards.
+                nodes[i].outer = self.wrap_ancestors(layers, &nodes, i);
+                chained[i] = true;
+            }
+            let id = match masks.get(&(j, tt)) {
+                Some(id) => id.clone(),
+                None => {
+                    if !nested && !matte_source[j] {
+                        nodes[j].outer = self.wrap_ancestors(layers, &nodes, j);
+                    }
+                    let id = self.matte_mask(nodes[j].outer, tt);
+                    masks.insert((j, tt), id.clone());
+                    id
+                }
+            };
+            nodes[i].mounted = self.masked(nodes[i].outer, &id);
             matte_source[j] = true;
+        }
+        // A matte is out of the picture whether or not anything ended up
+        // masked by it — the reference renderer moves every `td` layer into
+        // `<defs>` on sight. `car-13` has one nothing points at, and drawing
+        // it put a white card over the animation.
+        for (i, l) in layers.iter().enumerate() {
+            if l.td.is_some() {
+                matte_source[i] = true;
+            }
         }
 
         // The reference renderer appends layers back-to-front, so the first
-        // layer in the list ends up on top. Child layers are appended into
-        // their parent's outer group after the parent's own content.
+        // layer in the list ends up on top.
         let mut roots = Vec::new();
+        // Ancestor wrappers currently open, outermost first, as
+        // `(ancestor layer, element)`. Consecutive layers that need the same
+        // ancestor share the wrapper: the walk closes only what the next layer
+        // does not need, so thirteen layers under one null cost one wrapper
+        // rather than thirteen — and a composition whose layers all share the
+        // whole chain gets exactly the tree nesting would have built.
+        let mut open: Vec<(usize, usize)> = Vec::new();
         for i in (0..layers.len()).rev() {
-            if nodes[i].dead || matte_source[i] {
+            // An inert layer is not in the document at all. Walking it would
+            // open a wrapper for its ancestors that nothing then fills —
+            // starfish's ten nulls sit between the two layers that do need one,
+            // and closing and reopening around them left an empty group behind
+            // that still wrote a matrix every frame.
+            if nodes[i].dead || matte_source[i] || inert(i) {
                 continue;
             }
-            match layers[i].pr {
-                Some(pr) if (pr as usize) < layers.len() && !nodes[pr as usize].dead => {
-                    // Into the parent's own group, so the child inherits its
-                    // transform — and, for a matted parent, its mask. AE mattes
-                    // only the layer itself; no fixture parents to a matted
-                    // layer, so that difference is untested and unhandled.
-                    let parent = nodes[pr as usize].outer;
-                    let child = nodes[i].mounted;
-                    self.els[parent].children.push(child);
+            if nested {
+                match layers[i].pr {
+                    Some(pr) if (pr as usize) < layers.len() && !nodes[pr as usize].dead => {
+                        // Into the parent's own group, so the child inherits its
+                        // transform — and, for a matted parent, its mask. AE mattes
+                        // only the layer itself; no fixture parents to a matted
+                        // layer, so that difference is untested and unhandled.
+                        let parent = nodes[pr as usize].outer;
+                        let child = nodes[i].mounted;
+                        self.els[parent].children.push(child);
+                    }
+                    _ => roots.push(nodes[i].mounted),
                 }
-                _ => roots.push(nodes[i].mounted),
+                continue;
+            }
+
+            let chain = if chained[i] {
+                Vec::new()
+            } else {
+                ancestors(layers, &dead, i)
+            };
+            let mut k = 0;
+            while k < open.len() && k < chain.len() && open[k].0 == chain[k] {
+                k += 1;
+            }
+            open.truncate(k);
+            for &a in &chain[k..] {
+                let w = self.el("g");
+                self.emit_ancestor_transform(w, layers, &nodes, a);
+                match open.last() {
+                    Some(&(_, parent)) => self.els[parent].children.push(w),
+                    None => roots.push(w),
+                }
+                open.push((a, w));
+            }
+            let node = nodes[i].mounted;
+            match open.last() {
+                Some(&(_, parent)) => self.els[parent].children.push(node),
+                None => roots.push(node),
             }
         }
         Ok(roots)
     }
 
-    fn build_layer(&mut self, layer: &data::Layer, ctx: TimeCtx) -> Result<LayerNode> {
-        let (c_ip, c_op) = (self.payload.c.ip, self.payload.c.op);
+    /// A layer transform whose properties live in the expression layer table:
+    /// baked into the markup when nothing about it can move, a reference to
+    /// the table's record when something can.
+    fn emit_record_transform(
+        &mut self,
+        el: usize,
+        p: Option<Prop>,
+        a: Option<Prop>,
+        s: Option<Prop>,
+        r: Option<Prop>,
+        rec: u32,
+        slot: u32,
+    ) {
+        let dp = p.unwrap_or(Prop::Vector(vec![0.0, 0.0, 0.0]));
+        let da = a.unwrap_or(Prop::Vector(vec![0.0, 0.0, 0.0]));
+        let ds = s.unwrap_or(Prop::Vector(vec![100.0, 100.0, 100.0]));
+        let dr = r.unwrap_or(Prop::Scalar(0.0));
+        if dp.is_static() && da.is_static() && ds.is_static() && dr.is_static() {
+            let m = matrix(&dp, &da, &ds, &dr);
+            if !is_identity(&m) {
+                self.set(el, "transform", svg::transform_str(&m));
+            }
+        } else {
+            self.bind(op::LAYER_TX, el, vec![Arg::Num(rec as f64)], slot);
+        }
+    }
+
+    /// One ancestor's transform, on an element that is not the ancestor.
+    ///
+    /// It is re-emitted rather than shared because an element can only be in
+    /// one place in a document and the ancestor is already in its own. The
+    /// matrix is therefore computed once per wrapper per frame; sharing a
+    /// wrapper between consecutive layers is what keeps that from multiplying,
+    /// and `prune_list` drops the wrapper outright when the transform turns
+    /// out to be a static identity.
+    fn emit_ancestor_transform(
+        &mut self,
+        el: usize,
+        layers: &[data::Layer],
+        nodes: &[LayerNode],
+        a: usize,
+    ) {
+        match nodes[a].record {
+            // With expressions the ancestor's properties are already in the
+            // layer table — read them back rather than classifying the same
+            // wire entries a second time.
+            Some(rec) => {
+                let e = &self.layers[rec as usize];
+                let (p, an, s, r) = (e.p.clone(), e.a.clone(), e.sc.clone(), e.r.clone());
+                self.emit_record_transform(el, p, an, s, r, rec, nodes[a].slot);
+            }
+            None => self.emit_transform(
+                el,
+                layers[a].p.as_ref(),
+                layers[a].a.as_ref(),
+                layers[a].sc.as_ref(),
+                layers[a].r.as_ref(),
+                nodes[a].slot,
+            ),
+        }
+    }
+
+    /// Wrap layer `i` in one `<g>` per ancestor, each carrying that ancestor's
+    /// transform, outermost last. Returns the outermost wrapper.
+    ///
+    /// Used where a layer cannot join a shared wrapper — see the matte pass.
+    fn wrap_ancestors(&mut self, layers: &[data::Layer], nodes: &[LayerNode], i: usize) -> usize {
+        let dead: Vec<bool> = nodes.iter().map(|n| n.dead).collect();
+        let mut node = nodes[i].outer;
+        for &a in ancestors(layers, &dead, i).iter().rev() {
+            let w = self.el("g");
+            self.emit_ancestor_transform(w, layers, nodes, a);
+            self.els[w].children.push(node);
+            node = w;
+        }
+        node
+    }
+
+    /// `inert` marks a layer that will draw nothing and be inherited from by
+    /// nobody — its group is emitted empty so pruning can take it. `span` is
+    /// the composition's own `[ip, op)`, against which a narrower layer needs
+    /// hiding — the document's for a root layer, the asset's inside a precomp.
+    fn build_layer(
+        &mut self,
+        layer: &data::Layer,
+        ctx: TimeCtx,
+        inert: bool,
+        span: (f64, f64),
+    ) -> Result<LayerNode> {
+        let (c_ip, c_op) = span;
         let (slot, range_hidden) = match ctx {
             TimeCtx::Root => {
                 // A layer whose span never overlaps the composition can never
@@ -126,6 +349,7 @@ impl Planner<'_> {
                         mounted: outer,
                         dead: true,
                         record: None,
+                        slot: 0,
                     });
                 }
                 let hides = layer.ip > c_ip || layer.op < c_op;
@@ -135,7 +359,12 @@ impl Planner<'_> {
                 self.caps |= Caps::TIMELINE;
                 self.timelines
                     .push([parent as f64, offset, layer.ip, layer.op]);
-                (self.timelines.len() as u32, false)
+                // A precomp's layers come and go on the precomp's own clock,
+                // exactly as the document's do on its. Treating them as always
+                // present drew every one of `car-4`'s four staggered states at
+                // once, each frozen at the first frame it was authored for.
+                let hides = layer.ip > c_ip || layer.op < c_op;
+                (self.timelines.len() as u32, hides)
             }
         };
 
@@ -176,15 +405,21 @@ impl Planner<'_> {
         // The DISPLAY binding itself stays ungated — it is what turns the
         // group back on.
         let outer_gate = self.gate;
-        if range_hidden {
+        if range_hidden && !inert {
             self.bind(
                 op::DISPLAY,
                 outer,
                 vec![Arg::Num(layer.ip), Arg::Num(layer.op)],
                 slot,
             );
-            self.gates.push([layer.ip, layer.op]);
-            self.gate = self.gates.len() as u32;
+            // The gate table is evaluated against the composition clock, so it
+            // can only speak for layers running on it. A precomp's layers have
+            // a slot of their own; `oDisplay` reads that slot and hides them
+            // correctly, they just do not get the skip.
+            if matches!(ctx, TimeCtx::Root) {
+                self.gates.push([layer.ip, layer.op]);
+                self.gate = self.gates.len() as u32;
+            }
         }
 
         if let Some(rec) = record {
@@ -198,19 +433,19 @@ impl Planner<'_> {
             let rp = layer.r.as_ref().map(|x| self.classify(x, 1));
             let op_p = layer.o.as_ref().map(|x| self.classify(x, 1));
 
-            let dp = pp.clone().unwrap_or(Prop::Vector(vec![0.0, 0.0, 0.0]));
-            let da = ap.clone().unwrap_or(Prop::Vector(vec![0.0, 0.0, 0.0]));
-            let ds = sp
-                .clone()
-                .unwrap_or(Prop::Vector(vec![100.0, 100.0, 100.0]));
-            let dr = rp.clone().unwrap_or(Prop::Scalar(0.0));
-            if dp.is_static() && da.is_static() && ds.is_static() && dr.is_static() {
-                let m = matrix(&dp, &da, &ds, &dr);
-                if !is_identity(&m) {
-                    self.set(outer, "transform", svg::transform_str(&m));
-                }
-            } else {
-                self.bind(op::LAYER_TX, outer, vec![Arg::Num(rec as f64)], slot);
+            // The record itself is still built — `thisComp.layer('main')` reads
+            // the table, not the document — but an inert layer's own group
+            // gets nothing written to it.
+            if !inert {
+                self.emit_record_transform(
+                    outer,
+                    pp.clone(),
+                    ap.clone(),
+                    sp.clone(),
+                    rp.clone(),
+                    rec,
+                    slot,
+                );
             }
 
             if has_content {
@@ -232,21 +467,25 @@ impl Planner<'_> {
             e.r = rp;
             e.o = op_p;
         } else {
-            self.emit_transform(
-                outer,
-                layer.p.as_ref(),
-                layer.a.as_ref(),
-                layer.sc.as_ref(),
-                layer.r.as_ref(),
-                slot,
-            );
+            if !inert {
+                self.emit_transform(
+                    outer,
+                    layer.p.as_ref(),
+                    layer.a.as_ref(),
+                    layer.sc.as_ref(),
+                    layer.r.as_ref(),
+                    slot,
+                );
+            }
             if has_content {
                 self.emit_opacity(inner, layer.o.as_ref(), slot);
             }
         }
 
+        // A mask on a layer with nothing in it clips nothing.
         if let Some(masks) = &layer.mk
             && !masks.is_empty()
+            && !inert
         {
             self.emit_masks(inner, masks, slot)?;
         }
@@ -270,13 +509,18 @@ impl Planner<'_> {
                 );
                 self.els[inner].children.push(rect);
             }
+            2 => {
+                if let Some(id) = layer.rf.clone() {
+                    self.build_image(inner, &id);
+                }
+            }
             0 => {
                 if let Some(id) = layer.rf.clone() {
                     let offset = layer.st.unwrap_or(0.0);
                     // Time remap replaces the precomp's clock outright: its
                     // inner time is a function of the outer one rather than a
                     // shift of it. Give it a slot of its own that the children
-                    // then hang off, so the usual offset/loop path is untouched.
+                    // then hang off, so the usual offset path is untouched.
                     let (slot, offset) = match self.remap_slot(layer, slot) {
                         Some(remapped) => (remapped, 0.0),
                         None => (slot, offset),
@@ -326,7 +570,43 @@ impl Planner<'_> {
             mounted: outer,
             dead: false,
             record,
+            slot,
         })
+    }
+
+    /// An image layer: one `<image>` at the asset's natural size.
+    ///
+    /// Nothing about it can vary — the source, the size and the fit are all
+    /// fixed at compile time — so it is pure markup with no binding at all.
+    /// The layer's transform is what moves it, exactly as for a shape.
+    ///
+    /// `preserveAspectRatio` is `xMidYMid slice` because that is lottie-web's
+    /// default for images, not SVG's (`xMidYMid meet`). The two differ the
+    /// moment the layer's scale is not uniform, and the wrong one letterboxes
+    /// where After Effects crops.
+    fn build_image(&mut self, parent: usize, id: &str) {
+        let Some(asset) = self.payload.a.as_ref().and_then(|a| a.get(id)) else {
+            return;
+        };
+        let data::Asset::Image { u, p, w, h, e } = asset else {
+            return;
+        };
+        // `e` marks `p` as a data URI, already complete. Otherwise the two
+        // halves are a directory and a filename, and joining them is all the
+        // resolution Lottie defines — anything further is the page's base URL.
+        let href = match (e, p) {
+            (_, None) => return,
+            (1, Some(p)) => p.clone(),
+            (_, Some(p)) => format!("{}{}", u.clone().unwrap_or_default(), p),
+        };
+        let (w, h) = (*w as f64, *h as f64);
+
+        let img = self.el("image");
+        self.set(img, "width", svg::n(w));
+        self.set(img, "height", svg::n(h));
+        self.set(img, "preserveAspectRatio", "xMidYMid slice");
+        self.set(img, "href", href);
+        self.els[parent].children.push(img);
     }
 
     /// Effects, in the shape `thisLayer.effect('name')('param')` reads.
@@ -620,7 +900,7 @@ impl Planner<'_> {
     /// into it. The filter needs an explicit `userSpaceOnUse` region — the
     /// default is the source's bounding box plus 10%, and outside it the
     /// inverted alpha would read as 0 and hide everything.
-    fn apply_matte(&mut self, target: usize, source: usize, tt: u8) -> usize {
+    fn matte_mask(&mut self, source: usize, tt: u8) -> String {
         let (cw, ch) = (self.payload.c.w as f64, self.payload.c.h as f64);
         let inverted = tt == 2 || tt == 4;
         let alpha = tt == 1 || tt == 2;
@@ -646,13 +926,18 @@ impl Planner<'_> {
         self.set(mask, "height", svg::n(ch));
         self.els[mask].children.push(content);
         self.add_def(mask);
+        id
+    }
 
-        // The mask goes on a wrapper, not on `target`. `target` carries the
-        // layer's own transform, and a mask is resolved in the user space that
-        // transform establishes — so putting it there would rotate and shift
-        // the matte along with the layer, clipping the wrong region entirely.
-        // The matte was authored as a sibling, in the composition's space, and
-        // an untransformed wrapper is what preserves that.
+    /// Put `target` under a mask.
+    ///
+    /// The mask goes on a wrapper, never on `target` itself. `target` carries
+    /// the layer's own transform, and a mask is resolved in the user space that
+    /// transform establishes — so putting it there would rotate and shift the
+    /// matte along with the layer, clipping the wrong region entirely. The
+    /// matte was authored as a sibling, in the composition's space, and an
+    /// untransformed wrapper is what preserves that.
+    fn masked(&mut self, target: usize, id: &str) -> usize {
         let wrapper = self.el("g");
         self.set(wrapper, "mask", format!("url(#{id})"));
         self.els[wrapper].children.push(target);
@@ -1306,6 +1591,21 @@ impl Planner<'_> {
             );
         }
 
+        // A keyframed ramp is one binding per stop: each stop's position and
+        // colour is a four-component property, and the element count is fixed
+        // because Lottie's stop count is.
+        if let Some(ramp) = crate::eval::gradient::animated_ramp(g) {
+            for values in &ramp.stops {
+                let stop = self.el("stop");
+                let prop = ramp_prop(&ramp, values);
+                let p = self.classify(&prop, 4);
+                self.bind(op::RAMP, stop, vec![Arg::Prop(p)], slot);
+                self.els[node].children.push(stop);
+            }
+            self.add_def(node);
+            return id;
+        }
+
         // Stops: Lottie interleaves colour and alpha ramps at independent
         // positions, so they're resampled here onto the union of positions.
         if let Ok(stops) = crate::eval::gradient::resolve_stops(g) {
@@ -1537,6 +1837,113 @@ impl Planner<'_> {
 // ---------------------------------------------------------------------------
 
 /// Shift every layer reference in a property by `delta`.
+/// One gradient stop's `[offset, r, g, b]` over time, as a wire property.
+///
+/// The times and easing are the ramp's, shared by every stop; only the values
+/// differ. Hash-consing collapses the repeated columns downstream.
+fn ramp_prop(ramp: &crate::eval::gradient::AnimatedRamp, values: &[[f64; 4]]) -> InlineProp {
+    use crate::data::{EasingComponent, EasingHandle, EasingPair, Keyframes};
+    let linear = ramp
+        .easing
+        .iter()
+        .all(|e| e[0] == 0.0 && e[1] == 0.0 && e[2] == 1.0 && e[3] == 1.0);
+    InlineProp::Animated(Keyframes {
+        t: ramp.times.clone(),
+        v: values.iter().map(|v| Value::Vector(v.to_vec())).collect(),
+        e: None,
+        oi: (!linear).then(|| {
+            ramp.easing
+                .iter()
+                .map(|e| EasingPair {
+                    o: EasingHandle {
+                        x: EasingComponent::Scalar(e[0]),
+                        y: EasingComponent::Scalar(e[1]),
+                    },
+                    i: EasingHandle {
+                        x: EasingComponent::Scalar(e[2]),
+                        y: EasingComponent::Scalar(e[3]),
+                    },
+                })
+                .collect()
+        }),
+        to: None,
+        ti: None,
+        h: ramp.holds.iter().any(|&h| h).then(|| ramp.holds.clone()),
+    })
+}
+
+/// The layer's parent, if it has one that is actually in the document.
+fn parent_of(layers: &[data::Layer], dead: &[bool], i: usize) -> Option<usize> {
+    match layers[i].pr {
+        Some(pr) if (pr as usize) < layers.len() && !dead[pr as usize] => Some(pr as usize),
+        _ => None,
+    }
+}
+
+/// The layer's ancestors, **outermost first** — the order wrappers nest in.
+fn ancestors(layers: &[data::Layer], dead: &[bool], i: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut next = parent_of(layers, dead, i);
+    // A cyclic `pr` chain is not something the format allows, but it would
+    // hang rather than fail if one arrived, so bound the walk.
+    while let Some(a) = next {
+        if out.len() >= layers.len() {
+            break;
+        }
+        out.push(a);
+        next = parent_of(layers, dead, a);
+    }
+    out.reverse();
+    out
+}
+
+/// Would attaching every child into its parent's group leave the layers in the
+/// order Lottie says they must be painted in?
+///
+/// Paint order is the layer list, reversed, and nothing else — parenting
+/// contributes a transform. Nesting is the cheaper way to inherit that
+/// transform, but it also moves the child to sit directly after its parent,
+/// which is only harmless when that is where it already belonged. In
+/// `car-5.json` eight facial features are parented to a null that is *last* in
+/// the list, so nesting sank all eight to the bottom of the composition and
+/// the face was drawn over its own eyes.
+///
+/// The check is a simulation rather than a rule about indices: it walks the
+/// tree nesting would build and compares the sequence with the required one.
+fn nesting_preserves_order(layers: &[data::Layer], dead: &[bool]) -> bool {
+    let n = layers.len();
+
+    let mut kids: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut order = Vec::with_capacity(n);
+    let mut required = Vec::with_capacity(n);
+    for i in (0..n).rev() {
+        if dead[i] {
+            continue;
+        }
+        required.push(i);
+        match parent_of(layers, dead, i) {
+            Some(pr) => kids[pr].push(i),
+            None => order.push(i),
+        }
+    }
+
+    // Pre-order over the forest nesting would produce, iteratively: a `pr`
+    // chain deep enough to overflow a stack is a malformed file, not an error.
+    let mut produced = Vec::with_capacity(n);
+    let mut stack: Vec<usize> = order.into_iter().rev().collect();
+    let mut guard = 0;
+    while let Some(i) = stack.pop() {
+        guard += 1;
+        if guard > n {
+            return false; // a cycle in `pr`; take the flat path, which cannot loop
+        }
+        produced.push(i);
+        stack.extend(kids[i].iter().rev().copied());
+    }
+
+    produced == required
+}
+
 fn rebase_prop(p: &mut Prop, delta: u32) {
     if let Prop::Expr {
         layer, fallback, ..

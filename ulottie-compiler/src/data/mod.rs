@@ -409,6 +409,10 @@ pub struct Layer {
     /// 4 luma-inverted. The matte source is the layer immediately before it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tt: Option<u8>,
+    /// Index of the layer that mattes this one, in *this* list — like `pr`, an
+    /// array index rather than the layer's `ind`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tp: Option<u32>,
     /// This layer is a matte source: it is not drawn, it masks the next one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub td: Option<u8>,

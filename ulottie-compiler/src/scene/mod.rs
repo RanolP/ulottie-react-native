@@ -66,6 +66,8 @@ pub mod op {
     pub const SHAPE_RECT: u8 = 12;
     pub const SHAPE_ELLIPSE: u8 = 13;
     pub const SHAPE_STAR: u8 = 14;
+    /// One `<stop>` of a keyframed gradient ramp: its offset and its colour.
+    pub const RAMP: u8 = 15;
 }
 
 bitflags! {
@@ -73,7 +75,7 @@ bitflags! {
     /// modules the embedded bundle imports, so unused capability code is never
     /// emitted rather than emitted-and-hopefully-tree-shaken.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-    pub struct Caps: u32 {
+    pub struct Caps: u64 {
         const TRANSFORM   = 1 << 0;
         const TRANSLATE   = 1 << 1;
         const OPACITY     = 1 << 2;
@@ -124,6 +126,13 @@ bitflags! {
         const EXPR_COMP     = 1 << 29;
         /// `createPath`, `pointOnPath`, `points` — the path API.
         const EXPR_PATH     = 1 << 30;
+
+        // Back to the planner's own capabilities. The three above were given
+        // the top of a `u32` when that was the whole set, so anything added
+        // since goes after them rather than into the gap — where it would
+        // silently alias `EXPR_PROPERTY` and turn its runtime off.
+        /// A gradient whose colour ramp is keyframed, not just its handles.
+        const RAMP          = 1 << 31;
     }
 }
 
@@ -492,6 +501,7 @@ pub fn caps_for_op(op: u8) -> Caps {
         op::SHAPE_RECT => Caps::GEOM_RECT,
         op::SHAPE_ELLIPSE => Caps::GEOM_ELLIPSE,
         op::SHAPE_STAR => Caps::GEOM_STAR,
+        op::RAMP => Caps::RAMP,
         _ => Caps::empty(),
     }
 }
@@ -507,6 +517,38 @@ pub fn program_ops(list: &[Binding]) -> Vec<u8> {
     ops.sort_unstable();
     ops.dedup();
     ops
+}
+
+/// Two capabilities sharing a bit is invisible: the flag still sets, still
+/// reads back true, and still names itself — it just also turns something else
+/// on, or off. `RAMP` was first written as `1 << 28`, which is `EXPR_PROPERTY`;
+/// the caps line kept reading as valid and `lights` quietly stopped importing
+/// the half of the expression runtime that draws it.
+#[cfg(test)]
+#[test]
+fn every_capability_has_a_bit_to_itself() {
+    // Over the *declared* flags, not `all().iter()`: that walks the set bits of
+    // the union, so two names on one bit yield a single entry and the check
+    // passes. This is exactly the bug, so the list has to be the source one.
+    use bitflags::Flags;
+    let mut seen: Vec<(&str, u64)> = Vec::new();
+    for flag in Caps::FLAGS {
+        let bit = flag.value().bits();
+        assert_eq!(
+            bit.count_ones(),
+            1,
+            "{} is not a single bit — a composite belongs in a const fn, not the flag set",
+            flag.name()
+        );
+        if let Some((other, _)) = seen.iter().find(|(_, b)| b & bit != 0) {
+            panic!(
+                "{} and {other} are both bit {}",
+                flag.name(),
+                bit.trailing_zeros()
+            );
+        }
+        seen.push((flag.name(), bit));
+    }
 }
 
 #[cfg(test)]

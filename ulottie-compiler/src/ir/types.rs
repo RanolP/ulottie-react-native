@@ -372,6 +372,9 @@ pub struct Layer {
     pub hidden: bool,
     pub blend_mode: u8,
     pub track_matte: Option<u8>,
+    /// The layer that mattes this one. `None` means the one before it, which
+    /// is what Lottie assumed before `tp` existed.
+    pub matte_parent: Option<LayerId>,
     pub matte_layer_for_above: bool,
     pub has_mask: bool,
     /// Per-layer SVG masks. When non-empty the layer's outerG gets a

@@ -169,6 +169,7 @@ fn lower_layer(
         hidden: false,
         blend_mode: src.bm.unwrap_or(0),
         track_matte: src.tt,
+        matte_parent: src.tp.and_then(|ind| ctx.ind_to_id.get(&ind).copied()),
         matte_layer_for_above: src.td.unwrap_or(0) != 0,
         has_mask: src.has_mask.unwrap_or(false),
         masks,
@@ -332,7 +333,32 @@ fn lower_split_to_vec(
         times.push(0.0);
     }
 
-    let frames: Vec<Keyframe<Vec3>> = times
+    // The merged property carries one easing per segment, because that is what
+    // the wire and the runtime can express — so the axes' handles can only be
+    // kept when they agree. One axis moving is the usual shape of a separated
+    // position and the case that is exactly representable: the merged timeline
+    // *is* that axis's, handles and holds included. Where several axes move to
+    // different curves the merge samples them instead, which is why
+    // `interpolate_scalar` has to ease.
+    let axes: Vec<&Property<Scalar>> = std::iter::once(&x_prop)
+        .chain(std::iter::once(&y_prop))
+        .chain(z_prop.iter())
+        .filter(|p| static_scalar(p).is_none())
+        .collect();
+    let shape = axes.first().and_then(|p| frames_of(p));
+    let uniform = shape.is_some_and(|f| axes.iter().all(|p| frames_of(p).is_some_and(|g| same_curve(f, g))));
+    let source = if uniform { shape } else { None };
+
+    let sampled: Vec<f64> = if uniform {
+        times.clone()
+    } else {
+        // Linear segments between the union's times cannot follow an eased
+        // curve, so subdivide them by whole frames — the resolution the
+        // animation is authored and played at.
+        subdivide(&times)
+    };
+
+    let frames: Vec<Keyframe<Vec3>> = sampled
         .iter()
         .map(|&t| {
             let x = eval_scalar_at(&x_prop, t, default[0]);
@@ -341,20 +367,64 @@ fn lower_split_to_vec(
                 .as_ref()
                 .map(|p| eval_scalar_at(p, t, default[2]))
                 .unwrap_or(default[2]);
+            let at = source.and_then(|f| f.frames.iter().find(|k| k.time == t));
             Keyframe {
                 time: t,
                 value: Some([x, y, z]),
                 end_value: None,
-                easing_in: None,
-                easing_out: None,
+                easing_in: at.and_then(|k| k.easing_in.clone()),
+                easing_out: at.and_then(|k| k.easing_out.clone()),
                 spatial_in: None,
                 spatial_out: None,
-                hold: false,
+                hold: at.is_some_and(|k| k.hold),
             }
         })
         .collect();
 
     Ok(Property::Animated(Keyframes { frames }))
+}
+
+/// The keyframes behind a scalar property, whether or not an expression wraps
+/// it.
+fn frames_of(p: &Property<Scalar>) -> Option<&Keyframes<Scalar>> {
+    match p {
+        Property::Animated(kf)
+        | Property::Expression {
+            fallback: ValueSource::Animated(kf),
+            ..
+        } => Some(kf),
+        _ => None,
+    }
+}
+
+/// Do two axes move on the same timeline, with the same handles and holds?
+fn same_curve(a: &Keyframes<Scalar>, b: &Keyframes<Scalar>) -> bool {
+    a.frames.len() == b.frames.len()
+        && a.frames.iter().zip(&b.frames).all(|(p, q)| {
+            p.time == q.time
+                && p.hold == q.hold
+                && p.easing_in == q.easing_in
+                && p.easing_out == q.easing_out
+        })
+}
+
+/// Whole frames between each pair of times, plus the times themselves.
+fn subdivide(times: &[f64]) -> Vec<f64> {
+    let mut out = Vec::with_capacity(times.len());
+    for w in times.windows(2) {
+        out.push(w[0]);
+        let mut t = w[0].floor() + 1.0;
+        while t < w[1] {
+            if t > w[0] {
+                out.push(t);
+            }
+            t += 1.0;
+        }
+    }
+    if let Some(&last) = times.last() {
+        out.push(last);
+    }
+    out
 }
 
 fn project_vec3_to_vec2(prop: Property<Vec3>) -> Property<Vec2> {
@@ -444,13 +514,37 @@ fn interpolate_scalar(kf: &Keyframes<Scalar>, t: f64, fallback: Scalar) -> Scala
             if dt == 0.0 {
                 return b.value.unwrap_or(fallback);
             }
-            let progress = (t - a.time) / dt;
             let av = a.value.unwrap_or(fallback);
+            if a.hold {
+                return av;
+            }
+            let mut u = (t - a.time) / dt;
+            // Both handles sit on the keyframe the segment *starts* at — `o`
+            // leaving it and `i` arriving at the next — which is the pairing
+            // `encode_keyframes_*` reads and the one Lottie writes. Sampling
+            // without them reads an eased move as a linear one, which is how
+            // `car-8`'s rows slid into place at the wrong times and `car-13`
+            // scrolled 40px ahead of itself.
+            if let (Some(o), Some(inn)) = (a.easing_out.as_ref(), a.easing_in.as_ref()) {
+                let (x1, y1) = handle(o);
+                let (x2, y2) = handle(inn);
+                u = crate::eval::keyframes::cubic_bezier(u, x1, y1, x2, y2);
+            }
             let bv = a.end_value.or(b.value).unwrap_or(fallback);
-            return av + (bv - av) * progress;
+            return av + (bv - av) * u;
         }
     }
     fallback
+}
+
+/// An easing handle's `(x, y)`. A per-component handle on a scalar axis is a
+/// one-element list, so the first component is the whole of it.
+fn handle(h: &EasingHandle) -> (f64, f64) {
+    let pick = |v: &EasingValue| match v {
+        EasingValue::Scalar(n) => *n,
+        EasingValue::PerComponent(c) => c.first().copied().unwrap_or(0.0),
+    };
+    (pick(&h.x), pick(&h.y))
 }
 
 fn lower_prop_color(

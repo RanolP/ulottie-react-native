@@ -30,8 +30,11 @@ pub fn can_encode(m: &ir::Module) -> bool {
 fn layer_supported(layer: &ir::Layer) -> bool {
     let supported = match &layer.kind {
         ir::LayerKind::Shape { shapes } => shapes_supported(shapes),
-        ir::LayerKind::Null | ir::LayerKind::Solid { .. } | ir::LayerKind::Precomp { .. } => true,
-        ir::LayerKind::Image { .. } | ir::LayerKind::Other { .. } => false,
+        ir::LayerKind::Null
+        | ir::LayerKind::Solid { .. }
+        | ir::LayerKind::Precomp { .. }
+        | ir::LayerKind::Image { .. } => true,
+        ir::LayerKind::Other { .. } => false,
     };
     if !supported && std::env::var("ULOTTIE_DEBUG_BACKEND").is_ok() {
         eprintln!(
@@ -205,6 +208,7 @@ impl Encoder {
             out.tr = Some(self.inline_scalar(tr)?);
         }
         out.tt = layer.track_matte;
+        out.tp = layer.matte_parent.map(|id| id.0);
         if layer.matte_layer_for_above {
             out.td = Some(1);
         }
@@ -296,6 +300,11 @@ impl Encoder {
                 if *height != 0 {
                     out.sh = Some(*height);
                 }
+            }
+            // An image layer is a reference and nothing else: its size comes
+            // from the asset, not the layer.
+            ir::LayerKind::Image { asset } => {
+                out.rf = Some(asset.clone());
             }
             _ => {}
         }

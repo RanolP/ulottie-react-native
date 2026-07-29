@@ -11,6 +11,93 @@ use serde_json::Value as Json;
 
 use super::frame::{Color, GradientStop};
 
+/// A keyframed colour ramp, split into one animated property per `<stop>`.
+///
+/// SVG cannot add or remove stops between frames, so an animated ramp is only
+/// representable while the stop *count* is fixed — which Lottie guarantees:
+/// `g.p` is a single number for the whole property, and After Effects will not
+/// let a ramp gain a stop mid-animation. What moves is each stop's position
+/// and colour, which is exactly `[offset, r, g, b]` per keyframe.
+///
+/// Alpha stops are the case this does not cover. They sit at positions of
+/// their own, independent of the colour stops, so a fixed set of `<stop>`
+/// elements cannot carry both once either set starts moving — lottie-web
+/// answers that with a second gradient used as a mask. Returning `None` leaves
+/// such a ramp reported as unsupported rather than silently resampled.
+pub struct AnimatedRamp {
+    /// Keyframe times, shared by every stop.
+    pub times: Vec<f64>,
+    /// Per segment: the outgoing and incoming easing handles, as
+    /// `[ox, oy, ix, iy]`. Shared by every stop, like the times.
+    pub easing: Vec<[f64; 4]>,
+    /// Per stop, per keyframe: `[offset, r, g, b]`.
+    pub stops: Vec<Vec<[f64; 4]>>,
+    /// Per segment: whether it holds its start value.
+    pub holds: Vec<bool>,
+}
+
+pub fn animated_ramp(g: &Json) -> Option<AnimatedRamp> {
+    let count = g.get("p").and_then(Json::as_u64)? as usize;
+    let k = g.get("k")?;
+    if k.get("a").and_then(Json::as_u64) != Some(1) {
+        return None;
+    }
+    let frames = k.get("k")?.as_array()?;
+    if count == 0 || frames.is_empty() {
+        return None;
+    }
+
+    let mut times = Vec::with_capacity(frames.len());
+    let mut easing = Vec::with_capacity(frames.len());
+    let mut holds = Vec::with_capacity(frames.len());
+    let mut stops = vec![Vec::with_capacity(frames.len()); count];
+    for kf in frames {
+        // Lottie's older form leaves the final keyframe a bare terminator with
+        // no `s`; there is nothing to interpolate past it, so it is dropped
+        // rather than read as zeros.
+        let Some(vals) = kf.get("s").and_then(Json::as_array) else {
+            continue;
+        };
+        // Anything beyond the colour stops is the alpha ramp.
+        if vals.len() != count * 4 {
+            return None;
+        }
+        times.push(kf.get("t").and_then(Json::as_f64)?);
+        // A handle is per-component in the general case; a ramp's components
+        // are all eased together in every file AE writes, so the first is
+        // taken and a genuinely per-component one would be approximated.
+        let h = |name: &str, axis: &str, dflt: f64| {
+            kf.get(name)
+                .and_then(|e| e.get(axis))
+                .map(|v| match v {
+                    Json::Array(a) => a.first().and_then(Json::as_f64).unwrap_or(dflt),
+                    other => other.as_f64().unwrap_or(dflt),
+                })
+                .unwrap_or(dflt)
+        };
+        easing.push([
+            h("o", "x", 0.0),
+            h("o", "y", 0.0),
+            h("i", "x", 1.0),
+            h("i", "y", 1.0),
+        ]);
+        holds.push(kf.get("h").and_then(Json::as_f64).unwrap_or(0.0) != 0.0);
+        for i in 0..count {
+            let n = |j: usize| vals[i * 4 + j].as_f64().unwrap_or(0.0);
+            stops[i].push([n(0), n(1), n(2), n(3)]);
+        }
+    }
+    if times.len() < 2 {
+        return None;
+    }
+    Some(AnimatedRamp {
+        times,
+        easing,
+        stops,
+        holds,
+    })
+}
+
 pub fn resolve_stops(g: &Json) -> Result<Vec<GradientStop>> {
     let color_count = g
         .get("p")

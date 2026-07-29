@@ -183,7 +183,7 @@ fn scalar_handle(h: &EasingHandle) -> (f64, f64) {
 /// has control points (0,0), (x1,y1), (x2,y2), (1,1). Solves via
 /// Newton-Raphson seeded at u, with eight iterations. Matches `cubicBezier`
 /// in driver.js exactly.
-fn cubic_bezier(u: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f64 {
+pub fn cubic_bezier(u: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f64 {
     fn b(p1: f64, p2: f64, t: f64) -> f64 {
         let it = 1.0 - t;
         3.0 * it * it * t * p1 + 3.0 * it * t * t * p2 + t * t * t

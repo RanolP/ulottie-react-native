@@ -166,11 +166,13 @@ export function mount(M, D, P, A, container, opt, ext) {
         T[i + 1] = remap(T[S[e]]) * fr;
         continue;
       }
-      let v = T[S[e]] - S[e + 1] * tScale;
-      const lo = S[e + 2] * tScale, hi = S[e + 3] * tScale;
-      const span = hi - lo;
-      if (span > 0 && v >= hi) v = lo + ((v - lo) % span);
-      T[i + 1] = v;
+      // A layer's clock is its parent's less its own start time, and it keeps
+      // running past the layer's out point: what happens there is that the
+      // layer stops being drawn, which `oDisplay` decides against these same
+      // bounds. Looping it back instead — which this did while a precomp's
+      // layers had no in/out handling of their own — showed every frame of an
+      // image sequence at once, each one wrapped to its first.
+      T[i + 1] = T[S[e]] - S[e + 1] * tScale;
     }
     for (let i = 0; i < nGates; i++) {
       const g = gRows + i * 2;

@@ -15,14 +15,17 @@ faster than lottie-web (~75 KB gzipped) while matching it pixel for pixel.
 ## Gates
 
 ```
-cargo nextest run --features eval                    # 71 unit / frame-snapshot / size-budget / hygiene tests
-cd ulottie-dev-server && yarn test                   # 104 tests: 26 output snapshots, 66 pixel-diff, 12 perf
+cargo nextest run --features eval                    # 157 unit / frame-snapshot / size-budget / hygiene tests
+cd ulottie-dev-server && yarn test                   # 192 tests: 29 output snapshots, 66 pixel-diff, 12 perf
 cargo run --release --bin ulottie-compiler -- <fixture> --document   # standalone SVG
 cargo run --release --bin ulottie-dev-server -- sizes
+node ulottie-dev-server/tools/compare.mjs <any.json> --dom            # any file, vs lottie-web
 ```
 
 All green as of this writing, with **no per-fixture tolerance overrides** — every
-fixture matches lottie-web within the default 0.5% pixel budget.
+fixture matches lottie-web within the default 0.5% pixel budget. The fixtures
+are the gate; `compare.mjs` is how you find out what an unfamiliar file does,
+and it is what the last six correctness fixes came out of.
 
 ### Reviewing what a compiler change did
 
@@ -165,7 +168,25 @@ The scan reads the raw JSON, not the typed AST, because the AST is lossy by
 construction: an unknown shape lowers to `Unknown` and a field nobody reads
 simply is not read, so a check on the AST cannot see what was dropped.
 
-Two features landed rather than being tolerated:
+Four features landed rather than being tolerated:
+
+- **Image layers and image assets** (`ty: 2`). One `<image>` at the asset's
+  natural size, with `preserveAspectRatio="xMidYMid slice"` — lottie-web's
+  default for images, not SVG's, and the two differ the moment a layer's scale
+  is not uniform. Nothing about it can vary, so it is pure markup with no
+  binding at all; the layer's transform moves it, exactly as for a shape. An
+  embedded asset (`e: 1`) carries its data URI straight into the markup, which
+  means the module is as large as the pictures in it — the honest size for an
+  animation that *is* a sequence of PNGs. Only an asset with no `p` at all is
+  still reported, because then there is no source to point at.
+- **Keyframed gradient ramps.** A ramp whose stops move is one binding per
+  `<stop>`, each carrying `[offset, r, g, b]` — a four-component property,
+  which is exactly the width the wire's dimension field allows. The element
+  count is fixed because Lottie's stop count is. What this does *not* cover is
+  a ramp that also carries alpha stops: those sit at positions of their own, so
+  one set of stop elements cannot follow both once either set moves.
+  lottie-web answers that with a second gradient used as a mask; here it stays
+  reported rather than silently resampled.
 
 - **Time remap** (`tm` on a precomp layer). Lottie stores the composition's own
   time, in seconds, as a function of the outer time; it replaces the usual
@@ -178,7 +199,12 @@ Two features landed rather than being tolerated:
   non-precomp layer it would be read and dropped, which is what the scan is for.
 - **Track mattes** (`td` on the matte source, `tt` on the layer it mattes; all
   four AE modes). The matte layer is not drawn: it becomes a `<mask>` in defs
-  and the following layer gets `mask="url(#…)"`. Alpha modes use
+  and the layer it mattes gets `mask="url(#…)"`. Which layer that is comes from
+  `tp`, naming it by `ind`; only when `tp` is absent is it the layer
+  immediately above. One matte can serve several layers, and the mask is
+  referenced by id, so the second to ask reuses the first's rather than needing
+  its own copy of a subtree that can only be in one place. A `td` layer is out
+  of the picture whether or not anything ended up masked by it. Alpha modes use
   `mask-type="alpha"` — `lottie-logo`'s matte is a stroked, trimmed path with no
   luminance to speak of, only coverage. Inversion goes through a filter
   (`feComponentTransfer`, `tableValues="1 0"`) rather than the usual white-rect
@@ -1031,10 +1057,103 @@ reduced motion), `loop`, and `hydrate` for attaching to server-rendered markup.
 
 ---
 
+## Comparing against lottie-web, for any file
+
+`_fixtures/` is a gate: it answers whether the eleven fixtures still pass.
+`ulottie-dev-server/tools/compare.mjs` answers the other question — *where* an
+arbitrary file diverges — and takes input from anywhere, needs no fixture
+registration, and reports rather than throws.
+
+```
+node ulottie-dev-server/tools/compare.mjs <input.json|dir> [...] [--frames n]
+    [--at 0,0.5,120] [--size px] [--variant extern|embedded|extracted|instanced]
+    [--out dir] [--tolerance r] [--dom] [--headed] [--json] [--quiet]
+```
+
+It compiles each input (retrying with `--allow` for whatever the compiler
+refuses, so a degradation shows up next to the render rather than in place of
+it), renders it beside lottie-web in headless Chromium, screenshots both at
+sampled frames, and diffs them with odiff. `<out>/index.html` shows every
+frame's reference, candidate and diff mask side by side.
+
+`--dom` adds the part that pixels cannot give you: a **structural diff** of the
+two SVG trees at the worst frame. Making that readable is most of the tool.
+
+- Only what draws is compared: `<defs>`, `<clipPath>` and `<mask>` subtrees are
+  skipped, and so is anything under `opacity="0"` or `display:none`. lottie-web
+  clips every layer to the composition, and counting those phantom rectangles
+  knocked the two sequences out of step from element zero.
+- Elements are matched by an **alignment**, not by position. One element the
+  compiler failed to emit shifts every element after it, and comparing index to
+  index turns one missing shape into a page of differences that are all the
+  same bug.
+- They are keyed on the **box the element occupies in composition space** —
+  its own coordinates through the accumulated transform chain. Comparing `d` as
+  text cannot work: lottie-web writes every segment as a cubic where the
+  compiler writes `L`, and emits `<path>` where the compiler emits
+  `<rect rx="18">`. Those are the same picture written three ways; the box is
+  the same number either way, and a real geometry bug moves it.
+- Colours are canonicalised (`rgb(255,111,15)` → `#ff6f0f`) and an embedded
+  image's `href` is digested, because a hundred kilobytes of base64 whose first
+  eighty characters are the PNG header makes every frame of a sequence look
+  like the same one.
+
+`tools/census.mjs` is the companion: it walks the raw document and counts
+*every* feature, so something nobody has thought about yet shows up as a row
+rather than as a rendering difference. `support::scan` only reports what it
+already knows to look for; this is what found `tp` and split-dimension
+positions.
+
+```
+node ulottie-dev-server/tools/census.mjs <input.json|dir> [...] [--per-file]
+```
+
+### What a thirteen-file corpus outside the fixtures found
+
+Run against a set of unrelated Lottie exports, twelve of thirteen now match
+lottie-web pixel for pixel and the thirteenth is at 0.74%. Getting there was
+six bugs, and every one of them was invisible to the fixture suite:
+
+- **Parenting was implemented as nesting**, which changes paint order.
+  Lottie's `parent` contributes a transform and nothing else. `lights` and
+  `starfish` were both mis-ordered and passed anyway, because their layers do
+  not overlap.
+- **A precomp's layers were never hidden outside their own `[ip, op)`**, so a
+  composition that stages four states drew all four at once, each frozen at the
+  first frame it was authored for.
+- **The clock looped a layer back into its span** past its out point. That was
+  standing in for the hiding that did not exist; with real hiding it showed
+  every frame of an image sequence at once.
+- **Split-dimension positions dropped their easing**, and the resampler that
+  merges the axes interpolated linearly — reading both handles off the segment's
+  *starting* keyframe is the pairing Lottie writes.
+- **Track mattes were paired by adjacency**, ignoring `tp`. A matte can name its
+  layer by `ind`, need not be next to it, and can matte several.
+- **A `td` layer was drawn when nothing matted it.** It is a matte; it is never
+  in the picture.
+
+Image layers, image assets and keyframed gradient ramps were implemented rather
+than degraded; see above.
+
+`car-13` is the 0.74%: a luma matte inside a twice-instanced precomp that also
+carries a layer mask. Its labels sit a pixel or two off. Ruled out so far: it
+is not instancing (identical in all three build variants), and it is not the
+layer masks themselves (dropping them takes it to 8.4%). The untested lead is
+that **lottie-web clips every precomp layer to its own `w × h`** — eight
+`<clipPath>`s in its render against none in ours — which this compiler does not
+implement at all.
+
+---
+
 ## What is left
 
 Ordered by value. The recon that produced these numbers is worth re-reading before
 starting any of them.
+
+0. **Clip precomp layers to their own bounds.** lottie-web gives every `ty: 0`
+   layer a `clipPath` of `data.w × data.h`. Nothing here does, so a precomp
+   whose content overflows draws the overflow. It is the open lead on
+   `car-13`, and the only feature the comparison found that is still missing.
 
 1. **Compile the expression bodies.** Names are resolved, the proxy is gone and
    dead bodies are swept, but what survives still runs as JavaScript through
@@ -1048,10 +1167,9 @@ starting any of them.
    source. Doing it in the compiler needs an evaluator; a cheaper first step is
    a wire flag marking a property frame-invariant so the runtime evaluates it
    once at mount instead of every frame.
-3. **Make silent feature drops loud.** `can_encode` never rejects: track mattes,
-   blend modes, repeaters, merge paths, hold keyframes, skew, `sr`, auto-orient, 3D
-   rotation and animated gradient ramps are all dropped without a word. lottie-logo
-   ships a track matte today and renders without it. Wanted: a diagnostics list on
+3. **Make silent feature drops loud.** `can_encode` never rejects: blend modes,
+   repeaters, merge paths, hold keyframes, skew, `sr`, auto-orient and 3D
+   rotation are all dropped without a word. Wanted: a diagnostics list on
    stderr plus a sidecar JSON, with hard rejection behind `--strict`.
 4. **Trim `m=2` (individually) is ignored**, and nonzero trim offsets on open paths
    clamp where lottie-web wraps. No fixture covers either — add one first.
@@ -1078,9 +1196,24 @@ starting any of them.
 - The runtime's flat-concatenation bundling requires globally-unique top-level
   names across `runtime/**`. There is no namespacing to save you; add a module
   and pick names accordingly.
-- Payload `pr` is an **array index** into the layer list, not the layer's `ind`.
-  `precomp_star_circle` emits `i=0` for all 12 of its layers, so anything resolving
-  parents by id will silently pick the wrong one.
+- Payload `pr` and `tp` are **array indices** into the layer list, not the
+  layer's `ind`. `precomp_star_circle` emits `i=0` for all 12 of its layers, so
+  anything resolving parents by id will silently pick the wrong one.
+- **A layer's `st` shifts nothing but a precomp's children.** The reference
+  renderer subtracts it from the frame *and* from every keyframe time it is
+  compared against, so the two cancel — which is why `car-5` keyframes a layer
+  at t=55..70, gives it `st: 55`, and still means composition time. The one
+  place it survives is a precomp handing a clock to its children. Applying it
+  the "obvious" way breaks four files at once.
+- **Both easing handles live on the keyframe a segment starts at** — `o`
+  leaving it, `i` arriving at the next. Reading `i` off the following keyframe
+  finds nothing there and silently interpolates linearly.
+- **Parenting must not change paint order.** `scene::build` still nests a child
+  in its parent's group when that happens to leave the layers in the order they
+  must be painted in, and otherwise gives each child wrappers carrying its
+  ancestors' transforms at its own position. `nesting_preserves_order` decides
+  by simulating both, so the rule is a property of the composition rather than
+  a guess about indices.
 - `runtime/pv.js` references `EASE` and the spatial sampler only on branches
   guarded by data the planner emits exclusively when the matching `Caps` bit is
   set, and every op names `xcol` on a branch it only takes when there is an
@@ -1091,6 +1224,13 @@ starting any of them.
   the same argument count**. A `debug_assert` in `batch_section` pins it; an
   argument that is an enumeration rather than a measurement must be `Arg::Tag`,
   because `Arg::Num` is scaled by a thousand.
+- **A new `Caps` bit goes after `EXPR_PATH`, not in the gap before it.** The
+  three `EXPR_*` flags were given the top of a `u32` when that was the whole
+  set. `RAMP` was first written as `1 << 28`, which is `EXPR_PROPERTY`: the caps
+  line still read as valid, and `lights` quietly stopped importing half the
+  expression runtime that draws it. `every_capability_has_a_bit_to_itself`
+  pins it — over `Caps::FLAGS`, because `Caps::all().iter()` walks set bits and
+  two names on one bit yield a single entry.
 
 #### The demo shows the artifacts, not just their sizes
 

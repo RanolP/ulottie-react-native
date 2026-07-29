@@ -18,7 +18,6 @@ use serde_json::Value;
 /// A Lottie capability this compiler does not implement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Feature {
-    ImageLayer,
     TextLayer,
     UnknownLayerType,
     TrackMatte,
@@ -48,7 +47,6 @@ impl Feature {
     pub fn name(self) -> &'static str {
         use Feature::*;
         match self {
-            ImageLayer => "image-layer",
             TextLayer => "text-layer",
             UnknownLayerType => "unknown-layer-type",
             TrackMatte => "track-matte",
@@ -78,7 +76,6 @@ impl Feature {
     pub fn effect(self) -> &'static str {
         use Feature::*;
         match self {
-            ImageLayer => "the image is not drawn",
             TextLayer => "the text is not drawn",
             UnknownLayerType => "the layer is not drawn",
             TrackMatte => "the masked layer draws unmasked",
@@ -100,14 +97,13 @@ impl Feature {
             ReversedDirection => "winding is unchanged, which can alter holes",
             EvenOddFill => "the fill uses the non-zero rule",
             AnimatedGradient => "the gradient ramp is read as static and may render as NaN",
-            ImageAsset => "the image is not drawn",
+            ImageAsset => "the image has no source to draw from",
         }
     }
 
     pub fn from_name(s: &str) -> Option<Feature> {
         use Feature::*;
         const ALL: &[Feature] = &[
-            ImageLayer,
             TextLayer,
             UnknownLayerType,
             TrackMatte,
@@ -169,7 +165,12 @@ pub fn scan(doc: &Value) -> Vec<Finding> {
     {
         let id = asset.get("id").and_then(Value::as_str).unwrap_or("?");
         let where_ = format!("assets[{i}] `{id}`");
-        if asset.get("p").is_some() || asset.get("u").is_some() {
+        // An image asset is drawn from `p` — a data URI when `e` is set, a
+        // filename to hang off `u` otherwise. Without it there is no source to
+        // point `<image>` at, and only then is there nothing to be done.
+        if asset.get("layers").is_none()
+            && asset.get("p").and_then(Value::as_str).unwrap_or("").is_empty()
+        {
             push(&mut out, Feature::ImageAsset, &where_);
         }
         if let Some(layers) = asset.get("layers").and_then(Value::as_array) {
@@ -201,8 +202,7 @@ fn scan_layers(layers: &[Value], where_: &str, out: &mut Vec<Finding>) {
         };
 
         match l.get("ty").and_then(Value::as_u64) {
-            Some(0) | Some(1) | Some(3) | Some(4) => {}
-            Some(2) => push(out, Feature::ImageLayer, &at),
+            Some(0) | Some(1) | Some(2) | Some(3) | Some(4) => {}
             Some(5) => push(out, Feature::TextLayer, &at),
             _ => push(out, Feature::UnknownLayerType, &at),
         }
@@ -297,11 +297,15 @@ fn scan_shapes(shapes: &[Value], where_: &str, out: &mut Vec<Finding>) {
         if ty == "fl" && s.get("r").and_then(Value::as_u64) == Some(2) {
             push(out, Feature::EvenOddFill, where_);
         }
-        if s.get("g")
-            .and_then(|g| g.get("k"))
-            .and_then(|k| k.get("a"))
-            .and_then(Value::as_u64)
-            == Some(1)
+        // A keyframed colour ramp is planned as one binding per `<stop>`.
+        // What that cannot represent is a ramp that also carries alpha stops:
+        // those sit at positions of their own, so one set of stop elements
+        // cannot follow both once either set moves. `animated_ramp` is the
+        // same test, and answering it here from the raw JSON keeps the
+        // rejection honest about which ramps are actually covered.
+        if let Some(g) = s.get("g")
+            && g.get("k").and_then(|k| k.get("a")).and_then(Value::as_u64) == Some(1)
+            && crate::eval::gradient::animated_ramp(g).is_none()
         {
             push(out, Feature::AnimatedGradient, where_);
         }
