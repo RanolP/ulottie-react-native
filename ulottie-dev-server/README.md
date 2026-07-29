@@ -65,6 +65,8 @@ Vite owns the page and proxies these.
 /healthz            GET  readiness probe (the harness waits on it)
 /compile           POST  body = raw Lottie JSON; returns sizes + plan + URLs
 /.output/<id>.js    GET  compiled JS (fixture stem or upload hash)
+/.output/<id>.slice.js GET  just the runtime modules that build imports
+/.output/<id>.pretty.* GET  any artifact unminified, from the compiler
 /.output/<id>.json  GET  fixture source or upload source
 /.output/driver.js  GET  the whole runtime, minified (the size ceiling)
 /.output/runtime/** GET  the runtime as an ES module tree, so extern-mode

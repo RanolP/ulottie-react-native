@@ -1892,6 +1892,7 @@ dependencies = [
  "insta",
  "js-sys",
  "oxc_allocator",
+ "oxc_ast",
  "oxc_codegen",
  "oxc_minifier",
  "oxc_parser",

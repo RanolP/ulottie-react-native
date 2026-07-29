@@ -21,11 +21,16 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_repr = "0.1"
 clap = { version = "4", features = ["derive"] }
-oxc_allocator = { version = "0.131", optional = true }
+# Not optional: compiling Lottie means compiling the expressions in it, and
+# that means parsing JavaScript. `src/expr/` reads the bodies as syntax rather
+# than as text — the identifier scans it replaced could not tell an effect name
+# from a string literal, and could not fold anything.
+oxc_allocator = "0.131"
+oxc_ast = "0.131"
+oxc_parser = "0.131"
+oxc_span = "0.131"
 oxc_codegen = { version = "0.131", optional = true }
 oxc_minifier = { version = "0.131", optional = true }
-oxc_parser = { version = "0.131", optional = true }
-oxc_span = { version = "0.131", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 js-sys = { version = "0.3", optional = true }
@@ -45,7 +50,7 @@ eval = []
 # tree-shaken, minified self-contained modules. The flag is on by default
 # because that's the headline advantage of the data backend; opt out with
 # `default-features = false` to keep the compiler crate lean.
-minify = ["dep:oxc_allocator", "dep:oxc_codegen", "dep:oxc_minifier", "dep:oxc_parser", "dep:oxc_span"]
+minify = ["dep:oxc_codegen", "dep:oxc_minifier"]
 # Browser bindings via wasm-bindgen. Exposes `compile_request(jsonText)`
 # returning the raw bytes + sizes the comparison matrix needs. Gzip *sizes*
 # are still measured client-side via `CompressionStream('gzip')`; `flate2`

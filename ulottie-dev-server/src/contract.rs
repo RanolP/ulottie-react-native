@@ -71,6 +71,9 @@ pub struct Plan {
     pub instanced: bool,
     /// Repeated subtrees factored out, expanded at mount.
     pub templated: bool,
+    /// The self-contained module is generated code rather than an interpreter
+    /// plus a payload — decided by building both and keeping the smaller.
+    pub generated: bool,
     pub elements: u32,
     pub bindings: u32,
     pub records: u32,
@@ -93,6 +96,21 @@ pub struct CompileResponse {
     pub js_url: String,
     /// URL for the embedded (tree-shaken, self-contained) variant.
     pub js_embedded_url: String,
+    /// The remaining artifacts the size table names, so each row can show what
+    /// it is actually counting.
+    pub js_extracted_url: String,
+    pub sprite_url: String,
+    pub slice_url: String,
+    /// The same artifacts unminified, from the compiler's own `--pretty` path
+    /// — the form the snapshots are reviewed in. The viewer shows these rather
+    /// than re-deriving structure from the minified bytes, which is guesswork a
+    /// formatter has to get right about template literals and regexes.
+    pub json_pretty_url: String,
+    pub js_pretty_url: String,
+    pub js_embedded_pretty_url: String,
+    pub js_extracted_pretty_url: String,
+    pub sprite_pretty_url: String,
+    pub slice_pretty_url: String,
     pub name: Option<String>,
     pub total_frames: f64,
     pub sizes: Sizes,

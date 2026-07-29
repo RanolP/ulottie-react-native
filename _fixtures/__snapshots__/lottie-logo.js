@@ -11,43 +11,43 @@ const B=[,bTranslate,,bDisplay,bShape];
 
 const M =
   '<svg viewBox="0 0 500 500" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="overflow:hidden">' +
-    '<g transform="matrix(1,0,0,1,85.58,248.82)">' +
+    '<g transform="translate(85.58,248.82)">' +
       '<path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#6ddad2" stroke-width="14"/>' +
     '</g>' +
-    '<g transform="matrix(1,0,0,1,121.95,317.31)">' +
+    '<g transform="translate(121.95,317.31)">' +
       '<path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#2e606a" stroke-width="14"/>' +
     '</g>' +
     '<g mask="url(#t1--u)">' +
       '<g transform="matrix(.64391,.7651,-.7651,.64391,262.38,-38.99)">' +
-        '<g transform="matrix(1,0,0,1,173.08,262.38)">' +
+        '<g transform="translate(173.08,262.38)">' +
           '<path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#6ddad2" stroke-width="14"/>' +
         '</g>' +
       '</g>' +
     '</g>' +
-    '<g transform="matrix(1,0,0,1,165.84,266.79)">' +
+    '<g transform="translate(165.84,266.79)">' +
       '<path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#2e606a" stroke-width="14"/>' +
     '</g>' +
-    '<g transform="matrix(1,0,0,1,209.08,218.56)">' +
+    '<g transform="translate(209.08,218.56)">' +
       '<path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#6ddad2" stroke-width="15"/>' +
     '</g>' +
-    '<g transform="matrix(1,0,0,1,248.38,259.36)">' +
+    '<g transform="translate(248.38,259.36)">' +
       '<path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#6ddad2" stroke-width="14"/>' +
     '</g>' +
     '<path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#2e606a" stroke-width="14"/>' +
-    '<g transform="matrix(1,0,0,1,305.73,227.46)">' +
+    '<g transform="translate(305.73,227.46)">' +
       '<path fill="none" stroke-miterlimit="10" stroke="#2e606a" stroke-width="14"/>' +
     '</g>' +
-    '<g transform="matrix(1,0,0,1,288.13,226.38)">' +
+    '<g transform="translate(288.13,226.38)">' +
       '<path fill="none" stroke-miterlimit="10" stroke="#2e606a" stroke-width="14"/>' +
     '</g>' +
-    '<g transform="matrix(1,0,0,1,348.48,286.21)">' +
+    '<g transform="translate(348.48,286.21)">' +
       '<path fill="none" stroke-miterlimit="10" stroke="#6ddad2" stroke-width="15"/>' +
     '</g>' +
     '<path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#6ddad2" stroke-width="15"/>' +
     '<path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#6ddad2" stroke-width="15"/>' +
     '<path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#6ddad2" stroke-width="15"/>' +
     '<g>' +
-      '<g transform="matrix(1,0,0,1,472.13,254.46)">' +
+      '<g transform="translate(472.13,254.46)">' +
         '<path d="M7.843,0C7.843-4.332,4.331-7.842,0-7.842C-4.331-7.842-7.843-4.332-7.843,0C-7.843,4.331-4.331,7.842,0,7.842C4.331,7.842,7.843,4.331,7.843,0Z" fill="#6ddad2"/>' +
       '</g>' +
     '</g>' +
@@ -59,7 +59,7 @@ const M =
       '</filter>' +
       '<mask id="t1--u" mask-type="alpha" maskUnits="userSpaceOnUse" x="0" y="0" width="500" height="500">' +
         '<g filter="url(#i0--u)">' +
-          '<g transform="matrix(1,0,0,1,165.84,266.79)">' +
+          '<g transform="translate(165.84,266.79)">' +
             '<path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#2e606a" stroke-width="14"/>' +
           '</g>' +
         '</g>' +
@@ -67,142 +67,7 @@ const M =
     '</defs>' +
   '</svg>';
 
-const D = {
-  "b": [
-    [3,24,85,301],
-    [
-      1,
-      0,
-      "matrix(1,0,0,1,",
-      -472.134,
-      -254.457,
-      {
-        "d": 2,
-        "k": 1,
-        "t": [85,110,115,120,130],
-        "v": [392.612,241.457,440.691,241.457,447.441,254.457,453.441,250.457,459.441,254.457],
-        "z": [1,2,2,2]
-      }
-    ],
-    [
-      4,
-      -1,
-      [0,{"v":[392.362,254.457,427.441,254.457]}],
-      [0,{"t":[85,100],"v":[0,100],"z":[2]},0,1]
-    ],
-    [
-      4,
-      -1,
-      [0,{"v":[350.197,215.582,431.551,215.582]}],
-      [0,{"t":[85,100],"v":[0,100],"z":[2]},0,1]
-    ],
-    [
-      4,
-      -1,
-      [0,{"v":[392.717,175.252,431.905,175.252]}],
-      [0,{"t":[85,100],"v":[0,100],"z":[2]},0,1]
-    ],
-    [4,-1,[0,{"v":[1.714,-32.529,-1.714,32.529]}],[{"t":[70,85],"v":[100,0],"z":[2]},100,0,1]],
-    [
-      4,
-      -2,
-      [0,{"i":[0,0,17.093,7.013],"o":[0,0,0,0],"v":[17.631,0.652,-17.63,-3.507]}],
-      [{"t":[55,70],"v":[100,0],"z":[2]},100,0,1]
-    ],
-    [
-      4,
-      -2,
-      [0,{"v":[2.841,-51.732,0.023,-0.424,-2.842,51.732]}],
-      [0,{"t":[55,70],"v":[0,100],"z":[2]},0,1]
-    ],
-    [4,-2,[0,{"v":[254.339,175.725,368.811,175.725]}],[0,{"t":[55,70],"v":[0,100],"z":[2]},0,1]],
-    [4,-1,[0,{"v":[-3.078,44.416,3.078,-44.416]}],[0,{"t":[40,55],"v":[0,100],"z":[2]},0,1]],
-    [
-      4,
-      -2,
-      [
-        0,
-        {
-          "i": [0,0,0,10.174,-7.118,6.759,-8.689,0.427,-12.213,-6.33,-10.961,-3.505],
-          "o": [-5.669,-7.748,0,-7.611,6.534,-6.204,10.6,-0.519,1.544,0.801,0,0],
-          "v": [
-            -50.645, 30.389, -59.527, 4.406, -49.511, -18.934, -23.905, -29.87, 9.662, -19.878,
-            59.527, 3.743
-          ]
-        }
-      ],
-      [0,{"t":[40,55],"v":[0,100],"z":[2]},0,1]
-    ],
-    [
-      4,
-      -2,
-      [
-        0,
-        {
-          "i": [0,0,0,-11.098,-20.143,0,-6.228,4.955],
-          "o": [-7.82,6.743,0,20.142,8.577,0,0,0],
-          "v": [-16.452,-32.157,-29.228,-4.316,7.244,32.156,29.228,24.798]
-        }
-      ],
-      [0,{"t":[20,40],"v":[0,100],"z":[2]},0,1]
-    ],
-    [
-      4,
-      25,
-      [
-        0,
-        {
-          "i": [0,0,0,-11.098,-20.143,0,-6.228,4.955],
-          "o": [-7.82,6.743,0,20.142,8.577,0,0,0],
-          "v": [-16.452,-32.157,-29.228,-4.316,7.244,32.156,29.228,24.798]
-        }
-      ],
-      [0,{"t":[20,40],"v":[0,100],"z":[2]},0,1]
-    ],
-    [
-      4,
-      -27,
-      [
-        0,
-        {
-          "c": 1,
-          "i": [0,20.143,20.143,0,0,-20.144,-20.143,0],
-          "o": [0,-20.144,-20.143,0,0,20.143,20.143,0],
-          "v": [36.473,0.098,-0.001,-36.571,-36.473,0.098,-0.001,36.571]
-        }
-      ],
-      [0,{"t":[20,40,60],"v":[0,0,50],"z":[2,2]},0,1]
-    ],
-    [
-      4,
-      -4,
-      [
-        0,
-        {
-          "i": [0,0,0,9.393,-12.118,0.638,-3.033,-0.119,-13.129,-10.819,0,0,-36.897,12.472],
-          "o": [-18.803,0.854,0,-9.393,0,0,5.336,0.21,13.357,11.007,0,0,0,0],
-          "v": [
-            -59.137, 6.665, -84.768, -15.159, -64.783, -36.419, -60.07, -36.454, -31.932,-23.561,
-            8.705, 8.794, 84.768, 24.101
-          ]
-        }
-      ],
-      [0,{"t":[0,25,40],"v":[0,0,100],"z":[2,2]},0,1]
-    ],
-    [
-      4,
-      -2,
-      [0,{"i":[0,0,44.788,-5.811],"o":[0,0,0,0],"v":[22.394,-75.083,-22.394,75.083]}],
-      [0,{"t":[0,25],"v":[0,100],"z":[2]},0,1]
-    ]
-  ],
-  "f": 60,
-  "g": [0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-  "k": [[85,301]],
-  "o": 301,
-  "u": 1,
-  "z": [[0,0,1,1],[0.167,0.167,0.667,1],[0.333,0,0.667,1]]
-};
+const D = "0gskt10gpvi92i20s30k40mm300000600gt7gt7uk1uk1mj5gt7qp20mj5gt720qaql2g20200000000000000msi5aqasdmegfkg1okrvbimul7muindimul7iqnqdivjs7iomtdirkq7imlgeivjs72444k34klpvbivjs7imrgdivjs70g900mg24qaoc0oc4gakaga2k34quvqasjkp6unridsjkp60qbgakaga2k34qhsvboipl5ikuidoipl50idgakaga2k34kmdhiufjmdiiuf0qemg24s8qaoc040ocqfog1ga2kb4urp8oh5rrp8lmr100qol8qsm300000kh1mg24u6s8oc04kj1og1ga2k36ijm1nikp1u2vk3jjm1oikp10qk1mg24u6s80oc4gaul1ga2k34mgjs7qtsl5mlhkbqtsl50kn1gaul1ga2k34rgo1ggrl1sgo1vvql10so1mg24g5u60oc4gasp1ga2kbcpqro1qmtetght1smi2tsio1ruj9hsqbrlpesnr4rkr9ught1ujt1000snv4rpn3usk3huj4ml3pmv5jnh3hql5hmr1pks2nos30lnr3sgj3nng3gti5tg4ghcik6000ir1gasp1ga2kb8nog8pjrfnlkenrh2opo3ojrfolkesrhc000jrm5tlt90nqg3mrm2nht3uqk30slt9igj40000qg2mg24o2g50oc4gaik2ga20qg2gaik2ga2kf8ivsh1kc1lrth1hvsh1kc1mrth10ult9ult900vlt9tlt900vlt9tlt900ult9ult900km2mg26o2g5o700k644gasp2ga2kbehgus1ihk3vjmp2tmm7thqv1losh1rklt1rssh1nnpfhhobigk4krk4gkmp2qksb000imp4rqu5sv4hrn1tehpm6lok500hkgi1gnh6lui9sq60hmp400grp2kq1qlo6uvl500000or2mg260i3g500oc44gakh3ga2kb4kvualpqk2jvuampqk200outl1lmt200000gj3mg240i30oc4gagl3ga2g246g3ghop2gpvi98200roomehvjs7m6481s9ib481mcqc481udie481mfsg1483gj1ik1483ql1sm1483go1ko1481op1qq1483uv1ig2483uj2gl248i3ol2sl248l3op2gr2487gh3oi3483sk3ul3";
 
 export const markup = M;
 export const init = (c, o) => mount(M, D, B, c, o);

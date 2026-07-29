@@ -46,6 +46,12 @@ interface WasmResult {
   compiledExtracted: Bytes;
   spriteSvg: Bytes;
   runtimeSlice: Bytes;
+  // The compiler's own unminified output, for the viewer.
+  prettyJs: Bytes;
+  prettyEmbedded: Bytes;
+  prettyExtracted: Bytes;
+  prettySlice: Bytes;
+  prettySprite: Bytes;
   driverMinJs: Bytes;
   total_frames: number;
   name: string | null;
@@ -106,6 +112,18 @@ async function buildCompileResponse(r: WasmResult, lottieRuntime: SizeEntry): Pr
   const externUrl = blobUrl(compiledJs, 'application/javascript');
   const embeddedUrl = blobUrl(compiledEmbedded, 'application/javascript');
   const jsonUrlValue = blobUrl(json, 'application/json');
+  // The size table names these too, and the viewer shows whatever a row names.
+  // The wasm path already has every artifact in hand, so they cost a blob each.
+  const extractedUrl = blobUrl(compiledExtracted, 'application/javascript');
+  const spriteUrl = blobUrl(sprite, 'image/svg+xml');
+  const sliceUrl = blobUrl(slice, 'application/javascript');
+  // The compiler's own unminified output, so the viewer shows the same thing
+  // the server would. Nothing is reformatted in the page.
+  const prettyJsonUrl = blobUrl(indentJson(json), 'application/json');
+  const prettyJsUrl = blobUrl(r.prettyJs, 'application/javascript');
+  const prettyEmbeddedUrl = blobUrl(r.prettyEmbedded, 'application/javascript');
+  const prettyExtractedUrl = blobUrl(r.prettyExtracted, 'application/javascript');
+  const prettySliceUrl = blobUrl(r.prettySlice, 'application/javascript');
 
   const [jsonGz, jsGz, jsEmbeddedGz, jsExtractedGz, spriteGz, sliceGz, ulottieRuntimeGz] =
     await Promise.all([
@@ -127,6 +145,15 @@ async function buildCompileResponse(r: WasmResult, lottieRuntime: SizeEntry): Pr
     json_url: jsonUrlValue,
     js_url: externUrl,
     js_embedded_url: embeddedUrl,
+    js_extracted_url: extractedUrl,
+    sprite_url: spriteUrl,
+    slice_url: sliceUrl,
+    json_pretty_url: prettyJsonUrl,
+    js_pretty_url: prettyJsUrl,
+    js_embedded_pretty_url: prettyEmbeddedUrl,
+    js_extracted_pretty_url: prettyExtractedUrl,
+    sprite_pretty_url: blobUrl(r.prettySprite, 'image/svg+xml'),
+    slice_pretty_url: prettySliceUrl,
     plan: r.plan,
     unsupported: r.unsupported,
     sizes: {
@@ -141,6 +168,16 @@ async function buildCompileResponse(r: WasmResult, lottieRuntime: SizeEntry): Pr
       features: r.features,
     },
   };
+}
+
+/** Re-serialize the source JSON at two spaces; the server does the same. */
+function indentJson(bytes: Bytes): Bytes {
+  try {
+    const text = new TextDecoder().decode(bytes);
+    return new TextEncoder().encode(JSON.stringify(JSON.parse(text), null, 2));
+  } catch {
+    return bytes;
+  }
 }
 
 function blobUrl(bytes: Bytes, type: string): string {

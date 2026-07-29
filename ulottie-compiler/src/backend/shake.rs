@@ -39,7 +39,13 @@ pub struct Decl {
 /// solver even though `kf.js` mentions it.
 const GATED: &[(&str, Caps)] = &[
     ("EASE", Caps::EASING),
-    ("spatial", Caps::SPATIAL),
+    // Both halves of the motion-path sampler. These are named here by the
+    // symbol, so renaming one silently un-gates it and every keyframed
+    // animation starts carrying it again — which is exactly what happened when
+    // `spatial` was split into `spBuild`/`spSample`.
+    ("spBuild", Caps::SPATIAL),
+    ("spSample", Caps::SPATIAL),
+    ("spSeg", Caps::SPATIAL),
     ("lerpPath", Caps::PATH_KF),
     ("rectPath", Caps::GEOM_RECT),
     ("ellipsePath", Caps::GEOM_ELLIPSE),
@@ -49,6 +55,18 @@ const GATED: &[(&str, Caps)] = &[
     ("trimTable", Caps::TRIM),
     ("trimApply", Caps::TRIM),
     ("expand", Caps::TEMPLATES),
+    // The expression runtime, cut to what the bodies name. A resolved body
+    // reports the symbols it calls exactly, in `Plan::helpers`, and those enter
+    // `roots()` directly; these gates cover the ones the runtime names on a
+    // branch it only takes for some animations. Without them an animation that
+    // only calls `loopOut` still carries comp-space transforms and the
+    // arc-length path sampler.
+    ("thisPropertyFor", Caps::EXPR_PROPERTY),
+    ("toComp", Caps::EXPR_COMP),
+    ("fromCompToSurface", Caps::EXPR_COMP),
+    ("pointOnPath", Caps::EXPR_PATH),
+    ("tangentOnPath", Caps::EXPR_PATH),
+    ("createPath", Caps::EXPR_PATH),
 ];
 
 fn is_cut(name: &str, caps: Caps) -> bool {

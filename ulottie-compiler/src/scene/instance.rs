@@ -14,7 +14,7 @@
 //! Local indices are what makes this work, and they are why `Prop::Expr` stores
 //! a layer index that is only meaningful relative to an instance.
 
-use super::{Binding, LayerRecord, Deltas, Prefix};
+use super::{Binding, LayerRecord};
 
 /// One precomp, planned once.
 pub struct AssetPlan {
@@ -33,6 +33,13 @@ pub struct AssetPlan {
     pub slots: Vec<u32>,
     /// Layer records with parent indices local to this asset.
     pub records: Vec<LayerRecord>,
+    /// Composition scope per record, parallel to `records`.
+    ///
+    /// Compile-time only: an instantiation's records all share the scope the
+    /// planner allocated for that *use*, so the runtime never reads this. It
+    /// exists so the layer resolver can answer `thisComp.layer('x')` inside an
+    /// asset the same way it does in the document.
+    pub scopes: Vec<u32>,
     /// `[parentSlot, offset, loopIp, loopOp]`, with `parentSlot` 0 meaning the
     /// instance's own clock and `n` meaning this asset's local slot `n - 1`.
     pub timelines: Vec<[f64; 4]>,
@@ -67,49 +74,4 @@ pub struct Use {
     pub scope: u32,
 }
 
-impl serde::Serialize for Use {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeSeq;
-        let mut q = s.serialize_seq(Some(6))?;
-        for v in [
-            self.asset,
-            self.el_base,
-            self.rec_base,
-            self.slot_base,
-            self.parent_slot,
-            self.scope,
-        ] {
-            q.serialize_element(&v)?;
-        }
-        q.end()
-    }
-}
 
-impl serde::Serialize for AssetPlan {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeMap;
-        let mut n = 2;
-        for present in [
-            !self.records.is_empty(),
-            !self.timelines.is_empty(),
-            self.slots.iter().any(|s| *s != 0),
-        ] {
-            if present {
-                n += 1;
-            }
-        }
-        let mut m = s.serialize_map(Some(n))?;
-        m.serialize_entry("m", &self.template)?;
-        m.serialize_entry("b", &Deltas(&self.bindings))?;
-        if self.slots.iter().any(|s| *s != 0) {
-            m.serialize_entry("l", &Prefix(&self.slots))?;
-        }
-        if !self.timelines.is_empty() {
-            m.serialize_entry("t", &super::Quads(&self.timelines))?;
-        }
-        if !self.records.is_empty() {
-            m.serialize_entry("y", &self.records)?;
-        }
-        m.end()
-    }
-}

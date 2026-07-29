@@ -1,10 +1,10 @@
 // Expanding factored-out subtrees.
 //
 // When a document is too large to inline whole, repeated subtrees ship once in
-// `D.m` and each occurrence is a `<g data-t="n"/>` placeholder. Expansion has
-// to run before elements are indexed: the compiler assigned document-order
-// indices over the *expanded* tree, and replacing a placeholder with the
-// template's root keeps every one of them correct.
+// the string pool and each occurrence is a `<g data-t="n"/>` placeholder.
+// Expansion has to run before elements are indexed: the compiler assigned
+// document-order indices over the *expanded* tree, and replacing a placeholder
+// with the template's root keeps every one of them correct.
 
 import { suffixIds } from './ids.js';
 
@@ -19,13 +19,14 @@ function scopeIds(root) {
   return suffixIds(root, '--c', '-c' + clone++);
 }
 
-export function expand(svg, tpl) {
+export function expand(svg, list) {
+  if (!list || !list.length) return;
   const box = document.createElement('div');
   const parse = (m) => {
     box.innerHTML = '<svg>' + m + '</svg>';
     return box.firstChild.firstElementChild;
   };
-  const nodes = tpl.map(parse);
+  const nodes = list.map(parse);
   // A precomp body can hold uses of other precomps, so expansion repeats until
   // nothing is left. Each pass snapshots the list first — replaceWith mutates
   // the tree underneath a live NodeList.

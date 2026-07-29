@@ -2,10 +2,10 @@ import { resolve } from '../kf.js';
 import { r } from '../num.js';
 import { attr } from '../set.js';
 
-export function bRect(el, b, ctx, at) {
-  const sz = resolve(b[2], ctx, at);
-  const ps = resolve(b[3], ctx, at);
-  const rd = resolve(b[4], ctx, at);
+export function bRect(el, S, a, ctx, at) {
+  const sz = resolve(S[a], ctx, at);
+  const ps = resolve(S[a + 1], ctx, at);
+  const rd = resolve(S[a + 2], ctx, at);
   const setX = attr(el, 'x'), setY = attr(el, 'y');
   const setW = attr(el, 'width'), setH = attr(el, 'height');
   const setRx = attr(el, 'rx'), setRy = attr(el, 'ry');

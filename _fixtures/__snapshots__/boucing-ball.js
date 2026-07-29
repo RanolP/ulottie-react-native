@@ -11,44 +11,13 @@ const M =
   '<svg viewBox="0 0 1080 1080" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="overflow:hidden">' +
     '<rect width="1080" height="1080" fill="#ffffff"/>' +
     '<g>' +
-      '<g transform="matrix(1,0,0,1,128.98,64.97)">' +
+      '<g transform="translate(128.98,64.97)">' +
         '<rect x="-206.975" y="-206.975" width="413.95" height="413.95" rx="206.975" ry="206.975" fill="#63d3bf"/>' +
       '</g>' +
     '</g>' +
   '</svg>';
 
-const D = {
-  "b": [
-    [
-      0,
-      1,
-      {
-        "d": 2,
-        "k": 1,
-        "t": [0,10,20,30,40,50,60],
-        "ti": [0,0,0,0,0,0,0,0,0,0,0,-111.667],
-        "to": [0,-111.667,0,0,0,0,0,0,0,0,0,0],
-        "v": [
-          543.75, 951.225, 543.75, 281.225, 543.75, 951.225, 543.75, 281.225, 543.75, 951.225,
-          543.75, 281.225, 543.75, 951.225
-        ],
-        "z": [1,2,1,3,1,3]
-      },
-      [128.975,271.95],
-      {
-        "d": 2,
-        "k": 1,
-        "t": [10,17,21,31,38,42,50,57,61],
-        "v": [40,40,28,51,40,40,40,40,28,51,40,40,40,40,28,51,40,40],
-        "z": [4,4,4,4,4,5,4,4]
-      },
-      0
-    ]
-  ],
-  "f": 30,
-  "o": 61,
-  "z": [[0,0,1,1],[0.333,0,0,1],[0.968,0,0.57,1],[1,0,0.667,1],[0.333,0,0.667,1],[0.167,0,0.667,1]]
-};
+const D = "0gmqe0gpst10i200000kh100000c00gt7gt7qp200gt7gp70kn4gt7gt70mj5gt7qp20mj5gt7uk10mj5gt7msq5e0k1o2s3g5k6o7sgopg1inngt1sgopg1ihlp8sgopg1inngt1sgopg1ihlp8sgopg1inngt1sgopg1ihlp8sgopg1inngt12426260lmom3000000000000000000000lmom3i34upvu3spsk8mgi5i1k1i2q2u3s4k5k6i7q7g5g5o3m6g5g5g5g5o3m6g5g5g5g5o3m6g5g588888a88002802k5ubmcgh1";
 
 export const markup = M;
 export const init = (c, o) => mount(M, D, B, c, o);

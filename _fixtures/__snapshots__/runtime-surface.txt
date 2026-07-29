@@ -1,10 +1,10 @@
 boucing-ball
   caps:    TRANSFORM | KEYFRAMES | EASING | SPATIAL
-  runtime: 16 symbols: EASE, SP_SEG, attr, bTransform, fallbackOf, fmt, keyframed, konst, mount, r2, r5, reduced, resolve, seq, spBuild, spatial
+  runtime: 45 symbols: EASE, F_EASE, F_END, F_HOLD, F_SPATIAL, H_ASSETS, H_BINDINGS, H_BIND_GATE, H_EASINGS, H_FLAGS, H_FR, H_GATES, H_IP, H_LAYERS, H_OP, H_REMAPS, H_SLOTS, H_TIMELINES, H_USES, INV, SP_SEG, T_EXPR, T_PATH, T_SCALAR, T_VECTOR, animInfo, attr, bTransform, column, dec, fmt, keyframed, keyframes, konst, mkPath, mount, r2, r5, reduced, resolve, seq, spBuild, spSample, spSeg, vector
 
 bouncy_ball
   caps:    TRANSFORM | KEYFRAMES | EASING
-  runtime: 13 symbols: EASE, attr, bTransform, fallbackOf, fmt, keyframed, konst, mount, r2, r5, reduced, resolve, seq
+  runtime: 41 symbols: EASE, F_EASE, F_END, F_HOLD, F_SPATIAL, H_ASSETS, H_BINDINGS, H_BIND_GATE, H_EASINGS, H_FLAGS, H_FR, H_GATES, H_IP, H_LAYERS, H_OP, H_REMAPS, H_SLOTS, H_TIMELINES, H_USES, INV, T_EXPR, T_PATH, T_SCALAR, T_VECTOR, animInfo, attr, bTransform, column, dec, fmt, keyframed, keyframes, konst, mkPath, mount, r2, r5, reduced, resolve, seq, vector
 
 ellipse
   caps:    none
@@ -15,28 +15,28 @@ fill
   runtime: none (fully static, or legacy runtime)
 
 lights
-  caps:    SHAPE | KEYFRAMES | EASING | PATH_KF | PATH_D | EXPRESSIONS | LAYER_TX
-  runtime: 42 symbols: ARC, EASE, arcTable, attachHelpers, attr, bLayerTx, bShape, baseValue, createPath, evalExpr, fallbackOf, fmt, fromCompToSurface, keyValue, keyedProperty, keyframed, konst, lerpPath, locate, makeExpr, mount, pairs, pathD, pathProperty, pdPair, pdSep, pointOnPath, propEval, proxyFor, r, r2, r5, readProp, record, recordId, reduced, resolve, seq, stubProperty, tangentOnPath, thisPropertyFor, toComp
+  caps:    SHAPE | KEYFRAMES | EASING | PATH_KF | PATH_D | EXPRESSIONS | LAYER_TX | EXPR_PROPERTY | EXPR_COMP | EXPR_PATH
+  runtime: 96 symbols: ARC, EASE, FIELDS, FULL, F_EASE, F_END, F_HOLD, F_SPATIAL, H_ASSETS, H_BINDINGS, H_BIND_GATE, H_EASINGS, H_FLAGS, H_FR, H_GATES, H_IP, H_LAYERS, H_OP, H_REMAPS, H_SLOTS, H_TIMELINES, H_USES, INV, ORIGIN, R_A, R_EFFECTS, R_H, R_NAME, R_O, R_P, R_PARENT, R_R, R_SC, T_EXPR, T_PATH, T_SCALAR, T_VECTOR, ZERO, animInfo, arcTable, attachHelpers, attr, bLayerTx, bShape, baseValue, column, createPath, dec, effectParam, effectValue, effects, evalExpr, fmt, fromCompToSurface, initExpr, keyValue, keyedProperty, keyframed, keyframes, konst, layerTx, lerpPath, localTransform, locate, lyAnchor, lyAt, lyEffect, lyLink, lyParent, lyPath, lyPos, lyRot, lyScale, makeExpr, mkPath, mount, pairs, pathD, pathProperty, pdPair, pdSep, pointOnPath, r, r2, r5, readProp, record, records, reduced, resolve, seq, stubProperty, tangentOnPath, thisPropertyFor, toComp, vector
 
 lottie-logo
   caps:    TRANSLATE | DISPLAY | SHAPE | KEYFRAMES | EASING | PATH_D | TRIM
-  runtime: 26 symbols: EASE, SAMPLES, attr, bDisplay, bShape, bTranslate, fallbackOf, fmt, keyframed, konst, mount, pathD, pdPair, pdSep, r, r2, reduced, resolve, seq, tmBetween, tmConcat, tmCut, tmLocate, tmSplit, trimApply, trimTable
+  runtime: 54 symbols: EASE, F_EASE, F_END, F_HOLD, F_SPATIAL, H_ASSETS, H_BINDINGS, H_BIND_GATE, H_EASINGS, H_FLAGS, H_FR, H_GATES, H_IP, H_LAYERS, H_OP, H_REMAPS, H_SLOTS, H_TIMELINES, H_USES, INV, SAMPLES, T_EXPR, T_PATH, T_SCALAR, T_VECTOR, animInfo, attr, bDisplay, bShape, bTranslate, column, dec, fmt, keyframed, keyframes, konst, mkPath, mount, pathD, pdPair, pdSep, r, r2, reduced, resolve, seq, tmBetween, tmConcat, tmCut, tmLocate, tmSplit, trimApply, trimTable, vector
 
 precomp_star_circle
   caps:    SHAPE | ELLIPSE | FILL | STROKE | KEYFRAMES | GEOM_STAR | PATH_D | TIMELINE | TEMPLATES | INSTANCES
-  runtime: 24 symbols: attr, bEllipse, bFill, bShape, bStroke, clone, css, expand, fallbackOf, fmt, geoSize, keyframed, konst, mount, pathD, pdPair, pdSep, r, reduced, resolve, scopeIds, seq, starPath, suffixIds
+  runtime: 52 symbols: F_EASE, F_END, F_HOLD, F_SPATIAL, H_ASSETS, H_BINDINGS, H_BIND_GATE, H_EASINGS, H_FLAGS, H_FR, H_GATES, H_IP, H_LAYERS, H_OP, H_REMAPS, H_SLOTS, H_TIMELINES, H_USES, INV, T_EXPR, T_PATH, T_SCALAR, T_VECTOR, animInfo, attr, bEllipse, bFill, bShape, bStroke, clone, column, css, dec, expand, fmt, geoSize, keyframed, keyframes, konst, mkPath, mount, pathD, pdPair, pdSep, r, reduced, resolve, scopeIds, seq, starPath, suffixIds, vector
 
 rectangle
   caps:    none
   runtime: none (fully static, or legacy runtime)
 
 ripple
-  caps:    SHAPE | GRADIENT | KEYFRAMES | EASING | PATH_D | TRIM | TIMELINE | EXPRESSIONS | LAYER_TX | TEMPLATES | INSTANCES
-  runtime: 54 symbols: ARC, EASE, SAMPLES, arcTable, attachHelpers, attr, bGradient, bLayerTx, bShape, baseValue, clone, createPath, evalExpr, expand, fallbackOf, fmt, fromCompToSurface, keyValue, keyedProperty, keyframed, konst, locate, makeExpr, mount, pairs, pathD, pathProperty, pdPair, pdSep, pointOnPath, propEval, proxyFor, r, r2, r5, readProp, record, recordId, reduced, resolve, scopeIds, seq, stubProperty, suffixIds, tangentOnPath, thisPropertyFor, tmBetween, tmConcat, tmCut, tmLocate, tmSplit, toComp, trimApply, trimTable
+  caps:    SHAPE | GRADIENT | KEYFRAMES | EASING | PATH_D | TRIM | TIMELINE | EXPRESSIONS | LAYER_TX | TEMPLATES | INSTANCES | EXPR_PROPERTY | EXPR_COMP | EXPR_PATH
+  runtime: 108 symbols: ARC, EASE, FIELDS, FULL, F_EASE, F_END, F_HOLD, F_SPATIAL, H_ASSETS, H_BINDINGS, H_BIND_GATE, H_EASINGS, H_FLAGS, H_FR, H_GATES, H_IP, H_LAYERS, H_OP, H_REMAPS, H_SLOTS, H_TIMELINES, H_USES, INV, ORIGIN, R_A, R_EFFECTS, R_H, R_NAME, R_O, R_P, R_PARENT, R_R, R_SC, SAMPLES, T_EXPR, T_PATH, T_SCALAR, T_VECTOR, ZERO, animInfo, arcTable, attachHelpers, attr, bGradient, bLayerTx, bShape, baseValue, clone, column, createPath, dec, effectParam, effectValue, effects, evalExpr, expand, fmt, initExpr, keyValue, keyedProperty, keyframed, keyframes, konst, layerTx, localTransform, locate, lyAnchor, lyAt, lyEffect, lyLink, lyParent, lyPath, lyPoints, lyPos, lyRot, lyScale, makeExpr, mkPath, mount, pairs, pathD, pathProperty, pdPair, pdSep, pointOnPath, r, r2, r5, readProp, record, records, reduced, resolve, scopeIds, seq, stubProperty, suffixIds, tangentOnPath, thisPropertyFor, tmBetween, tmConcat, tmCut, tmLocate, tmSplit, toComp, trimApply, trimTable, vector
 
 starfish
-  caps:    SHAPE | KEYFRAMES | EASING | SPATIAL | PATH_KF | HOLD | PATH_D | TIMELINE | EXPRESSIONS | LAYER_TX | TEMPLATES | INSTANCES | TIME_REMAP
-  runtime: 49 symbols: ARC, EASE, SP_SEG, arcTable, attachHelpers, attr, bLayerTx, bShape, baseValue, clone, createPath, evalExpr, expand, fallbackOf, fmt, fromCompToSurface, keyValue, keyedProperty, keyframed, konst, lerpPath, locate, makeExpr, mount, pairs, pathD, pathProperty, pdPair, pdSep, pointOnPath, propEval, proxyFor, r, r2, r5, readProp, record, recordId, reduced, resolve, scopeIds, seq, spBuild, spatial, stubProperty, suffixIds, tangentOnPath, thisPropertyFor, toComp
+  caps:    SHAPE | KEYFRAMES | EASING | SPATIAL | PATH_KF | HOLD | PATH_D | TIMELINE | EXPRESSIONS | LAYER_TX | TEMPLATES | INSTANCES | TIME_REMAP | EXPR_PROPERTY | EXPR_COMP | EXPR_PATH
+  runtime: 103 symbols: ARC, EASE, FIELDS, FULL, F_EASE, F_END, F_HOLD, F_SPATIAL, H_ASSETS, H_BINDINGS, H_BIND_GATE, H_EASINGS, H_FLAGS, H_FR, H_GATES, H_IP, H_LAYERS, H_OP, H_REMAPS, H_SLOTS, H_TIMELINES, H_USES, INV, ORIGIN, R_A, R_EFFECTS, R_H, R_NAME, R_O, R_P, R_PARENT, R_R, R_SC, SP_SEG, T_EXPR, T_PATH, T_SCALAR, T_VECTOR, ZERO, animInfo, arcTable, attachHelpers, attr, bLayerTx, bShape, baseValue, clone, column, createPath, dec, effectParam, effectValue, effects, evalExpr, expand, fmt, fromCompToSurface, initExpr, keyValue, keyedProperty, keyframed, keyframes, konst, layerTx, lerpPath, localTransform, locate, lyAnchor, lyAt, lyEffect, lyLink, lyParent, lyPos, lyRot, lyScale, makeExpr, mkPath, mount, pairs, pathD, pathProperty, pdPair, pdSep, pointOnPath, r, r2, r5, readProp, record, records, reduced, resolve, scopeIds, seq, spBuild, spSample, spSeg, stubProperty, suffixIds, tangentOnPath, thisPropertyFor, toComp, vector
 
 trim_path
   caps:    none

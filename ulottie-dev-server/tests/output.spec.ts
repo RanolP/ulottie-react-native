@@ -130,7 +130,7 @@ function highestElementIndex(prettyJs: string): number {
   const i = prettyJs.indexOf('const D = ');
   if (i < 0) return -1;
   const rest = prettyJs.slice(i + 10);
-  const end = rest.search(/\n(export |const [A-Z] =)/);
+  const end = rest.search(/\n(export |const [A-Z]+ =)/);
   const D = JSON.parse(rest.slice(0, end < 0 ? rest.length : end).replace(/;\s*$/, ''));
   let max = -1;
   // The element column is delta-encoded, so it has to be summed to compare.

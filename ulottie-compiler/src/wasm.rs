@@ -30,6 +30,15 @@ pub struct CompileResult {
     compiled_extracted: Vec<u8>,
     sprite_svg: Vec<u8>,
     runtime_slice: Vec<u8>,
+    // The same artifacts as the compiler writes them before minification —
+    // what the demo's viewer shows. Producing them here rather than
+    // reconstructing structure in the page keeps the wasm build at parity with
+    // the server, and there is nothing for a formatter to get wrong.
+    pretty_js: Vec<u8>,
+    pretty_embedded: Vec<u8>,
+    pretty_extracted: Vec<u8>,
+    pretty_slice: Vec<u8>,
+    pretty_sprite: Vec<u8>,
     driver_min_js: Vec<u8>,
     total_frames: f64,
     name: Option<String>,
@@ -73,6 +82,31 @@ impl CompileResult {
     #[wasm_bindgen(getter, js_name = runtimeSlice)]
     pub fn runtime_slice(&self) -> Uint8Array {
         bytes(&self.runtime_slice)
+    }
+
+    #[wasm_bindgen(getter, js_name = prettyJs)]
+    pub fn pretty_js(&self) -> Uint8Array {
+        bytes(&self.pretty_js)
+    }
+
+    #[wasm_bindgen(getter, js_name = prettyEmbedded)]
+    pub fn pretty_embedded(&self) -> Uint8Array {
+        bytes(&self.pretty_embedded)
+    }
+
+    #[wasm_bindgen(getter, js_name = prettyExtracted)]
+    pub fn pretty_extracted(&self) -> Uint8Array {
+        bytes(&self.pretty_extracted)
+    }
+
+    #[wasm_bindgen(getter, js_name = prettySlice)]
+    pub fn pretty_slice(&self) -> Uint8Array {
+        bytes(&self.pretty_slice)
+    }
+
+    #[wasm_bindgen(getter, js_name = prettySprite)]
+    pub fn pretty_sprite(&self) -> Uint8Array {
+        bytes(&self.pretty_sprite)
     }
 
     #[wasm_bindgen(getter, js_name = driverMinJs)]
@@ -169,6 +203,33 @@ pub fn compile_request(json_text: &str) -> Result<CompileResult, JsError> {
         crate::runtime_slice(&report.caps)
     };
 
+    let unmin = |m, markup: MarkupMode| CompileOptions {
+        runtime_mode: m,
+        markup,
+        allow: allow.clone(),
+        minify: false,
+        ..Default::default()
+    };
+    let pretty_js = backend::compile(&module, &unmin(RuntimeMode::Extern, MarkupMode::Inline))
+        .unwrap_or_default()
+        .unwrap_or_default();
+    let pretty_embedded =
+        backend::compile(&module, &unmin(RuntimeMode::Embedded, MarkupMode::Inline))
+            .unwrap_or_default()
+            .unwrap_or_default();
+    let pretty_extracted = backend::compile(
+        &module,
+        &unmin(RuntimeMode::Extern, MarkupMode::Extracted("anim".into())),
+    )
+    .unwrap_or_default()
+    .unwrap_or_default();
+    let pretty_sprite = crate::markup_pretty(&sprite_svg);
+    let pretty_slice = if report.is_static {
+        String::new()
+    } else {
+        crate::runtime_slice_pretty(&report.caps)
+    };
+
     let plan = serde_json::json!({
         "caps": report.caps,
         "modules": report.modules,
@@ -227,6 +288,11 @@ pub fn compile_request(json_text: &str) -> Result<CompileResult, JsError> {
         compiled_extracted: compiled_extracted.into_bytes(),
         sprite_svg: sprite_svg.into_bytes(),
         runtime_slice: runtime_slice.into_bytes(),
+        pretty_js: pretty_js.into_bytes(),
+        pretty_embedded: pretty_embedded.into_bytes(),
+        pretty_extracted: pretty_extracted.into_bytes(),
+        pretty_slice: pretty_slice.into_bytes(),
+        pretty_sprite: pretty_sprite.into_bytes(),
         driver_min_js: driver_min_js.into_bytes(),
         total_frames: (op - ip).max(0.0),
         name,

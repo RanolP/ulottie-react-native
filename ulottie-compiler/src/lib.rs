@@ -4,6 +4,7 @@ pub mod data;
 // geometry, transform and gradient math to bake static values at compile time.
 // The `eval` feature is kept as a no-op so existing invocations keep working.
 pub mod eval;
+pub mod expr;
 pub mod ir;
 pub mod lottie;
 pub mod scene;
@@ -169,18 +170,22 @@ pub fn compile_to_payload(json: &str) -> Result<data::Payload> {
     data::encode(&module)
 }
 
-/// The animation's **document template**: one standalone SVG holding every
-/// value the compiler could resolve ahead of time.
+/// The animation's **document**: one standalone SVG showing the composition's
+/// first frame.
 ///
-/// This is deterministic and needs no script to render, which makes it usable
-/// for server-side rendering, `<noscript>` fallbacks, static thumbnails, or as
-/// the DOM a client hydrates onto (`init(el, { hydrate: true })`). It is what
-/// the compiled module inlines when it is small enough to be worth inlining —
-/// but it is produced independently of that decision, so it is always
-/// available at full fidelity.
+/// It needs no script to render, which is what makes it usable for server-side
+/// rendering, `<noscript>` fallbacks, static thumbnails, `<img src>`, or as the
+/// DOM a client hydrates onto (`init(el, { hydrate: true })`).
 ///
-/// Attributes that vary over time are not in it; the player writes those on
-/// mount. For a fully static animation the template *is* the finished render.
+/// Every binding is evaluated at the first frame and written as an ordinary
+/// attribute — see [`scene::bake`]. Without that the document would hold only
+/// what cannot change, and a layer with an animated transform would have no
+/// `transform` at all and draw at the origin. What the module inlines is the
+/// *un*baked form, since the runtime writes those attributes on mount anyway.
+///
+/// One gap: an expression cannot be evaluated ahead of time, so a property
+/// driven by one bakes to its fallback and the picture is approximate. It is
+/// exact for every animation without expressions.
 pub fn compile_document(json: &str) -> Result<String> {
     // Inlined markup is parsed as HTML, where the SVG namespace is implied.
     // A standalone document has to declare it or a browser renders the source
@@ -190,7 +195,11 @@ pub fn compile_document(json: &str) -> Result<String> {
     Ok(scene::resolve_ids(&doc, 0))
 }
 
-/// The document template with per-mount id markers still in place.
+/// The document with per-mount id markers still in place.
+///
+/// Planned fully expanded — never instanced — which is also what lets the bake
+/// cover every element: an instanced precomp body is stored once and replayed
+/// at a different point on each instance's clock, so it has no single frame.
 fn document_template(json: &str) -> Result<String> {
     let animation: lottie::Animation = serde_json::from_str(json)?;
     let module = ir::lower(&animation)?;
@@ -201,11 +210,13 @@ fn document_template(json: &str) -> Result<String> {
     Ok(scene::plan(&payload, !module.expressions.is_empty())?.markup)
 }
 
-/// The document template as a sprite `<symbol>`, ready to be concatenated with
-/// others into one file a page inlines or preloads.
+/// The document as a sprite `<symbol>`, ready to be concatenated with others
+/// into one file a page inlines or preloads.
 ///
 /// The symbol's content is exactly the document's children, in order — the
 /// runtime binds by document-order index, so nothing may be added or removed.
+/// The first-frame bake respects that: it only ever adds attributes, which is
+/// why a sprite can be both the pre-script picture and the tree that hydrates.
 ///
 /// Generated ids keep their marker here, unlike [`compile_document`]: a sprite
 /// can be mounted any number of times and each mount resolves its own.
@@ -220,6 +231,12 @@ pub fn sprite(symbols: &[String]) -> String {
 }
 
 /// Same, indented one element per line for review and diffing.
+/// Markup, one element per line — the same formatter the document and the
+/// snapshots use. The sprite ships on one line like everything else.
+pub fn markup_pretty(markup: &str) -> String {
+    backend::pretty::markup_plain(markup)
+}
+
 pub fn compile_document_pretty(json: &str) -> Result<String> {
     Ok(backend::pretty::markup_plain(&compile_document(json)?))
 }
@@ -286,6 +303,21 @@ pub fn runtime_slice(caps: &[String]) -> String {
         }
     }
     backend::emit::runtime_source(c)
+}
+
+/// The same slice, unminified — the modules as they are written.
+///
+/// The demo shows this rather than re-deriving structure from the minified
+/// form: a formatter guessing at a compiled module has to be right about
+/// template literals and regexes, and this has nothing to be wrong about.
+pub fn runtime_slice_pretty(caps: &[String]) -> String {
+    let mut c = scene::Caps::empty();
+    for (name, bit) in scene::Caps::all().iter_names() {
+        if caps.iter().any(|n| n == name) {
+            c |= bit;
+        }
+    }
+    backend::emit::runtime_pretty(c)
 }
 
 /// Every runtime module as `(specifier, source)` — for publishing the tree.

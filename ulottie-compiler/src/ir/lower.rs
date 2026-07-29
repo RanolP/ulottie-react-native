@@ -67,6 +67,11 @@ pub fn lower(anim: &Animation) -> Result<Module> {
         });
     }
 
+    // Fold the expressions before anything downstream sees them. It runs here
+    // rather than at each entry point so the module, the document and the
+    // reference renderer cannot disagree about which expressions still exist.
+    crate::expr::fold_module(&mut module);
+
     Ok(module)
 }
 

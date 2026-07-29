@@ -4,39 +4,42 @@
 // under an animated trim still comes through here, but with its source path
 // already resolved by the compiler — so its arc-length table is built once.
 
-import { resolve } from '../kf.js';
+import { resolve, mkPath } from '../kf.js';
 import { pathD } from '../path.js';
 import { rectPath, ellipsePath, starPath } from '../geom.js';
 import { trimTable, trimApply } from '../trim.js';
 import { attr } from '../set.js';
 
-export function bShape(el, b, ctx, at) {
-  const g = b[2];
-  const tm = b[3];
-  const kind = g[0];
+export function bShape(el, S, a, ctx, at) {
+  // [geometryDescriptor, trimTriple] — both offsets to their own sections.
+  const g = S[a];
+  const tm = S[a + 1];
+  const kind = S[g];
   const scratch = { v: [], i: null, o: null, c: 1 };
 
   let geo, fixed = null;
   if (kind === 0) {
-    const p = g[1];
+    const p = S[g + 1];
     geo = resolve(p, ctx, at);
-    if (p && typeof p === 'object' && p.v && p.t === undefined) fixed = p;
+    // A static path can have its arc-length table built once. Tag 2 is
+    // `T_PATH` in kf.js — a keyframed or expression-driven shape is not one.
+    if (p && (S[p] & 7) === 2) fixed = mkPath(S, p);
   } else if (kind === 1) {
-    const sz = resolve(g[1], ctx, at), ps = resolve(g[2], ctx, at), rd = resolve(g[3], ctx, at);
+    const sz = resolve(S[g + 1], ctx, at), ps = resolve(S[g + 2], ctx, at), rd = resolve(S[g + 3], ctx, at);
     geo = (f) => {
       const s = sz(f), p = ps(f);
       return rectPath(scratch, p[0], p[1], s[0], s[1], rd(f));
     };
   } else if (kind === 2) {
-    const sz = resolve(g[1], ctx, at), ps = resolve(g[2], ctx, at);
+    const sz = resolve(S[g + 1], ctx, at), ps = resolve(S[g + 2], ctx, at);
     geo = (f) => {
       const s = sz(f), p = ps(f);
       return ellipsePath(scratch, p[0], p[1], s[0] / 2, s[1] / 2);
     };
   } else {
-    const sy = g[1];
-    const pt = resolve(g[2], ctx, at), ps = resolve(g[3], ctx, at);
-    const or = resolve(g[4], ctx, at), ir = resolve(g[5], ctx, at), rt = resolve(g[6], ctx, at);
+    const sy = S[g + 1];
+    const pt = resolve(S[g + 2], ctx, at), ps = resolve(S[g + 3], ctx, at);
+    const or = resolve(S[g + 4], ctx, at), ir = resolve(S[g + 5], ctx, at), rt = resolve(S[g + 6], ctx, at);
     geo = (f) => {
       const p = ps(f);
       return starPath(scratch, sy, pt(f), p[0], p[1], or(f), ir(f), rt(f));
@@ -46,7 +49,7 @@ export function bShape(el, b, ctx, at) {
   const setD = attr(el, 'd');
   if (!tm) return (f) => setD(pathD(geo(f)));
 
-  const ts = resolve(tm[0], ctx, at), te = resolve(tm[1], ctx, at), to = resolve(tm[2], ctx, at);
+  const ts = resolve(S[tm], ctx, at), te = resolve(S[tm + 1], ctx, at), to = resolve(S[tm + 2], ctx, at);
   const table = fixed ? trimTable(fixed) : null;
   let hidden = null;
   return (f) => {

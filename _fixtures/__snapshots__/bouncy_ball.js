@@ -14,21 +14,7 @@ const M =
     '</g>' +
   '</svg>';
 
-const D = {
-  "b": [
-    [
-      0,
-      0,
-      {"d":2,"k":1,"t":[0,60,120],"v":[235,106,265,441,235,106],"z":[1,2]},
-      [204,169],
-      {"d":2,"k":1,"t":[55,60,65],"v":[100,100,136,59,100,100]},
-      0
-    ]
-  ],
-  "f": 60,
-  "o": 120,
-  "z": [[0,0,1,1],[0.333,0,1,1],[0,0,0.667,1]]
-};
+const D = "0gskt10gopq30i200000o700000600gt7gt7qp20gt7gt700mj5gt7mgi560o7gfmt1kdih2in3mt1kd2424op1il1mgg56u6o7i8ococgh1m7ococ002800s3m5u5k7";
 
 export const markup = M;
 export const init = (c, o) => mount(M, D, B, c, o);

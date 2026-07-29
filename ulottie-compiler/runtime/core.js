@@ -2,13 +2,22 @@
 //
 // The compiler hands over three things:
 //   M — SVG markup with every frame-invariant value already baked in;
-//   D — a table of what actually varies;
+//   D — the payload: one integer stream and the strings that could not become
+//       integers;
 //   B — a sparse array of binder factories, generated to hold exactly the ops
 //       this animation uses so the rest is never bundled.
 //
-// mount() parses M once, resolves each entry of D.b into a closure, and from
-// then on a frame is a flat loop over those closures. Nothing walks a tree,
-// nothing re-reads the payload, and nothing branches on a property's shape.
+// The payload decodes to a single `Int32Array`. Everything in it — bindings,
+// layer records, clocks, gates, properties — is a run of integers at an offset,
+// and every reference is that offset. mount() parses M once, walks the binding
+// section, and resolves each row into a closure. From then on a frame is a flat
+// loop over those closures: nothing walks a tree, nothing re-reads the payload,
+// and nothing branches on a property's shape.
+
+import { dec } from './vlq.js';
+import { H_FR, H_IP, H_OP, H_FLAGS, H_EASINGS, H_TIMELINES, H_GATES, H_SLOTS, H_BIND_GATE, H_BINDINGS, H_LAYERS, H_ASSETS, H_USES, H_REMAPS } from './wire.js';
+import { column } from './col.js';
+import { INV } from './scale.js';
 
 let seq = 0;
 
@@ -16,8 +25,12 @@ export function mount(M, D, B, container, opt, ext) {
   opt = opt || {};
   // Normalise once — the optional capabilities are read from four places.
   ext = ext || {};
+  const S = dec(D);
+  //   ext.p — the string pool, when anything in the scene still needs one
+  const str = ext.p || [];
+
   // Two mounts of the same module must not share `<mask>`/gradient ids.
-  const sfx = D.u ? '-' + seq++ : '';
+  const sfx = S[H_FLAGS] & 1 ? '-' + seq++ : '';
   // Extracted markup: M is the bare `<svg>` shell and the elements come from a
   // sprite, so the suffix is applied to the built DOM instead of the string.
   const src = ext.s;
@@ -38,109 +51,154 @@ export function mount(M, D, B, container, opt, ext) {
   //   ext.t — expand factored-out subtrees, before anything is indexed
   //   ext.x — build the expression engine
   //   ext.r — resolve a time-remap property to an evaluator
-  if (ext.t) ext.t(svg, D.m);
+  // The templates are the module's own strings and it closes over them, so
+  // nothing here has to find them on the wire.
+  if (ext.t) ext.t(svg);
 
-  const binds = D.b || [];
-  const n = binds.length;
-  const ctx = { D, svg, z: D.z, frame: 0 };
+  const fr = S[H_FR] / 1000;
+  const ip = S[H_IP] / 1000;
+  const op = S[H_OP] / 1000;
+
+  // Easing handles are the one table the hot loop wants as floats: the bezier
+  // solver reads all four per non-linear segment. There are only a handful, so
+  // they are widened once here rather than divided on every frame.
+  const ez = S[H_EASINGS];
+  const easings = [];
+  if (ez) {
+    for (let i = 0, n = S[ez]; i < n; i++) {
+      // Not `r`: reachability is resolved on bare names across the whole
+      // runtime, so a local `r` reads as a reference to num.js's coordinate
+      // formatter and ships it with every module. See the note in num.js.
+      const at = ez + 1 + i * 4;
+      easings.push([S[at] / 1000, S[at + 1] / 1000, S[at + 2] / 1000, S[at + 3] / 1000]);
+    }
+  }
+
+  const ctx = { S, str, svg, z: easings, fr, frame: 0, y: column(S, S[H_LAYERS], true) };
   if (ext.x) ctx.expr = ext.x(ctx);
 
-  // The two index columns ship as first differences — see `Deltas` in
-  // scene/mod.rs. Decoding is a running sum, and it has to stay out of `D`:
-  // the payload is module-scoped, so mounting twice would decode twice.
-  //
-  // `op::LAYER_TX` (10) and `op::LAYER_OP` (11) are the only ops whose first
-  // argument is an index, and they are the two highest op codes — so `> 9`
-  // identifies them. A Rust test pins that invariant, because adding a higher
-  // op would silently misdecode here.
+  const bind = S[H_BINDINGS];
+  const n = bind ? S[bind] : 0;
 
   // One flat list of updaters: the document's own bindings, then each precomp
   // instance replaying its asset's bindings with that instance's offsets.
   const U = [];
-  const insts = D.n;
-  // Timeline slot per updater. `D.l` covers the document's own bindings and is
-  // omitted when they all run on the composition clock — but an instance
-  // contributes its own slot regardless, so the array still has to exist, with
-  // a zero per document binding to keep it index-aligned with `U`. Without
-  // this, a fully-instanced animation ran every precomp on the raw frame and
-  // lost its per-instance offsets entirely.
-  let run = 0;
-  const S = D.l ? D.l.map((v) => (run += v)) : insts ? new Array(n).fill(0) : null;
-  if (n || insts) {
+  const uses = S[H_USES];
+  const nUses = uses ? S[uses] : 0;
+  // Timeline slot per updater. The slot column covers the document's own
+  // bindings and is omitted when they all run on the composition clock — but an
+  // instance contributes its own slot regardless, so the array still has to
+  // exist, with a zero per document binding to keep it index-aligned with `U`.
+  // Without this, a fully-instanced animation ran every precomp on the raw
+  // frame and lost its per-instance offsets entirely.
+  const S_ = column(S, S[H_SLOTS], true);
+  const slots = S_ || (nUses ? new Array(n).fill(0) : null);
+
+  if (n || nUses) {
     const els = svg.querySelectorAll('*');
-    let e = 0, q = 0;
+    // `op::LAYER_TX` (10) and `op::LAYER_OP` (11) are the only ops whose first
+    // argument is a record index, and they are the two highest op codes — so
+    // `> 9` identifies them. Both index columns ship as first differences, so
+    // decoding is a running sum, and it has to stay out of the payload: the
+    // stream is module-scoped, and mounting twice would decode twice.
+    let e = 0, q = 0, c = bind + 1;
     for (let i = 0; i < n; i++) {
-      const b = binds[i];
-      e += b[1];
-      U.push(B[b[0]](els[e], b, ctx, 0, b[0] > 9 ? (q += b[2]) : 0));
+      const len = S[c], code = S[c + 1];
+      e += S[c + 2];
+      const args = c + 3;
+      U.push(B[code](els[e], S, args, ctx, 0, code > 9 ? (q += S[args]) : 0));
+      c += 3 + len;
     }
-    // [asset, elementBase, recordBase, slotBase, parentSlot, scope]
-    for (const u of insts || []) {
-      const a = D.q[u[0]];
-      const at = { asset: u[0], recBase: u[2] };
-      const bs = a.b || [];
+    const assets = S[H_ASSETS];
+    for (let u = 0; u < nUses; u++) {
+      // [asset, elementBase, recordBase, slotBase, parentSlot, scope]
+      const row = uses + 1 + u * 6;
+      const a = assets + 1 + S[row] * 5;
+      // The expression engine already built this instantiation, records and
+      // all — `at.recs` is its own materialized record set, so its keyframe
+      // cursors stay separate from every other instance's — and its record
+      // properties captured *that* object. Reusing it keeps the two halves
+      // from drifting into two `at`s for one instance. With no engine there
+      // are no records to find, and `at` is only ever carried: `resolve` looks
+      // at it in its expression branch and nowhere else.
+      const at = (ctx.byUse && ctx.byUse[u]) || {};
+      const ab = S[a + 1];
+      const an = ab ? S[ab] : 0;
+      const al = column(S, S[a + 2], true);
       // An asset's columns are relative to the asset, so they restart here.
-      let ae = 0, aq = 0, al = 0;
-      for (let i = 0; i < bs.length; i++) {
-        const b = bs[i];
-        ae += b[1];
-        U.push(B[b[0]](els[u[1] + ae], b, ctx, at, b[0] > 9 ? (aq += b[2]) : 0));
-        if (S) {
-          const local = a.l ? (al += a.l[i]) : 0;
-          S.push(local ? u[3] + local : u[4]);
+      let ae = 0, aq = 0, ac = ab + 1;
+      for (let i = 0; i < an; i++) {
+        const len = S[ac], code = S[ac + 1];
+        ae += S[ac + 2];
+        const args = ac + 3;
+        U.push(B[code](els[S[row + 1] + ae], S, args, ctx, at, code > 9 ? (aq += S[args]) : 0));
+        ac += 3 + len;
+        if (slots) {
+          const local = al ? al[i] : 0;
+          slots.push(local ? S[row + 3] + local : S[row + 4]);
         }
       }
     }
   }
 
-  // Precomp clocks. `tl[i] = [parentSlot, offset, loopIp, loopOp]`; slot 0 is
-  // the composition clock, so slot i+1 is described by tl[i].
-  const tl = D.t;
-  const slots = S;
-  const T = tl ? new Float64Array(tl.length + 1) : null;
+  // Precomp clocks. Each row is `[parentSlot, offset, loopIp, loopOp]`; slot 0
+  // is the composition clock, so slot i+1 is described by row i.
+  const tl = S[H_TIMELINES];
+  const nTl = tl ? S[tl] : 0;
+  // Both tables carry the scale their frame numbers were written at.
+  const tScale = nTl ? INV[S[tl + 1]] : 1;
+  const tRows = tl + 2;
+  const T = nTl ? new Float64Array(nTl + 1) : null;
   // A precomp with time remap takes its clock from a property of the parent's
-  // time rather than from `parent - offset`. `D.rm` is parallel to `D.t`, with
-  // 0 where a slot has no remap.
-  const rm = D.rm && ext.r && D.rm.map((p) => (p ? ext.r(p, ctx) : 0));
+  // time rather than from `parent - offset`. The remap column is parallel to
+  // the timeline table, with 0 where a slot has no remap.
+  const rmc = S[H_REMAPS];
+  const rm = rmc && ext.r
+    ? Array.from({ length: S[rmc] }, (_, i) => (S[rmc + 1 + i] ? ext.r(S[rmc + 1 + i], ctx) : 0))
+    : null;
 
   // Visibility gates: a binding that lives inside a layer which is off at the
   // current frame is skipped outright, so a scene of staggered layers costs
   // only what is actually on screen.
-  const gates = D.k;
-  const gateOf = D.g;
-  const gateOn = gates ? new Uint8Array(gates.length) : null;
+  const gt = S[H_GATES];
+  const nGates = gt ? S[gt] : 0;
+  const gScale = nGates ? INV[S[gt + 1]] : 1;
+  const gRows = gt + 2;
+  // Gated on the per-binding column, not on the gate table: a table with no
+  // binding pointing into it gates nothing, and the frame loop would index a
+  // column that was never written.
+  const gateOf = column(S, S[H_BIND_GATE], false);
+  const gateOn = nGates && gateOf ? new Uint8Array(nGates) : null;
 
-  const fr = D.f;
-  const ip = D.i || 0;
-  const op = D.o;
   const span = op - ip || 1;
 
   function apply(f) {
     ctx.frame = f;
     if (T) {
       T[0] = f;
-      for (let i = 0; i < tl.length; i++) {
-        const e = tl[i];
+      for (let i = 0; i < nTl; i++) {
+        const e = tRows + i * 4;
         // Named `remap`, not `r`: reachability is resolved on bare names
         // across the whole runtime, and a local `r` reads as a reference to
         // num.js's coordinate formatter — which then ships with every module.
         const remap = rm && rm[i];
         if (remap) {
           // Lottie stores the remap in seconds; the timeline is in frames.
-          T[i + 1] = remap(T[e[0]]) * fr;
+          T[i + 1] = remap(T[S[e]]) * fr;
           continue;
         }
-        let x = T[e[0]] - e[1];
-        const p = e[3] - e[2];
-        if (p > 0 && x >= e[3]) x = e[2] + ((x - e[2]) % p);
+        let x = T[S[e]] - S[e + 1] * tScale;
+        const lo = S[e + 2] * tScale, hi = S[e + 3] * tScale;
+        const p = hi - lo;
+        if (p > 0 && x >= hi) x = lo + ((x - lo) % p);
         T[i + 1] = x;
       }
     }
     const total = U.length;
     if (gateOn) {
-      for (let i = 0; i < gates.length; i++) {
-        const g = gates[i];
-        gateOn[i] = f >= g[0] && f < g[1] ? 1 : 0;
+      for (let i = 0; i < nGates; i++) {
+        const g = gRows + i * 2;
+        gateOn[i] = f >= S[g] * gScale && f < S[g + 1] * gScale ? 1 : 0;
       }
       for (let i = 0; i < total; i++) {
         const g = i < n ? gateOf[i] : 0;
@@ -204,7 +262,7 @@ export function mount(M, D, B, container, opt, ext) {
     prev = 0;
   }
 
-  const player = {
+  const api = {
     svg,
     markup: html,
     totalFrames: span,
@@ -220,19 +278,19 @@ export function mount(M, D, B, container, opt, ext) {
     set direction(v) { dir = v < 0 ? -1 : 1; },
     play() {
       if (!raf && live) { prev = 0; raf = requestAnimationFrame(tick); }
-      return player;
+      return api;
     },
-    pause() { halt(); return player; },
-    stop() { halt(); frame = ip; apply(ip); return player; },
-    seek(f) { frame = f; apply(f); return player; },
-    goToFrame(f) { halt(); frame = f; apply(f); return player; },
-    goToAndStop(f) { return player.goToFrame(f); },
-    goToAndPlay(f) { frame = f; apply(f); return player.play(); },
-    on(name, fn) { (subs[name] || (subs[name] = [])).push(fn); return player; },
+    pause() { halt(); return api; },
+    stop() { halt(); frame = ip; apply(ip); return api; },
+    seek(f) { frame = f; apply(f); return api; },
+    goToFrame(f) { halt(); frame = f; apply(f); return api; },
+    goToAndStop(f) { return api.goToFrame(f); },
+    goToAndPlay(f) { frame = f; apply(f); return api.play(); },
+    on(name, fn) { (subs[name] || (subs[name] = [])).push(fn); return api; },
     off(name, fn) {
       const l = subs[name];
       if (l) { const i = l.indexOf(fn); if (i >= 0) l.splice(i, 1); }
-      return player;
+      return api;
     },
     destroy() {
       halt();
@@ -244,9 +302,10 @@ export function mount(M, D, B, container, opt, ext) {
   // `autoplay` defaults to 'auto': play, unless the OS asks for reduced
   // motion. `true` forces playback, `false` mounts paused.
   const auto = opt.autoplay;
-  if (live && auto !== false && (auto === true || !reduced())) player.play();
-  return player;
+  if (live && auto !== false && (auto === true || !reduced())) api.play();
+  return api;
 }
+
 
 function reduced() {
   return typeof matchMedia === 'function'

@@ -75,6 +75,24 @@ pub fn nd(x: f64, scale: f64) -> String {
 /// visible. The translation part contributes absolute error only, so it can be
 /// far coarser. Splitting the two is both smaller and ~5x more accurate than
 /// quantizing all six uniformly.
+/// The shortest spelling of a transform.
+///
+/// `matrix(1,0,0,1,x,y)` is `translate(x,y)` — same transform, five bytes less,
+/// and the one an author would have written. A pure translation is the most
+/// common transform in a Lottie file by a wide margin, so this is not a corner
+/// case being tidied: it is the default case no longer paying for generality it
+/// does not use.
+///
+/// Only for values the compiler bakes and the runtime never rewrites. An
+/// attribute a binding also writes has to keep the binder's spelling, or the
+/// two disagree about a value they agree on — see `scene::bake`.
+pub fn transform_str(m: &[f64; 6]) -> String {
+    if m[0] == 1.0 && m[1] == 0.0 && m[2] == 0.0 && m[3] == 1.0 {
+        return format!("translate({},{})", nd(m[4], 100.0), nd(m[5], 100.0));
+    }
+    matrix_str(m)
+}
+
 pub fn matrix_str(m: &[f64; 6]) -> String {
     format!(
         "matrix({},{},{},{},{},{})",

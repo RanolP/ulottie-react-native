@@ -50,12 +50,19 @@ const BUDGETS: &[(&str, usize)] = &[
     ("fill", 700),
     ("trim_path", 1_300),
     // One or two animated properties.
-    ("bouncy_ball", 5_800),
-    ("boucing-ball", 7_000),
-    ("precomp_star_circle", 10_500),
-    ("lottie-logo", 14_800),
-    ("starfish", 26_000),
-    ("lights", 23_000),
+    //
+    // Every fixture below except `ripple` is code-generated: no payload, no
+    // binder table, no interpreter. `ripple` is the counter-example and the
+    // reason the compiler builds both and keeps the smaller — 230 bindings
+    // unroll to 151 KB against the interpreter's 52.
+    ("bouncy_ball", 2_900),
+    ("boucing-ball", 4_400),
+    // `lottie-logo` moves little because two thirds of it is baked markup,
+    // which the generator does not touch.
+    ("precomp_star_circle", 8_800),
+    ("lottie-logo", 14_000),
+    ("starfish", 22_500),
+    ("lights", 20_500),
     // ripple instances one precomp 46 times and the planner expands every
     // instance into the markup, so its element count — not its animation —
     // sets the size. Bringing this down needs precomp templating: emit the

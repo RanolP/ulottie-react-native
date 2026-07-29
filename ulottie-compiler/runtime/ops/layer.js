@@ -1,23 +1,42 @@
 // Layer transform and opacity, read from the expression layer table.
 //
-// When an animation has expressions the layer's properties already live in
-// `D.y` so `thisLayer.position` can read them. These binders take the record
-// index rather than a second copy of the same keyframes.
+// When an animation has expressions the layer's properties already live in the
+// record table so `thisLayer.position` can read them. These binders take the
+// record index rather than a second copy of the same keyframes.
 
-import { resolve } from '../kf.js';
 import { r5, r2, r } from '../num.js';
 import { attr } from '../set.js';
 import { record } from '../rec.js';
 
-export function bLayerTx(el, b, ctx, at, ri) {
-  const rec = record(ctx, at, ri);
-  const p = resolve(rec.p ?? [0, 0, 0], ctx);
-  const a = resolve(rec.a ?? [0, 0, 0], ctx);
-  const s = resolve(rec.sc ?? [100, 100, 100], ctx);
-  const rot = resolve(rec.r ?? 0, ctx);
+// A record field the compiler elided is one that equals its default, so the
+// default lives here rather than costing a wire entry. These must stay in step
+// with `flat::RECORD_DEFAULTS`.
+const ORIGIN = () => [0, 0, 0];
+const FULL = () => [100, 100, 100];
+const ZERO = () => 0;
+const OPAQUE = () => 100;
+
+export function bLayerTx(el, S, a, ctx, at, ri) {
+  return layerTx(el, record(ctx, at, ri));
+}
+
+/**
+ * Build a layer's transform updater from its record.
+ *
+ * Nothing here folds — every input is a runtime handle — so generated code
+ * calls this rather than inlining it. `ripple` has 140 of these bindings, and
+ * inlining them cost 84 KB against roughly one kilobyte of calls.
+ */
+export function layerTx(el, rec) {
+  // The record's fields are already evaluators; a missing one means the
+  // compiler elided a property equal to its default.
+  const p = rec.p || ORIGIN;
+  const an = rec.a || ORIGIN;
+  const s = rec.sc || FULL;
+  const rot = rec.r || ZERO;
   const set = attr(el, 'transform');
   return (f) => {
-    const pv = p(f), av = a(f), sv = s(f);
+    const pv = p(f), av = an(f), sv = s(f);
     const th = rot(f) * Math.PI / 180;
     const cs = Math.cos(th), sn = Math.sin(th);
     const sx = sv[0] / 100, sy = sv[1] / 100;
@@ -29,8 +48,13 @@ export function bLayerTx(el, b, ctx, at, ri) {
   };
 }
 
-export function bLayerOpacity(el, b, ctx, at, ri) {
-  const o = resolve(record(ctx, at, ri).o ?? 100, ctx, at);
+export function bLayerOpacity(el, S, a, ctx, at, ri) {
+  return layerOp(el, record(ctx, at, ri));
+}
+
+/** The same, for a layer's opacity. */
+export function layerOp(el, rec) {
+  const o = rec.o || OPAQUE;
   const set = attr(el, 'opacity');
   return (f) => set(r(o(f) / 100));
 }

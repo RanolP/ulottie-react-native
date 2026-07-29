@@ -10,11 +10,15 @@
 //!
 //! So the preamble is emitted per expression, from what the body references.
 
-use crate::ir;
+use crate::scene::Caps;
+
+use super::layers::Plan;
 
 /// Names destructured from `ctx`.
-const CTX_NAMES: &[&str] = &[
-    "thisComp",
+///
+/// `thisComp` is not among them any more: what bodies asked it for was a layer
+/// lookup and a frame duration, and both are resolved into the preamble now.
+pub const CTX_NAMES: &[&str] = &[
     "sum",
     "sub",
     "mul",
@@ -27,8 +31,73 @@ const CTX_NAMES: &[&str] = &[
     "tangentOnPath",
 ];
 
-pub fn emit_one(out: &mut String, expr: &ir::Expression) {
-    let used = free_identifiers(&expr.body);
+/// Which parts of the expression vocabulary a module's bodies actually reach.
+///
+/// The same scan that trims each body's preamble, applied across the module and
+/// turned into capabilities so the shaker can cut the runtime to match. A body
+/// that only calls `loopOut` needs the `thisProperty` surface and nothing else
+/// — no comp-space transforms, no arc-length path sampler.
+///
+/// This runs on the *rewritten* bodies, so the word lists have to name what the
+/// layer pass emits as well as what After Effects wrote. It is now a backstop
+/// rather than the mechanism: a rewritten body reports the symbols it calls
+/// exactly, in `Plan::helpers`, and those go straight into the shake roots.
+pub fn vocabulary(bodies: &[String]) -> Caps {
+    const PROPERTY: &[&str] = &[
+        "thisProperty", "numKeys", "key", "nearestKey", "valueAtTime",
+        "velocityAtTime", "loopOut",
+    ];
+    const COMP: &[&str] = &["thisComp", "toComp", "fromCompToSurface"];
+    const PATH: &[&str] = &[
+        "createPath", "pointOnPath", "tangentOnPath", "points", "inTangents",
+        "outTangents", "isClosed", "lyPath", "lyPoints", "lyClosed",
+    ];
+    // Deliberately *not* `free_identifiers`: that one excludes member accesses,
+    // because `path.pointOnPath(t)` needs no free binding in the preamble. The
+    // runtime still has to provide the method, so this scan counts every
+    // mention. Over-retaining costs bytes; under-retaining ships a module that
+    // throws only when the expression runs.
+    let mut caps = Caps::empty();
+    for body in bodies {
+        for name in mentions(body) {
+            if PROPERTY.contains(&name.as_str()) {
+                caps |= Caps::EXPR_PROPERTY;
+            }
+            if COMP.contains(&name.as_str()) {
+                caps |= Caps::EXPR_COMP;
+            }
+            if PATH.contains(&name.as_str()) {
+                caps |= Caps::EXPR_PATH;
+            }
+        }
+    }
+    caps
+}
+
+/// Every identifier-shaped word in a body, members included.
+fn mentions(body: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut word = String::new();
+    for ch in body.chars() {
+        if ch.is_alphanumeric() || ch == '_' || ch == '$' {
+            word.push(ch);
+        } else if !word.is_empty() {
+            out.push(std::mem::take(&mut word));
+        }
+    }
+    if !word.is_empty() {
+        out.push(word);
+    }
+    out
+}
+
+/// Emit one body, with the preamble its (already rewritten) text needs.
+///
+/// `thisLayer` is the layer *record*. A body the layer pass resolved reads it
+/// through free functions; one it cannot resolve fails the compile, which is
+/// the old proxy and delegates to those same functions.
+pub fn emit_one(out: &mut String, body: &str, plan: &Plan) {
+    let used = free_identifiers(body);
     let uses = |n: &str| used.iter().any(|u| u == n);
 
     out.push_str("  function(value, thisLayer, thisProperty, frame, ctx) {\n");
@@ -43,15 +112,11 @@ pub fn emit_one(out: &mut String, expr: &ir::Expression) {
     if uses("time") {
         out.push_str("    const time = frame / ctx.frameRate;\n");
     }
-    if uses("effect") {
-        out.push_str("    const effect = (n) => (thisLayer ? thisLayer.effect(n) : (() => 0));\n");
-    }
-    // A bare `fromCompToSurface(...)` in an AE expression means the current
-    // layer's inverse transform.
-    if uses("fromCompToSurface") {
-        out.push_str(
-            "    const fromCompToSurface = (pt) => (thisLayer ? thisLayer.fromCompToSurface(pt) : pt);\n",
-        );
+    // The division, not a baked decimal: the frame rate is already a float on
+    // the wire and round-tripping it through a literal would not always land
+    // on the same bits.
+    if plan.frame_duration {
+        out.push_str("    const frameDuration = 1 / ctx.frameRate;\n");
     }
     // The `thisProperty` surface. Each is stubbed when the property has no
     // keyframes, which is why they cannot simply be read off `thisProperty`.
@@ -78,11 +143,11 @@ pub fn emit_one(out: &mut String, expr: &ir::Expression) {
 
     // Bodymovin bodies usually declare `$bm_rt` themselves; only add one when
     // the body does not, rather than emitting a redundant redeclaration.
-    if !declares_bm_rt(&expr.body) {
+    if !declares_bm_rt(body) {
         out.push_str("    var $bm_rt;\n");
     }
 
-    for line in expr.body.lines() {
+    for line in body.lines() {
         out.push_str("    ");
         out.push_str(line);
         out.push('\n');
@@ -155,25 +220,21 @@ fn free_identifiers(body: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    fn expr(body: &str) -> ir::Expression {
-        ir::Expression {
-            id: ir::ExprId(0),
-            body: body.to_string(),
-            canonical_hash: 0,
-            used_apis: ir::ApiSet::empty(),
-            uses_value: false,
-            uses_this_property: false,
-            uses_loop_out: false,
-            references_layers: Vec::new(),
-            references_effects: Vec::new(),
+    /// A resolved body — the only kind there is.
+    fn resolved() -> Plan {
+        Plan {
+            body: String::new(),
+            helpers: Default::default(),
+            frame_duration: false,
         }
     }
 
     fn emit(body: &str) -> String {
         let mut s = String::new();
-        emit_one(&mut s, &expr(body));
+        emit_one(&mut s, body, &resolved());
         s
     }
+
 
     #[test]
     fn only_the_names_a_body_uses_are_bound() {
@@ -211,5 +272,25 @@ mod tests {
     fn a_body_that_declares_its_own_result_slot_gets_no_second_one() {
         let out = emit("var $bm_rt;\n$bm_rt = 1;");
         assert_eq!(out.matches("var $bm_rt;").count(), 1, "{out}");
+    }
+
+    #[test]
+    fn a_resolved_body_gets_no_lookup_preamble() {
+        // What the layer pass produces: `thisLayer` stays the record, and the
+        // helpers are called by bare name. Nothing is bound in front of it.
+        let out = emit("$bm_rt = lyPos(lyAt(thisLayer, 8), frame);");
+        assert!(!out.contains("thisComp"), "{out}");
+    }
+
+
+    #[test]
+    fn frame_duration_is_a_division_not_a_baked_decimal() {
+        let mut s = String::new();
+        emit_one(
+            &mut s,
+            "$bm_rt = frameDuration;",
+            &Plan { frame_duration: true, ..resolved() },
+        );
+        assert!(s.contains("const frameDuration = 1 / ctx.frameRate;"), "{s}");
     }
 }

@@ -1,8 +1,8 @@
 // Layer in/out point. Only emitted for layers whose span is narrower than the
 // composition's.
 
-export function bDisplay(el, b, ctx, at) {
-  const ip = b[2], op = b[3];
+export function bDisplay(el, S, a) {
+  const ip = S[a] / 1000, op = S[a + 1] / 1000;
   let on = null;
   return (f) => {
     const v = f >= ip && f < op;

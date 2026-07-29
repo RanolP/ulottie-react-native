@@ -13,7 +13,9 @@
 //! closure. A frame is a straight loop over those closures — no tree walk, no
 //! variant dispatch, and for a fully static animation, no loop at all.
 
+mod bake;
 mod build;
+pub mod flat;
 mod instance;
 pub mod prop;
 mod template;
@@ -28,7 +30,7 @@ use serde::{Serialize, Serializer};
 
 use crate::data::Payload;
 
-use instance::AssetPlan;
+pub use instance::AssetPlan;
 use prop::{Easing, Prop, LINEAR};
 use svg::ID_MARK;
 
@@ -108,6 +110,18 @@ bitflags! {
         const EXTRACTED   = 1 << 26;
         /// A precomp's clock is driven by a time-remap property.
         const TIME_REMAP  = 1 << 27;
+        // What the expression *bodies* reach for. The preamble in front of each
+        // body is already emitted from what that body references; these carry
+        // the same analysis to the runtime, so an animation whose expressions
+        // only call `loopOut` stops shipping the comp-space transforms and the
+        // path sampler. Set by the backend after planning, from
+        // `emit_expressions::vocabulary`.
+        /// `numKeys`, `key`, `valueAtTime`, `loopOut` — the `thisProperty` surface.
+        const EXPR_PROPERTY = 1 << 28;
+        /// `thisComp`, `toComp`, `fromCompToSurface`.
+        const EXPR_COMP     = 1 << 29;
+        /// `createPath`, `pointOnPath`, `points` — the path API.
+        const EXPR_PATH     = 1 << 30;
     }
 }
 
@@ -116,12 +130,15 @@ bitflags! {
 // ---------------------------------------------------------------------------
 
 pub struct Scene {
-    /// The document template: complete `<svg>…</svg>` markup with every static
-    /// value baked in. Always fully expanded, whatever the module inlines.
+    /// The standalone document: complete `<svg>…</svg>` markup showing the
+    /// composition's first frame, so it renders with no script at all. Always
+    /// fully expanded, whatever the module inlines. See [`bake`].
     pub markup: String,
-    /// What the module should inline. Equal to `markup` under the inline
-    /// budget; above it, repeated subtrees are factored into `data.tpl` and
-    /// replaced by placeholders the runtime expands before indexing.
+    /// What the module should inline. The same tree, but *without* the
+    /// first-frame bake — the runtime writes those attributes on mount, so
+    /// carrying them would be dead bytes. Above the inline budget, repeated
+    /// subtrees are factored into `data.tpl` and replaced by placeholders the
+    /// runtime expands before indexing.
     pub inline: String,
     pub data: SceneData,
     pub caps: Caps,
@@ -133,7 +150,57 @@ impl Scene {
     /// The name table exists only so `thisComp.layer('…')` can resolve, and the
     /// planner has no view of the expressions, so it interns every layer's
     /// name. Once the bodies are known most of them turn out to be unreachable.
-    pub fn prune_names(&mut self, keep: &std::collections::BTreeSet<String>) {
+    /// Encode the scene into its wire form. Every mutation of the planned
+    /// scene has to be followed by this, because the stream is a snapshot.
+    pub fn seal(&mut self) -> Result<()> {
+        let flat = flat::flatten(&self.data)?;
+        self.data.stream = flat.encode();
+        self.data.strings = flat.strings().to_vec();
+        Ok(())
+    }
+
+    /// Drop effect and parameter names no surviving expression mentions.
+    ///
+    /// They are in the payload for one reason — `proxy.effect('name')` matching
+    /// them at runtime — so once [`crate::expr::resolve`] has rewritten a
+    /// lookup to an index, the name is dead weight. The effects themselves stay
+    /// exactly where they are: the indices address them positionally.
+    ///
+    /// `mentioned` is asked about the finished body text rather than its
+    /// syntax, so a lookup this compiler did not recognise keeps its name.
+    pub fn prune_effect_names(&mut self, mentioned: &dyn Fn(&str) -> bool) -> Result<()> {
+        let mut dropped = false;
+        let mut cull = |slot: &mut Option<String>| {
+            if let Some(n) = slot {
+                if !mentioned(n) {
+                    *slot = None;
+                    dropped = true;
+                }
+            }
+        };
+        // Both tables, the way `prune_names` does it: an instanced precomp
+        // keeps its records on the asset, and those carry the effects every
+        // instantiation replays. Walking only the document's left the
+        // instanced candidate shipping every name — two dead `Pseudo/ADBE …`
+        // strings on `ripple`, which is the candidate that wins.
+        let assets = self.data.assets.iter_mut().flat_map(|a| a.records.iter_mut());
+        for rec in self.data.layers.iter_mut().chain(assets) {
+            for e in &mut rec.ef {
+                cull(&mut e.nm);
+                cull(&mut e.mn);
+                for p in &mut e.ef {
+                    cull(&mut p.nm);
+                    cull(&mut p.mn);
+                }
+            }
+        }
+        if dropped {
+            self.seal()?;
+        }
+        Ok(())
+    }
+
+    pub fn prune_names(&mut self, keep: &std::collections::BTreeSet<String>) -> Result<()> {
         let mut remap = vec![None; self.data.names.len()];
         let mut kept = Vec::new();
         for (i, name) in self.data.names.iter().enumerate() {
@@ -143,7 +210,7 @@ impl Scene {
             }
         }
         if kept.len() == self.data.names.len() {
-            return;
+            return Ok(());
         }
         self.data.names = kept;
         let renumber = |r: &mut LayerRecord| {
@@ -153,6 +220,10 @@ impl Scene {
         for a in &mut self.data.assets {
             a.records.iter_mut().for_each(renumber);
         }
+        // The stream already holds the old numbering, so it has to be rebuilt.
+        // Without this the pruning silently did nothing and every unreachable
+        // layer name still shipped.
+        self.seal()
     }
 
     /// True when the animation has nothing to update — the module can skip the
@@ -216,6 +287,11 @@ pub struct SceneData {
     /// Names referenced by `thisComp.layer('…')`.
     pub names: Vec<String>,
     pub b: Vec<Binding>,
+    /// The whole scene as one VLQ base36 integer stream, and the only text
+    /// that could not become an integer. Filled by [`flat::flatten`]; together
+    /// they are the entire payload.
+    pub stream: String,
+    pub strings: Vec<String>,
 }
 
 /// One layer, as the expression runtime sees it. Field names match what the
@@ -233,9 +309,69 @@ pub struct LayerRecord {
     pub sc: Option<Prop>,
     pub r: Option<Prop>,
     pub o: Option<Prop>,
-    pub ef: Option<serde_json::Value>,
+    pub ef: Vec<Effect>,
     /// First path shape on the layer, for `pointOnPath` / `points()`.
     pub h: Option<Prop>,
+    /// Stream offsets for `p, a, sc, r, o, h`, filled by [`flat::flatten`].
+    /// A zero means the field was absent or equal to the runtime's default.
+    pub offs: [u32; 6],
+}
+
+/// One effect, in the shape `thisLayer.effect('name')('param')` reads.
+#[derive(Default)]
+pub struct Effect {
+    pub nm: Option<String>,
+    pub mn: Option<String>,
+    pub ef: Vec<EffectParam>,
+}
+
+#[derive(Default)]
+pub struct EffectParam {
+    pub nm: Option<String>,
+    pub mn: Option<String>,
+    pub ty: u32,
+    pub v: Option<f64>,
+    pub p: Option<Prop>,
+    /// Stream offset of `p`, filled by [`flat::flatten`].
+    pub p_off: u32,
+}
+
+impl Serialize for Effect {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(None)?;
+        if let Some(n) = &self.nm {
+            m.serialize_entry("nm", n)?;
+        }
+        if let Some(n) = &self.mn {
+            m.serialize_entry("mn", n)?;
+        }
+        m.serialize_entry("ef", &self.ef)?;
+        m.end()
+    }
+}
+
+impl Serialize for EffectParam {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(None)?;
+        if let Some(n) = &self.nm {
+            m.serialize_entry("nm", n)?;
+        }
+        if let Some(n) = &self.mn {
+            m.serialize_entry("mn", n)?;
+        }
+        if self.ty != 0 {
+            m.serialize_entry("ty", &self.ty)?;
+        }
+        if let Some(v) = self.v {
+            m.serialize_entry("v", &svg::Num(v))?;
+        }
+        if self.p_off != 0 {
+            m.serialize_entry("p", &self.p_off)?;
+        }
+        m.end()
+    }
 }
 
 impl Serialize for LayerRecord {
@@ -249,141 +385,36 @@ impl Serialize for LayerRecord {
         if let Some(pr) = self.pr {
             m.serialize_entry("pr", &pr)?;
         }
-        // A field the runtime would default to the same value anyway is not
-        // worth a wire entry. The defaults below are the ones every read site
-        // supplies — ops/layer.js:14-17,33, expr.js:251-255 and
-        // `getLocalTransform` at expr.js:260-266 — and they must stay in step:
-        // `o` defaults to **100**, not 0, so eliding an explicit `o: 0` would
-        // turn a hidden layer fully opaque.
-        for (k, v, default_to) in [
-            ("p", &self.p, Some(&[0.0, 0.0, 0.0][..])),
-            ("a", &self.a, Some(&[0.0, 0.0, 0.0][..])),
-            ("sc", &self.sc, Some(&[100.0, 100.0, 100.0][..])),
-            ("r", &self.r, Some(&[0.0][..])),
-            ("o", &self.o, Some(&[100.0][..])),
-            ("h", &self.h, None),
-        ] {
-            if let Some(v) = v {
-                if default_to.is_some_and(|d| v.is_exactly(d)) {
-                    continue;
-                }
-                m.serialize_entry(k, v)?;
+        // Each field is a stream offset, and `flatten` has already dropped the
+        // ones the runtime would default to the same value anyway — see
+        // [`flat::RECORD_DEFAULTS`] for the defaults and why `o` is not 0.
+        for (k, off) in ["p", "a", "sc", "r", "o", "h"].iter().zip(self.offs) {
+            if off != 0 {
+                m.serialize_entry(k, &off)?;
             }
         }
-        if let Some(ef) = &self.ef {
-            m.serialize_entry("ef", ef)?;
+        if !self.ef.is_empty() {
+            m.serialize_entry("ef", &self.ef)?;
         }
         m.end()
     }
 }
 
 impl Serialize for SceneData {
+    /// The integer stream, and nothing else.
+    ///
+    /// It was an object for as long as there was a second entry to hold — the
+    /// strings that could not become integers. Layer names, effect names and
+    /// factored-out markup have each stopped being payload since, so the
+    /// wrapper was one key describing a table with one row. What strings remain
+    /// possible reach the runtime as a named module constant instead, the same
+    /// way templates do.
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeMap;
-        let any_slot = self.slots.iter().any(|s| *s != 0);
-        let any_gate = self.bind_gate.iter().any(|g| *g != 0);
-        let mut n = 2; // fr, op
-        for present in [
-            self.ip != 0.0,
-            self.uses_ids,
-            self.uses_clone_ids,
-            !self.easings.is_empty(),
-            !self.timelines.is_empty(),
-            any_slot,
-            any_gate,
-            any_gate,
-            !self.tpl.is_empty(),
-            !self.assets.is_empty(),
-            !self.assets.is_empty(),
-            !self.layers.is_empty(),
-            !self.names.is_empty(),
-            !self.b.is_empty(),
-        ] {
-            if present {
-                n += 1;
-            }
-        }
-        let mut m = s.serialize_map(Some(n))?;
-        m.serialize_entry("f", &svg::Num(self.fr))?;
-        if self.ip != 0.0 {
-            m.serialize_entry("i", &svg::Num(self.ip))?;
-        }
-        m.serialize_entry("o", &svg::Num(self.op))?;
-        if self.uses_ids {
-            m.serialize_entry("u", &1u8)?;
-        }
-        if self.uses_clone_ids {
-            m.serialize_entry("c", &1u8)?;
-        }
-        if !self.easings.is_empty() {
-            m.serialize_entry("z", &Quads(&self.easings))?;
-        }
-        if !self.timelines.is_empty() {
-            m.serialize_entry("t", &Quads(&self.timelines))?;
-        }
-        if self.remaps.iter().any(|r| r.is_some()) {
-            m.serialize_entry("rm", &Sparse(&self.remaps))?;
-        }
-        if any_slot {
-            m.serialize_entry("l", &Prefix(&self.slots))?;
-        }
-        if any_gate {
-            m.serialize_entry("k", &Pairs(&self.gates))?;
-            m.serialize_entry("g", &self.bind_gate)?;
-        }
-        if !self.tpl.is_empty() {
-            m.serialize_entry("m", &self.tpl)?;
-        }
-        if !self.assets.is_empty() {
-            m.serialize_entry("q", &self.assets)?;
-            m.serialize_entry("n", &self.uses)?;
-        }
-        if !self.layers.is_empty() {
-            m.serialize_entry("y", &self.layers)?;
-        }
-        if self.scopes.iter().any(|g| *g != 0) {
-            m.serialize_entry("gy", &Prefix(&self.scopes))?;
-        }
-        if !self.names.is_empty() {
-            m.serialize_entry("s", &self.names)?;
-        }
-        if !self.b.is_empty() {
-            m.serialize_entry("b", &Deltas(&self.b))?;
-        }
-        m.end()
+        self.stream.serialize(s)
     }
 }
 
-/// `[[a,b], …]` with integral entries written as integers.
-struct Pairs<'a>(&'a [[f64; 2]]);
 
-impl Serialize for Pairs<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut outer = s.serialize_seq(Some(self.0.len()))?;
-        for row in self.0 {
-            outer.serialize_element(&[svg::Num(row[0]), svg::Num(row[1])])?;
-        }
-        outer.end()
-    }
-}
-
-/// `[[a,b,c,d], …]` with integral entries written as integers.
-pub(crate) struct Quads<'a>(&'a [[f64; 4]]);
-
-impl Serialize for Quads<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut outer = s.serialize_seq(Some(self.0.len()))?;
-        for row in self.0 {
-            outer.serialize_element(&[
-                svg::Num(row[0]),
-                svg::Num(row[1]),
-                svg::Num(row[2]),
-                svg::Num(row[3]),
-            ])?;
-        }
-        outer.end()
-    }
-}
 
 /// One dynamic binding, serialized as `[op, elementIndex, …args]`.
 pub struct Binding {
@@ -396,6 +427,10 @@ pub struct Binding {
 
 pub enum Arg {
     Prop(Prop),
+    /// A small enumeration rather than a measurement — a gradient kind, a
+    /// geometry kind. Stored as-is, where `Num` is scaled by a thousand.
+    /// Getting these two confused makes `2` arrive as `2000`.
+    Tag(u32),
     Num(f64),
     Str(String),
     List(Vec<Arg>),
@@ -406,6 +441,7 @@ impl Serialize for Arg {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         match self {
             Arg::Prop(p) => p.serialize(s),
+            Arg::Tag(t) => t.serialize(s),
             Arg::Num(n) => svg::Num(*n).serialize(s),
             Arg::Str(v) => s.serialize_str(v),
             Arg::List(items) => {
@@ -420,41 +456,7 @@ impl Serialize for Arg {
     }
 }
 
-impl Serialize for Binding {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        Row { b: self, el: self.el_index as i64, rec: None }.serialize(s)
-    }
-}
 
-/// One binding row with its index columns already reduced to differences.
-///
-/// The element index and the layer-record index are both absolute positions
-/// into ascending-ish sequences, so consecutive rows differ by a small number
-/// where the absolute values are large and all distinct. Storing the difference
-/// is what lets gzip collapse them — on `ripple`, whose 46 precomp copies bind
-/// the same five patterns at ever-increasing indices, it is the difference
-/// between 46 unique rows and 46 identical ones.
-struct Row<'a> {
-    b: &'a Binding,
-    el: i64,
-    /// Present only for the ops whose first argument is a record index.
-    rec: Option<i64>,
-}
-
-impl Serialize for Row<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut seq = s.serialize_seq(Some(2 + self.b.args.len()))?;
-        seq.serialize_element(&self.b.op)?;
-        seq.serialize_element(&self.el)?;
-        for (i, a) in self.b.args.iter().enumerate() {
-            match (i, self.rec) {
-                (0, Some(d)) => seq.serialize_element(&d)?,
-                _ => seq.serialize_element(a)?,
-            }
-        }
-        seq.end()
-    }
-}
 
 /// Ops whose first argument is an index into the layer-record table, and so
 /// wants the same delta treatment as the element index. Every other binder
@@ -487,70 +489,7 @@ fn record_ops_are_the_highest() {
     }
 }
 
-/// A binding list with its two index columns delta-encoded.
-///
-/// Accumulators restart per list, so an asset's bindings decode against their
-/// own base rather than the document's — which is what keeps one planned asset
-/// replayable at any offset.
-pub(crate) struct Deltas<'a>(pub &'a [Binding]);
 
-impl Serialize for Deltas<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut outer = s.serialize_seq(Some(self.0.len()))?;
-        let (mut el, mut rec) = (0i64, 0i64);
-        for b in self.0 {
-            let e = b.el_index as i64;
-            let d = if arg0_is_record(b.op) {
-                match b.args.first() {
-                    Some(Arg::Num(n)) => {
-                        let v = *n as i64;
-                        let d = v - rec;
-                        rec = v;
-                        Some(d)
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
-            outer.serialize_element(&Row { b, el: e - el, rec: d })?;
-            el = e;
-        }
-        outer.end()
-    }
-}
-
-/// A mostly-empty column: absent entries ride as `0`, which is shorter than
-/// `null` and is what the runtime tests for.
-pub(crate) struct Sparse<'a>(pub &'a [Option<Prop>]);
-
-impl Serialize for Sparse<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut q = s.serialize_seq(Some(self.0.len()))?;
-        for v in self.0 {
-            match v {
-                Some(p) => q.serialize_element(p)?,
-                None => q.serialize_element(&0u8)?,
-            }
-        }
-        q.end()
-    }
-}
-
-/// An ascending integer column stored as first differences.
-pub(crate) struct Prefix<'a>(pub &'a [u32]);
-
-impl Serialize for Prefix<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut outer = s.serialize_seq(Some(self.0.len()))?;
-        let mut prev = 0i64;
-        for v in self.0 {
-            outer.serialize_element(&(*v as i64 - prev))?;
-            prev = *v as i64;
-        }
-        outer.end()
-    }
-}
 
 /// Emit the document with precomp instances left as placeholders the runtime
 /// expands. Used for the inlined markup; the standalone document is always
@@ -768,10 +707,18 @@ pub fn plan_with(
     let mut remaps = std::mem::take(&mut p.remaps);
     remaps.resize(timelines.len(), None);
     let scopes = std::mem::take(&mut p.scopes);
+    // The two are one table split in half, and `plan_asset` drains both. A
+    // mismatch here means a record is about to answer with a neighbour's scope,
+    // which resolves `thisComp.layer()` to a layer in the wrong composition.
+    debug_assert_eq!(scopes.len(), layers.len(), "scopes must stay parallel to layers");
+    debug_assert!(
+        assets.iter().all(|a| a.scopes.len() == a.records.len()),
+        "an asset's scopes must stay parallel to its records"
+    );
     let names = std::mem::take(&mut p.names);
     let bindings = p.bindings;
 
-    Ok(Scene {
+    let mut scene = Scene {
         markup,
         inline,
         data: SceneData {
@@ -792,10 +739,18 @@ pub fn plan_with(
             remaps,
             scopes,
             names,
+            stream: String::new(),
+            strings: Vec::new(),
             b: bindings,
         },
         caps,
-    })
+    };
+
+    // Everything time-varying moves into one integer stream, and the structures
+    // above keep only offsets into it. This is the last thing planning does, so
+    // the planner itself never has to think in offsets.
+    scene.seal()?;
+    Ok(scene)
 }
 
 pub(crate) struct Planner<'a> {
@@ -945,7 +900,15 @@ impl<'a> Planner<'a> {
 
     // -- emission -----------------------------------------------------------
 
+    /// The fully-expanded document, baked at the composition's first frame.
+    ///
+    /// This is the standalone form — served on its own it has to render with
+    /// no script at all — so every binding is evaluated once and written as an
+    /// ordinary attribute. The module's own copy comes from `emit_inline`,
+    /// which stays lean because the runtime writes those attributes on mount.
+    /// See [`bake`] for why the two forms must not simply share.
     fn emit(&mut self, roots: &[usize], payload: &Payload) -> String {
+        let overlay = self.initial_frame();
         let mut index = HashMap::new();
         let mut counter = 0u32;
         let mut buf = String::with_capacity(4096);
@@ -955,7 +918,7 @@ impl<'a> Planner<'a> {
             payload.c.w, payload.c.h
         ));
         for r in roots {
-            self.emit_el(*r, &mut buf, &mut counter, &mut index);
+            self.emit_el(*r, &mut buf, &mut counter, &mut index, &overlay);
         }
         buf.push_str("</svg>");
         for b in &mut self.bindings {
@@ -1022,6 +985,7 @@ impl<'a> Planner<'a> {
         buf: &mut String,
         counter: &mut u32,
         index: &mut HashMap<usize, u32>,
+        overlay: &bake::Overlay,
     ) {
         let e = &self.els[id];
         index.insert(id, *counter);
@@ -1037,11 +1001,11 @@ impl<'a> Planner<'a> {
         *counter += 1;
         buf.push('<');
         buf.push_str(e.tag);
-        for (k, v) in &e.attrs {
+        for (k, v) in Self::merged(&e.attrs, overlay.get(&id)) {
             buf.push(' ');
-            buf.push_str(k);
+            buf.push_str(&k);
             buf.push_str("=\"");
-            buf.push_str(v);
+            buf.push_str(&v);
             buf.push('"');
         }
         if e.children.is_empty() {
@@ -1050,11 +1014,37 @@ impl<'a> Planner<'a> {
         }
         buf.push('>');
         for c in &e.children {
-            self.emit_el(*c, buf, counter, index);
+            self.emit_el(*c, buf, counter, index, overlay);
         }
         buf.push_str("</");
         buf.push_str(e.tag);
         buf.push('>');
+    }
+
+    /// Base attributes with the initial-frame overlay applied. An overlay entry
+    /// replaces a same-named attribute and is appended otherwise, so an element
+    /// ends up carrying exactly one value per name.
+    fn merged(
+        base: &[(String, String)],
+        extra: Option<&Vec<(String, String)>>,
+    ) -> Vec<(String, String)> {
+        let mut out = base.to_vec();
+        let Some(extra) = extra else { return out };
+        for (k, v) in extra {
+            match out.iter_mut().find(|(n, _)| n == k) {
+                // `style` is a list rather than a single value: a baked
+                // `display:none` has to join what the element already carries.
+                Some(slot) if k == "style" => {
+                    if !slot.1.split(';').any(|part| part.trim() == v) {
+                        slot.1.push(';');
+                        slot.1.push_str(v);
+                    }
+                }
+                Some(slot) => slot.1 = v.clone(),
+                None => out.push((k.clone(), v.clone())),
+            }
+        }
+        out
     }
 
     /// Intern a layer name for `thisComp.layer('…')`.

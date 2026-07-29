@@ -5,8 +5,10 @@
 //! `RuntimeMode::Extern` imports the runtime entry points the animation binds;
 //! `RuntimeMode::Embedded` inlines them, shaken to the reachable declarations.
 
+pub mod codegen;
 pub mod emit;
 pub mod emit_expressions;
+pub mod layers;
 pub mod pretty;
 pub mod runtime;
 pub mod shake;
@@ -16,118 +18,6 @@ use anyhow::Result;
 use crate::data;
 use crate::ir;
 use crate::scene;
-
-/// Layer names the emitted expressions can still reach by name, or `None` when
-/// that cannot be determined and every name has to be kept.
-///
-/// The planner interns a name for every layer, but the table exists solely so
-/// `thisComp.layer('…')` can find one — and most animations never call it. On
-/// `starfish` none of the 16 interned names is reachable.
-///
-/// This is deliberately a text scan with a wide bail-out rather than a real
-/// analysis: a name that is dropped but turns out to be reachable fails by
-/// returning `undefined` from `thisComp.layer()`, which surfaces as a wrong
-/// picture rather than an error. Anything the scan does not fully understand
-/// keeps the whole table.
-fn reachable_names(exprs: &[ir::Expression]) -> Option<std::collections::BTreeSet<String>> {
-    let mut found = std::collections::BTreeSet::new();
-    for e in exprs {
-        let b = e.body.as_str();
-        // `.name` can hand a name to any comparison the scan cannot follow.
-        if b.contains(".name") {
-            return None;
-        }
-        let bytes = b.as_bytes();
-        for (i, _) in b.match_indices("layer(") {
-            // `pathLayer(`/`nullLayerNames` are different identifiers; require
-            // a word boundary so only a real `layer(` call is considered.
-            if i > 0 && (bytes[i - 1] as char).is_alphanumeric() {
-                continue;
-            }
-            let rest = &b[i + "layer(".len()..];
-            let arg = rest.trim_start();
-            let quote = match arg.chars().next() {
-                Some(q @ ('\'' | '"')) => q,
-                // A numeric index does not consult the name table.
-                Some(c) if c.is_ascii_digit() => continue,
-                // Anything computed: give up on the whole table.
-                _ => return None,
-            };
-            match arg[1..].split_once(quote) {
-                Some((name, _)) => {
-                    found.insert(name.to_string());
-                }
-                None => return None,
-            }
-        }
-    }
-    Some(found)
-}
-
-#[cfg(test)]
-mod name_scan_tests {
-    use super::reachable_names;
-    use crate::ir;
-
-    fn expr(body: &str) -> ir::Expression {
-        ir::Expression {
-            id: ir::ExprId(0),
-            body: body.to_string(),
-            canonical_hash: 0,
-            used_apis: Default::default(),
-            uses_value: false,
-            uses_this_property: false,
-            uses_loop_out: false,
-            references_layers: Vec::new(),
-            references_effects: Vec::new(),
-        }
-    }
-
-    fn names(bodies: &[&str]) -> Option<Vec<String>> {
-        let e: Vec<_> = bodies.iter().map(|b| expr(b)).collect();
-        reachable_names(&e).map(|s| s.into_iter().collect())
-    }
-
-    #[test]
-    fn collects_literal_lookups() {
-        assert_eq!(
-            names(&["thisComp.layer('Shape Layer 1').position"]),
-            Some(vec!["Shape Layer 1".to_string()])
-        );
-        // Either quote style, and several per body.
-        assert_eq!(
-            names(&[r#"comp("a").layer("x"); thisComp.layer('y')"#]),
-            Some(vec!["x".to_string(), "y".to_string()])
-        );
-    }
-
-    #[test]
-    fn a_computed_argument_keeps_every_name() {
-        // The whole point of the bail-out: the scan cannot tell which name
-        // `names[i]` produces, so nothing may be dropped.
-        assert_eq!(names(&["thisComp.layer(names[i])"]), None);
-        assert_eq!(names(&["thisComp.layer(n)"]), None);
-    }
-
-    #[test]
-    fn reading_a_layers_name_keeps_every_name() {
-        // `.name` can feed a comparison the scan cannot follow.
-        assert_eq!(names(&["if (thisLayer.name === 'x') return 1"]), None);
-    }
-
-    #[test]
-    fn a_numeric_index_does_not_consult_the_table() {
-        // `layer(3)` resolves by index, so it justifies keeping no names.
-        assert_eq!(names(&["thisComp.layer(3)"]), Some(Vec::new()));
-    }
-
-    #[test]
-    fn other_identifiers_ending_in_layer_are_not_lookups() {
-        // `pathLayer('ADBE Root Vectors Group')` is an AE property drill, not a
-        // layer lookup, and its argument is not a layer name.
-        assert_eq!(names(&["pathLayer('ADBE Root Vectors Group')(1)"]), Some(Vec::new()));
-    }
-}
 
 /// What the compiler decided for one animation, alongside the module it built.
 ///
@@ -156,6 +46,11 @@ pub struct Report {
     pub bindings: usize,
     /// Layer records the expression engine can observe.
     pub records: usize,
+    /// The self-contained build is code rather than an interpreter plus a
+    /// payload. False when the generator cannot express the animation, and also
+    /// when it can but the result would be larger — `ripple` unrolls 230
+    /// bindings into three times the interpreter's bytes.
+    pub generated: bool,
     /// Instancing put bindings on per-instance clocks. Those are correct but
     /// currently expensive — see `Instancing::Auto`.
     pub instance_clocks: bool,
@@ -166,7 +61,12 @@ pub fn compile(module: &ir::Module, options: &crate::CompileOptions) -> Result<O
 }
 
 /// Facts about a finished scene, for the size/decision panel.
-fn describe(scene: &scene::Scene, js: String, instanced: bool) -> Report {
+fn describe(
+    scene: &scene::Scene,
+    js: String,
+    instanced: bool,
+    exprs: Option<&layers::Exprs>,
+) -> Report {
     let caps: Vec<String> = scene.caps.iter_names().map(|(n, _)| n.to_string()).collect();
     let modules = if scene.is_static() {
         Vec::new()
@@ -187,13 +87,20 @@ fn describe(scene: &scene::Scene, js: String, instanced: bool) -> Report {
     Report {
         caps,
         instance_clocks,
-        runtime_slice: if scene.is_static() { 0 } else { emit::runtime_size(scene.caps) },
+        runtime_slice: if scene.is_static() {
+            0
+        } else {
+            let helpers: Vec<&'static str> =
+                exprs.map(|e| e.helpers.iter().copied().collect()).unwrap_or_default();
+            emit::runtime_size_with(scene.caps, &helpers)
+        },
         modules,
         is_static: scene.is_static(),
         instanced,
         templated: !scene.data.tpl.is_empty(),
         elements: scene.markup.matches('<').count() - scene.markup.matches("</").count(),
         bindings: scene.data.b.len() + replays,
+        generated: emit::is_generated(scene, exprs),
         records: scene.data.layers.len()
             + scene.data.assets.iter().map(|a| a.records.len()).sum::<usize>(),
         js,
@@ -210,34 +117,48 @@ pub fn report(module: &ir::Module, options: &crate::CompileOptions) -> Result<Op
     // Every animation goes through the scene planner. Expressions ride along
     // as `Prop::Expr` bindings plus a layer table the expression runtime reads.
     let has_exprs = !module.expressions.is_empty();
-    let exprs = has_exprs.then(|| {
-        let mut src = String::from("const E = [\n");
-        for expr in module.expressions.iter() {
-            emit_expressions::emit_one(&mut src, expr);
-        }
-        src.push_str("];\n");
-        src
-    });
-
-    let reach = has_exprs
-        .then(|| reachable_names(&module.expressions.iter().cloned().collect::<Vec<_>>()))
-        .flatten();
+    let bodies: Vec<ir::Expression> = module.expressions.iter().cloned().collect();
 
     let build = |instance| -> Result<Report> {
         let mut scene =
             scene::plan_with(&payload, has_exprs, options.inline_limit, instance)?;
-        // Drop interned layer names no expression can reach, and renumber.
-        if let Some(reach) = &reach {
-            scene.prune_names(reach);
+
+        // The layer pass runs *here*, not once for the module, because it
+        // resolves references to record indices and the two candidate builds
+        // number their records differently — an inlined precomp's layers sit
+        // twenty-three places apart, an instanced one's are local to the asset.
+        let exprs = has_exprs.then(|| layers::table(&scene.data, &bodies)).transpose()?;
+
+        // The planner cannot see inside an expression body, so what the bodies
+        // reach for is folded in here.
+        if let Some(e) = &exprs {
+            scene.caps |= emit_expressions::vocabulary(&e.bodies);
+        }
+        // Every name is dead. The table existed so `thisComp.layer('…')` could
+        // resolve at runtime, and that lookup no longer exists in any emitted
+        // body — a reference the layer pass cannot resolve fails the compile
+        // rather than falling back to one.
+        if exprs.is_some() {
+            scene.prune_names(&Default::default())?;
+        }
+        // Effect and parameter names exist only so a body can look one up. Once
+        // `expr::resolve` has rewritten those lookups to indices, nothing reads
+        // them — and on `lights` they are 450 of the 454 bytes of names.
+        if let Some(e) = &exprs {
+            let mut named = std::collections::BTreeSet::new();
+            for b in &e.bodies {
+                named.extend(crate::expr::resolve::literals(b));
+            }
+            scene.prune_effect_names(&|name| named.contains(name))?;
         }
         let js = emit::emit(
             &scene,
             runtime_mode,
             options.minify,
-            exprs.as_deref(),
+            exprs.as_ref(),
             &options.markup,
         )?;
-        Ok(describe(&scene, js, instance))
+        Ok(describe(&scene, js, instance, exprs.as_ref()))
     };
 
     // Extracted markup and precomp instancing do not compose. The sprite holds

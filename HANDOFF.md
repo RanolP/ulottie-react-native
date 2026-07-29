@@ -313,11 +313,352 @@ field is now **hoisted into a parallel delta-encoded column `D.gy` and actually
 read** — same bytes recovered, minus 125, and the collision is fixed. A runtime
 test pins it; it fails with `expected 1 to be 2` if the wire-up is removed.
 
+#### Fully-flat integer SOA — measured properly
+
+An earlier pass here rejected "SOA" on measurement. That measurement was of the
+wrong thing: it transposed array-of-structs into struct-of-arrays while leaving
+the polymorphic `Prop` objects, nested keyframe records and strings inside, so
+neither the entropy nor the pointer-chasing changed. The real proposal is a
+*fully* flat form — no nested or polymorphic cells, everything a 32-bit int
+(SMI-friendly), with the hot loop reading integers instead of rebuilding
+structs at mount. Measured with a complete encoder (`/tmp/flat.mjs` pattern:
+tagged int stream + string pool, verified to preserve every string value and
+every number exactly — the corpus is already ≤3 decimals everywhere, so ×10^d
+per run is lossless; max |value| is 1229, so ×1000 stays well inside SMI).
+
+**Payload alone** (all six payload-bearing fixtures, bytes):
+
+| encoding | raw | gzip | brotli |
+|---|---|---|---|
+| JSON, today | 55622 | 6217 | 4999 |
+| VLQ base36 | 30166 −45.8% | 5435 −12.6% | 4584 −8.3% |
+| VLQ base64 | 27502 −50.6% | 5374 −13.6% | 4500 −10.0% |
+
+**Whole module**, decoder amortised into the shared runtime: **−4.3% gzip**
+(base36 VLQ) — base36 beats base64 here, the smaller alphabet costs raw density
+but compresses better. Charge the decoder per module instead, as `--embedded`
+would, and it turns into a *loss* on small fixtures. Brotli barely moves, and
+plain comma-separated decimals beat every VLQ under brotli (−3.6%).
+
+**Where the frame time actually goes** (Chrome sampling profile, extern build so
+the runtime is unminified, layout forced inside the measured region):
+
+| | ripple | lottie-logo |
+|---|---|---|
+| layout / native | 39.7% | 37.5% |
+| `setAttribute` | 15.6% | 6.0% |
+| number → string (`fmt`) | 2.0% | 3.0% |
+| path assembly (`pathD`, `pdPair`, `pdSep`) | — | **15.0%** |
+| expression engine | **13.8%** | — |
+| frame loop + change detection | 8.2% | 11.4% |
+| **keyframe interpolation (`kf.js`)** | **not in the top 14** | **1.8%** |
+
+So the conclusion is not the intuitive one. A flat integer loop makes
+interpolation **1.7× faster** (measured head-to-head on the corpus's 143 real
+keyframed properties, rising with scale; mount 1.7× too) — but interpolation is
+~2% of a frame, so that is ~1% overall.
+
+Nothing here touches layout (~40%) or `setAttribute` (~16%), which together are
+over half of every frame and belong to the browser. What is left that is ours
+is **path-string assembly** on shape-heavy files and the **expression engine**
+on `ripple` — the latter is already the top item in the remaining work.
+
+> An earlier revision of this table put `fmt` at 15.6% on `lottie-logo` — the
+> same figure as the `setAttribute`/ripple cell beside it, and a transcription
+> slip. Every other row re-measured within a point; that one was off by 5×. It
+> is corrected above, and the section below is what came of believing it.
+
+#### The fully-flat integer payload, built and measured
+
+This is the design in full: the payload is **one `Int32Array`**, decoded from a
+single VLQ base36 string, plus a string pool for the handful of things that
+cannot be an integer (layer names, the baked `matrix(` prefix, template markup,
+effect names). There are no nested arrays, no polymorphic cells and no objects
+anywhere in it. A property, a binding row, a layer record, a clock, a gate — each
+is a run of integers at an offset, and every reference to one is that offset.
+
+Three things make it lossless and compact at once: values are already quantized
+to 3 decimals by `svg::q`, so scaling by a power of ten is exact; each column
+picks the *smallest* exact power of ten, so a time column of `[0,25,40]` stays
+three characters instead of becoming `[0,25000,40000]`; and properties are
+hash-consed, which collapsed 28% of prop bytes across the corpus.
+
+It works — 158 browser tests and 94 cargo tests — and it is **smaller raw and
+bigger compressed**, at both the halfway point and the end:
+
+| | payload raw | module raw | gzip | brotli |
+|---|---|---|---|---|
+| JSON (before) | 48 613 | — | — | — |
+| props flattened only | 34 497 (−29%) | 68 130 | 12 447 | 10 091 |
+| everything flattened | — | 54 981 (−19%) | **12 937 (+3.9%)** | **10 560 (+4.6%)** |
+
+Against the original JSON the embedded modules end up **+13% to +26% gzipped**
+(`lottie-logo` 5257→6022, `starfish` 8856→10011, `ripple` 10759→13550) while
+their raw bytes fall by up to 23%. Frame time is unchanged at every stage —
+`lottie-logo` ~10 µs, `ripple` ~260 µs, mount ~1.5 ms for `ripple` — which the
+profile above already predicted, since interpolation is ~2% of a frame.
+
+**Why it loses.** gzip's LZ77 was already deduplicating the repeated JSON, and
+doing it for free. A dense integer encoding destroys exactly the redundancy the
+compressor fed on. The alphabet is not the lever — vlq base36, vlq base64, plain
+decimals and plain base36 all land within 1% of each other on gzip.
+
+##### What the stream is actually made of
+
+Auditing it by marking every slot with the role the layout gives it (0.2%
+unclassified, so the split is sound) says the intuitive answer is wrong twice
+over. Coordinates are a *sixth* of the stream; the rest is structure:
+
+| role | chars | share |
+|---|---|---|
+| property values | 2805 | 15.2% |
+| property offsets in records | 2528 | 13.7% |
+| property metadata | 2352 | 12.8% |
+| clock table | 1921 | 10.4% |
+| property offsets in bindings | 1767 | 9.6% |
+| effect parameters | 1280 | 6.9% |
+| record offset table | 1018 | 5.5% |
+
+##### The rule that came out of it
+
+**Repetition beats magnitude.** Every attempt to make numbers *smaller* by
+delta-encoding made the payload *bigger* after compression, because absolute
+values repeat and their differences do not:
+
+| column | absolute | delta |
+|---|---|---|
+| record offset table | 1018 ch / 526 gz | **270 ch / 62 gz** |
+| property offsets in records | 2528 / 786 | 2434 / 1057 |
+| property offsets in bindings | 1767 / 649 | 1832 / 886 |
+| property metadata | 2352 / 834 | 3138 / 1470 |
+| clock table | 3172 / 426 | 1880 / 523 |
+
+Only the record offset table wins, and it wins hugely — it is the one column
+that ascends and never repeats a value. Everything else repeats, so it is left
+absolute. Note the clock table: delta cuts it 41% in characters and still costs
+23% in gzip.
+
+What did pay, in order: **delta the record offset table** (−4.7% module gzip);
+**give the clock and gate tables a per-column shift** instead of a fixed ×1000,
+since frame numbers are usually whole (−0.5%); and **make the wire layout
+individual constants rather than an object**, so the minifier folds `H_BINDINGS`
+to `11` and the shaker drops the slots an animation never reads — worth ~3
+points on self-contained modules, which inline the decoder. Packing `kind` and
+`dim` into the spare header bits saved 0.1%: they were single characters and
+highly repetitive, so gzip already had them for nothing.
+
+That leaves self-contained modules at **+11% to +19% gzipped against the JSON**
+they replaced, with raw bytes −26% on `ripple`. Extern modules land at −1.5%
+gzip against the halfway state and about level with the JSON.
+
+Two simulations of this were run before building it, and both were wrong in
+opposite directions — one appended a run of identical characters (which gzip
+crushes) and read −26%, the other costed every array index at ×1000 (four VLQ
+characters where one was needed) and read +1.7%. Neither is a substitute for
+compiling the thing.
+
+#### The next thing, and it is much bigger than the wire format
+
+All of the above optimises the payload. The payload is not where the bytes are.
+
+| fixture | markup | runtime | module | runtime share |
+|---|---|---|---|---|
+| bouncy_ball | 495 | 6165 | 6660 | **92.6%** |
+| boucing-ball | 825 | 6837 | 7662 | 89.2% |
+| precomp_star_circle | 2193 | 7854 | 10047 | 78.2% |
+| lottie-logo | 4365 | 9521 | 13886 | 68.6% |
+| starfish | 5763 | 16299 | 22062 | 73.9% |
+| ripple | 33508 | 18264 | 51772 | 35.3% |
+
+`bouncy_ball` animates **one transform** and ships forty runtime symbols to do
+it — `dec`, `column`, `mkPath`, `vector`, `spatial`, `fallbackOf`, `H_ASSETS`,
+`H_USES`, `H_REMAPS`. None of them are reachable for that animation in any
+meaningful sense; they survive because `mount` is one declaration that touches
+every capability, and the shaker works at declaration granularity.
+
+Hand-writing what the compiler *should* emit for it — straight-line code, no
+payload, no dispatch, no closure per property — and checking it against the real
+build frame by frame:
+
+| | today | generated | |
+|---|---|---|---|
+| raw | 6660 B | **2190 B** | 3.0× |
+| gzip | 3391 B | **1193 B** | 2.8× |
+| mount | 10 µs | under the timer | no decode, no `resolve`, no closures |
+| frame | 2.63 µs | 2.33 µs | 1.13× |
+
+Byte-identical `transform` on all 241 sampled frames, same player API. The
+prototype is in the job scratch dir; the numbers above are reproducible from it.
+
+It also does something the interpreter structurally cannot: `bouncy_ball`'s
+rotation is a compile-time zero, so the emitted matrix is diagonal — no `cos`,
+no `sin`, no four-term multiply. A data-driven runtime cannot fold that, because
+it does not know the value until it runs.
+
+**The shape this points at.** A module becomes `markup + generated apply() +
+whatever helpers that animation genuinely needs` (the bezier solver, the number
+formatter, `pathD`, the player scaffolding — which stays shared and takes
+`apply` as its one indirection). The payload and the binder dispatch disappear
+entirely. Capability helpers keep being shaken exactly as they are now.
+
+##### Status: the generator exists, and covers one fixture
+
+`backend/codegen.rs` writes a scene out as straight-line JavaScript;
+`runtime/play.js` is the frame clock and public API it hands `apply` to.
+`try_emit` returns `None` for anything it cannot express and the caller falls
+back to the interpreter, so a module is only ever built one way and never pays
+for the path it did not take — the same shape as `Instancing::Auto`. It applies
+to self-contained modules only: an extern module shares the interpreter with
+every other animation on the page, so the trade runs the other way there.
+
+Six of the seven non-static fixtures are code-generated, and the seventh is the
+reason the compiler builds both ways and keeps the smaller:
+
+| fixture | before | after | | frame |
+|---|---|---|---|---|
+| `bouncy_ball` | 6660 B | **2628 B** | −61% | 1.16× |
+| `boucing-ball` | 7662 B | **4107 B** | −46% | 1.23× |
+| `precomp_star_circle` | 10056 B | **8449 B** | −16% | 1.13× |
+| `lights` | 21470 B | **19237 B** | −10% | 1.07× |
+| `starfish` | 22162 B | **21397 B** | −3% | 1.05× |
+| `lottie-logo` | 13894 B | **13630 B** | −2% | 1.05× |
+| `ripple` | 51781 B | 52271 B | interpreter | — |
+
+Covered: transform, translate, opacity, display, fill, stroke, shape (path,
+rect, ellipse, polystar), trim, gradient, visibility gates, precomp clocks,
+time remap, layer records and expressions. Not covered: precomp **instancing**,
+which nothing reaches by default — `Instancing::Auto` inlines a precomp whose
+instances carry their own clocks — but `--instance-precomps` does, and that
+build still compiles, just the other way.
+
+##### Which delivery mode is smallest
+
+For **one** animation, self-contained is smallest everywhere in the corpus, and
+code generation widens the gap — there is no interpreter and no payload left to
+inline:
+
+| fixture | shared runtime (module + slice) | self-contained | backend |
+|---|---|---|---|
+| bouncy_ball | 3.6K | **1.4K** | code |
+| boucing-ball | 4.0K | **1.9K** | code |
+| precomp_star_circle | 4.6K | **2.4K** | code |
+| lottie-logo | 6.1K | **4.7K** | code |
+| lights | 9.1K | **6.6K** | code |
+| starfish | 10.0K | **7.4K** | code |
+| ripple | 12.7K | 12.7K | interpreter |
+
+All gzipped. It does **not** follow that self-contained is always right:
+
+* It is one copy per animation. A second animation on the page is cheaper on
+  the shared runtime, which amortises — the crossover is immediate.
+* `ripple` is a tie, and does not use the generator at all.
+* **Extracted markup cannot use the generator**, because codegen is gated to
+  `MarkupMode::Inline`. That mode therefore still ships an interpreter and a
+  payload, and now compares worse against self-contained than it used to. Worth
+  lifting — the generated `init` would need to source its elements from the
+  sprite the way `mount` does.
+
+The demo says which backend won, as a badge on the plan panel and in the
+self-contained row's label, with the amortisation caveat in the note.
+`ulottie-dev-server sizes` prints the same in its `+slice` and `How` columns.
+
+##### Why `ripple` is not generated, and why that is the right answer
+
+Generated, it is **151 KB against the interpreter's 52**. It has 230 bindings,
+and code generation trades data for code: brilliant when the runtime dominates
+(`bouncy_ball` is 93% runtime and loses 61% of its bytes) and terrible when the
+*animation* dominates. So `emit` builds both and keeps the smaller, the same way
+`Instancing::Auto` picks. Which is better is a measurement, not a rule.
+
+Three things had to be bounded to get there, each found by measuring:
+
+* **Unrolling.** Above `UNROLL_MAX` (12) segments a property ships as columns
+  and a `kfEval` call instead of an if-chain. Measured across the corpus, 6
+  costs `boucing-ball` 687 bytes and buys nothing; everything from 12 up is
+  identical.
+* **Handles carry columns, never an unrolled body.** A handle has to hold its
+  keyframes as data anyway — `thisProperty.key(n)` reads them — so emitting an
+  unrolled evaluator too wrote every value into the module twice.
+* **`layerTx`/`layerOp` are calls, not inlined.** Every input is a runtime
+  handle, so nothing folds; `ripple` has 140 of them and inlining cost 84 KB
+  against roughly one kilobyte of calls. The generator should only inline what
+  actually *differs*.
+
+Handles are also hash-consed on their emitted text, because an inlined precomp
+repeats its properties once per copy.
+
+##### Bugs the generator produced, all silent
+
+* The element list was named `E` — and so is the expression table. The minifier
+  merged them and `initExpr(E, ctx)` received the DOM node list.
+* `proxyFor` read a layer's name as `ctx.str[rec.n]`, a pool a generated module
+  does not have. A record now carries the **name**, not an index into a table
+  only one backend owns.
+* Hash-consing rewound the emit buffer on a hit, which deleted a *nested*
+  handle — an expression's value source — that the pool still pointed at. Each
+  handle now builds its own declaration aside while nested ones append normally.
+* `seq`, the id-uniquing counter, lives in `core.js`; a generated module has to
+  declare its own.
+
+##### A difference that is not a bug
+
+Generated output is byte-identical to the interpreter on every sampled frame of
+every fixture except `starfish`, which differs by ~2e-6 relative. The
+interpreter interpolates in *scaled integer* space and descales at the end
+(`(a + (b-a)*u) * iv`); generated code interpolates in real units. Both are
+equally correct and the pixel and geometry gates do not distinguish them.
+
+#### Shaking the expression runtime — and why it barely paid
+
+The per-expression preamble has been emitted from what each body references for
+a while. The runtime side was not: `makeExpr` and `proxyFor` wire the whole
+vocabulary onto every proxy, so an animation whose expressions only call
+`loopOut` still shipped comp-space transforms and the arc-length path sampler.
+
+`emit_expressions::vocabulary` now scans the bodies for that vocabulary and
+turns it into `EXPR_PROPERTY` / `EXPR_COMP` / `EXPR_PATH`, which [`GATED`] cuts
+the way it already cuts easing and motion paths. Result: **−126 B** on `lights`
+and `ripple`, **0** on `starfish`.
+
+The first version of the scan reported −1600 B on `ripple` and **broke it**: it
+reused `free_identifiers`, which deliberately ignores member accesses because
+`path.pointOnPath(t)` needs no binding in the preamble. The runtime still has to
+*provide* that method. The scan for capabilities has to count every mention, not
+every free name — over-retaining costs bytes, under-retaining ships a module
+that throws only once the expression runs. The browser suite caught it; no unit
+test would have.
+
+So the corpus's expressions are broad, not narrow, and shaking has little left
+to remove. **Getting the expression engine out of these modules means compiling
+the bodies, not trimming around them** — turning `loopOut('cycle')` into the
+arithmetic it denotes, rather than shipping a proxy that can answer it. That is
+a real compiler for a small language, and it is where `starfish` (74% runtime)
+and `lights` (73%) actually go.
+
 #### What was measured and rejected
 
 These all looked promising and are settled negatives — recorded so they are not
 re-proposed:
 
+- **An integer number formatter.** Written, tested, and reverted. `fmt` is
+  `'' + Math.round(x*scale)/scale`, which hands a float to V8's dtoa; when the
+  value is already an integer at a known scale the same string can be assembled
+  with an integer division and a manual decimal point. That version measured
+  **2.36× faster in isolation and byte-identical on all 7434 real values in the
+  corpus** — and it is still a loss:
+
+  | | lottie-logo | ripple | starfish | trim_path |
+  |---|---|---|---|---|
+  | `fmt` self-time | 3.0% | outside top 12 | — | — |
+  | frame time, before → after | 10.5 → 10.6 µs | 263 → 255 µs | 24.3 → 24.3 µs | no change |
+  | module size, gzip | **+118 B (+2.2%)** | +125 B | +122 B | 0 |
+
+  A 2.36× win on 3% of a frame caps out at 1.7%, which is under the noise floor
+  of four alternating runs — while the extra branch and the out-of-range
+  fallback make *every* animation 2.2% bigger. The lesson is the profile, not
+  the arithmetic: verify the share before optimising the rate. `num.js` carries
+  a comment saying so, and `visual.spec.ts` pins the spelling contract that
+  rewrite had to satisfy.
 - **Struct-of-arrays.** For `D.b` it is −1.7% before the deltas and *beaten
   outright* by them after. For `D.y` it measures −95 gz marginal on top of this
   stack against +231 raw bytes of reader — break-even in extern mode, a net
@@ -579,8 +920,8 @@ passed. The saved screenshots in `tests/__screenshots__/` show it plainly.
 `geometry parity vs lottie-web` in `visual.spec.ts` is the backstop: it compares
 the bounding box of all drawn geometry, normalised to the viewport, against
 lottie-web at the midpoint. It ignores colour, thickness and edge softness and
-only asks where the drawing is. `GEOMETRY_DIVERGENCE` is its allow-list, same
-contract as `_fixtures/allowances.json`, and is currently empty.
+only asks where the drawing is. It has no allow-list: a fixture either matches
+lottie-web or the suite fails.
 
 
 ### Runtime (Chrome, 120-frame sweep, best of 5)
@@ -681,3 +1022,711 @@ starting any of them.
   data the planner emits exclusively when the matching `Caps` bit is set. That is
   what makes it safe to leave those modules out of a bundle — do not add an
   unguarded reference.
+
+#### The demo shows the artifacts, not just their sizes
+
+Every part row in the size breakdown names a real file, so it now opens one.
+Clicking `compiled module`, `runtime it imports`, `SVG sprite` or `Lottie JSON`
+shows that artifact's actual bytes next to its raw and gzipped size — 825 B of
+compiled module against the 298 KB it replaces reads rather differently as text
+than as a number.
+
+**The compiler formats; the page only colours.** Everything that ships is
+minified onto one line, so the viewer needs an unminified form — but
+reconstructing one in JavaScript means being right about template literals,
+regexes and comments, and a compiled module is mostly one enormous template
+literal holding SVG markup, full of the very characters a naive formatter
+splits on. The first attempt was exactly that, and it mangled import
+specifiers.
+
+There was no need: `CompileOptions.minify: false` is the `--pretty` path, the
+same form `_fixtures/__snapshots__/` is reviewed in, complete with a provenance
+header. So every artifact is served twice — as it ships, and as the compiler
+writes it. `/.output/<name>.pretty.js`, `.embedded.pretty.js`,
+`.extracted.pretty.js`, `.slice.pretty.js`, `.sprite.pretty.svg` and
+`.pretty.json`; `runtime_slice_pretty` and `markup_pretty` are the two new
+compiler entry points behind them. The wasm build produces all of them too, so
+the static demo is at parity with the server and neither reformats anything.
+
+The toggle is `minified`/`unminified` — both are real artifacts, and the header
+always reports the true byte counts.
+
+Colour is a real grammar's job, so it is shiki, loaded lazily and imported
+fine-grained: `shiki/core` plus three languages, one theme and the JavaScript
+regex engine. The bundled `shiki` entry emits a chunk per language — wolfram,
+emacs-lisp, cpp — for a page that shows JavaScript, JSON and XML. As it stands
+it is six lazy chunks, ~81 KB gzipped, fetched only when a row is opened, so
+first load is unaffected.
+
+The sprite also renders, through a `<use>`, because a sprite is `<symbol>`
+definitions and nothing draws until something references one — which is also
+how a page consumes it. It is drawn inside a dashed frame at the symbol's own
+viewBox and captioned as the *static* picture: on a shape-heavy fixture most
+geometry is written by bindings at runtime, so the render is a few marks in the
+corner of a large canvas. Without the frame and the caption that reads as
+clipped or broken rather than as accurate.
+
+Switching artifacts clears the rendered markup rather than just hiding it. A
+sprite carries `<symbol id="…">`, and a leftover definition stays live in the
+document for anything referencing that id — including the animations mounted on
+the same page.
+
+Two things had to move for it. `/.output/<id>.slice.js` is a new variant — the
+size table always named the runtime slice but nothing served it. And `/compile`
+now *writes* the extracted module, the sprite and the slice rather than only
+measuring them: an upload is addressed by content hash, so the on-demand
+compile route cannot rebuild them from a fixture file that does not exist. The
+wasm backend already had all three in hand and just publishes blob URLs.
+
+##### Two layout bugs the viewer surfaced
+
+Shiki emits `<pre class="shiki">`, which is `white-space: pre` and will not
+wrap, and `.wrap` is a grid. A grid item's `min-width` defaults to `auto`, so it
+refuses to shrink below its content — one minified line made the card 5508 px
+wide inside a 940 px page and gave the whole document a horizontal scrollbar,
+rather than scrolling inside the panel. Fixed by allowing the items to shrink
+(`min-width: 0`) *and* wrapping shiki's output; `overflow-wrap: anywhere`,
+because minified output has long runs with no break opportunity at all.
+
+Checking that across viewports turned up a second, unrelated one: the scrubber
+overflowed a narrow page by 20 px. `max-width: 100%` does not fix it — the
+control is a grid item in an auto-sized track, where a percentage resolves
+against an indefinite containing block and is ignored. `width: min(420px, 100%)`
+does.
+
+#### The document had to be a frame, not a template
+
+The planner splits an animation into markup for what cannot change and a
+binding table for what can. That is right for a module, which writes the moving
+half on mount, and wrong for a document served on its own — which is exactly
+what the extracted sprite is for: SSR, `<noscript>`, `<img src>`, and the tree
+a client hydrates onto. A layer with an animated transform had no `transform`
+at all and drew at the origin; a shape with an animated `d` drew nothing.
+`bouncy_ball` was off-centre and `lights` was five bulbs stacked on one point.
+
+So `Scene::markup` is now baked at the composition's first frame — every
+binding evaluated once at compile time and written as an ordinary attribute
+(`scene/bake.rs`). `Scene::inline`, what the module carries, stays unbaked;
+the runtime writes those attributes on mount, so there they would be dead
+bytes.
+
+Two rules make hydration sound, and they are why the bake mirrors
+`runtime/ops/*.js` op by op instead of reusing the planner's own static-value
+branches:
+
+* **Write exactly what the op writes.** The planner bakes a static fill as
+  `fill="#f00" fill-opacity=".5"`; `bFill` writes one combined `fill="rgba(…)"`
+  and never touches `fill-opacity`. Baking the planner's form would leave an
+  opacity attribute the runtime never overwrites, and the alpha would apply
+  twice from the first frame on.
+* **Write nothing the op would not have written.** A binding gated off at this
+  frame is skipped here too, so nothing is left for the runtime to fail to
+  clear.
+
+Only attributes are added, never elements — bindings address elements by
+document-order index, and that is what makes a sprite legally both the
+pre-script picture and the tree that hydrates.
+
+The oracle is the module itself: `player()` calls `apply(ip)` before scheduling
+anything, so a mount with `autoplay: false` *is* the first frame. Comparing the
+two attribute by attribute across the corpus leaves 0 differences on every
+fixture without expressions, and on the three with them the differences are
+*only* on expression-driven properties — 1 on starfish, 5 on lights, 184 of
+ripple's 785 elements. An expression cannot be evaluated ahead of time (that
+needs the engine, which is JavaScript), so those bake to the fallback the
+runtime itself uses when no engine is present. lottie-web agrees with the
+module in all three cases, so the document is the approximate one.
+
+Both halves are pinned in `visual.spec.ts`: the sprite against a fresh mount,
+and a served frame hydrated then driven to mid-animation against a fresh mount
+— mid-animation because an off-by-one in element indexing would still look
+right at the frame the markup was baked at. Hydration had no coverage at all
+before this.
+
+The cost is attributes on animated elements: +10–18% of document bytes on most
+fixtures, +56% on `precomp_star_circle` and +65% on `starfish`, and nothing at
+all on the four that were already fully static. It buys a first paint that is
+correct instead of one that is wrong.
+
+##### The viewer outlived its animation
+
+`renderSizes` rebuilt the table on every source change but left the viewer
+alone, so switching animations kept the previous one's artifact open — and if
+it had been rendered, a live `<symbol id="…">` stayed in the document, where the
+next animation's mount would resolve `url(#…)` against it. Closing the viewer
+is now part of re-rendering the table rather than only a button.
+
+The ways are ordered shared runtime → markup extracted → self-contained, and
+extracted lists its parts in the same order as the split it varies (module,
+runtime slice, then the sprite). Reading the two side by side, the only row that
+differs is the one that is actually different.
+
+### Why the expressions need a compiler, not analysis
+
+The initial-frame bake made the case concrete. Everything the compiler can
+evaluate, it now bakes exactly — 8 of 11 fixtures agree with a mounted module
+attribute for attribute. The three that do not are exactly the three with
+expressions, and the differences are *only* on expression-driven properties.
+The document cannot be right for those, because being right means running the
+expression, and the expression is JavaScript.
+
+That is the correctness argument. The size argument is larger. From
+`tests/expression_cost.rs` (`cargo test --test expression_cost -- --nocapture`),
+all figures minified:
+
+```
+fixture       module   engine   bodies  strings   overhead  ratio
+lights          5792     7760     1917      530      10207   1.8×
+starfish        5763     7762     1526      479       9767   1.7×
+ripple         33508     7780      740      581       9101   0.3×
+```
+
+`engine` is the runtime slice an expression animation drags in that an
+otherwise identical one would not, measured by differencing `runtime_slice`
+with and without the four `EXPR_*` caps. On `lights` and `starfish` the
+machinery is **larger than the animation it decorates** — 1.8× and 1.7×.
+
+What ships for one of `lights`' four expressions, verbatim:
+
+```js
+function(e,t,n,r,i){let{thisComp:a,div:o}=i;var s,
+  c=a.layer(`wire`),
+  l=o(t.effect(`Pseudo/ADBE Trace Path`)(`Pseudo/ADBE Trace Path-0001`),100),
+  u=c(`ADBE Root Vectors Group`)(1)(`ADBE Vectors Group`)(1)(`ADBE Vector Shape`);
+  return s=c.toComp(u.pointOnPath(l)),s}
+```
+
+Every string in it names something the compiler already resolved. `layer('wire')`
+is a layer whose record index is known; the four-step chain is a shape the
+planner has already flattened into a `d`; the effect lookup is a slider whose
+value is in the payload. The module ships the names, ships a body that looks
+them up, and ships `proxyFor` — 2776 B unminified, the single largest function
+in `expr.js` — whose entire job is to make those chains callable at runtime.
+Resolve the references ahead of time and all three go: the strings, the lookup
+code, and the proxy.
+
+Some expressions come off entirely. This one is also from `lights`:
+
+```js
+function(e,t,n,r,i){
+  return n.propertyGroup(1)(`Pseudo/ADBE Trace Path-0002`)==1&&n.numKeys>1
+    ? n.loopOut(`cycle`) : e}
+```
+
+Both operands of the `&&` are compile-time constants — an effect checkbox and a
+keyframe count — so the conditional folds at compile time to one branch or the
+other. If it folds to `e` the property is plain keyframes and the expression is
+gone. If it folds to `loopOut('cycle')` that is a time transform on keyframes
+the module already carries, `f → ip + (f - ip) % span`, which is arithmetic, not
+an interpreter. Either way the body, the string and the engine call disappear.
+
+What does *not* disappear is real evaluation: `pointOnPath` against a moving
+path still has to run per frame. But that is a compiled arithmetic kernel over
+resolved inputs, not a JS interpreter walking proxies by name — and being able
+to run it at compile time is what makes the document exact.
+
+#### Stage one: resolve and fold
+
+`src/expr/` is the front end. It parses each body with oxc — a real parser, not
+the identifier scans it replaces, which could not tell an effect name from a
+string literal — and evaluates it against what the compiler already knows:
+effect parameters with static values, keyframe counts, the property's own
+range. Three verdicts, per *property* rather than per expression, since the
+bodies are deduplicated and one body folds differently on each layer it is
+applied to:
+
+* **Identity** — the body returns `value`. The expression is deleted and the
+  property is its keyframes.
+* **Constant** — the property is that number.
+* **Open** — undecidable; the expression ships.
+
+It is one-directional by construction: anything not resolvable *exactly* is
+Open. A missed fold costs bytes, a wrong one is a silent rendering change.
+
+Bodymovin emits more of the deletable kind than one would guess. Every property
+a "loop" toggle can reach gets
+
+```js
+if (thisProperty.propertyGroup(1)('…-0002') == true && thisProperty.numKeys > 1)
+  { $bm_rt = thisProperty.loopOut('cycle'); } else { $bm_rt = value; }
+```
+
+whether or not the toggle is on, and every opacity gets `clamp(value, 0, 100)`
+whether or not the keyframes can leave the range. `lights` drops from 6
+expressions to 4, `starfish` from 4 to 3; `ripple`'s six all survive, which is
+correct — every one of them samples another layer's path.
+
+Modules: `lights` 5792 → 5581 B, `starfish` 5763 → 5633 B. Real but small, and
+the reason is visible in what survives: the remaining bodies are the ones full
+of names. The string table has not moved at all, and neither has the engine,
+because *some* property still reaches for `proxyFor`. Deleting whole bodies was
+never going to be where the bytes were — resolving the references inside the
+bodies that stay is, and that is the next stage.
+
+##### The sweep is the dangerous half
+
+Folding alone changes nothing measurable: the property gets cheaper and the
+module still carries the body, the names, and the engine. So dead bodies are
+swept and the table renumbered — and the first version of that swept `ripple`
+completely, all six expressions, because the walk covered `module.layers` and
+`ripple`'s animation lives inside a precomp asset. An empty live set read as
+"nothing references anything". The browser suite caught it as a geometry
+divergence, not as a crash.
+
+The fix is not just walking assets. The sweep now tracks `seen` alongside
+`live`, and keeps any id the walk never reached: a property site this pass does
+not know about costs bytes rather than losing the body it still points at. A
+missing walk case should not be able to delete live code.
+
+#### Stage two: resolve the references
+
+Stage one deleted whole expressions and moved ~200 B. The measurement said why:
+the string table had not shifted at all, and almost none of it is layer names —
+`lights` carries 454 B of names of which *four* are a layer. The rest is After
+Effects effect and parameter names, each paid for three times: the literal in
+the body, the name on the effect in the payload, and the linear search in
+`proxyFor` that matches them up.
+
+So `expr::resolve` rewrites `effect('Position - Overshoot')('ADBE Slider
+Control-0001')` to `effect(0)(0)`. Bodies are deduplicated, so one is shared by
+every layer it was applied to and a rewrite has to be right for all of them: the
+indices are resolved once per using layer and applied only if they all agree.
+They do whenever one effect was applied across sibling layers, which is the case
+worth having. Only the *owning* layer is resolved — a bare `effect(…)` and
+`thisLayer.effect(…)` — because `thisComp.layer('x').effect(…)` reaches a
+different table, and `ripple` has one of those, correctly left alone.
+
+`proxy.effect` takes either form, so a lookup the compiler could not decide
+still works. Then `Scene::prune_effect_names` drops every name no surviving body
+still mentions.
+
+```
+                module    strings          module    strings
+              (before)   (before)          (after)    (after)
+lights            5792        530            4897        130    −15.5%
+starfish          5763        479            5312        327     −7.8%
+ripple           33508        581           33257        519     −0.7%
+```
+
+Two things about the pruning are load-bearing. It asks about the finished body
+*text*, not its syntax: a lookup this compiler does not recognise keeps its
+name, so a gap in the rewrite costs bytes rather than shipping a module that
+throws. And it matches whole string literals rather than substrings —
+`'ADBE Layer Control'` is a substring of `'ADBE Layer Control-0001'`, so a
+`contains` test kept ten effect names on `starfish` that nothing looks up.
+
+What is left in the tables is the dynamic case: `lights` and `starfish` build an
+array of effect names and index it in a loop, `effect(nullLayerNames[i])(…)`.
+The names are constants and the loop bounds are constants, so it is resolvable —
+it just needs the array literal rewritten rather than a call argument.
+
+`proxyFor` is still shipped, and will be until *every* reference in a module is
+resolved: it takes one surviving name lookup to need the whole surface. That is
+the remaining half.
+
+##### Tables of names
+
+The last thing in the string tables was the shape After Effects generates when
+one effect is applied across a set of layers:
+
+```js
+var nullLayerNames = ['Shape Layer 1: Path 1 [1.0]', 'Shape Layer 1: Path 1 [1.1]', …];
+for (var i = 0; i < nullLayerNames.length; i++)
+  out.push(effect(nullLayerNames[i])('ADBE Layer Control-0001'));
+```
+
+The names are constants and the loop bound is the array's own length, so the
+elements resolve to effect indices and the array becomes `[0, 1, …]` — no
+unrolling, the loop is untouched. The one parameter literal serves every
+iteration, so it is only replaced when every effect in the table puts the
+parameter in the same slot; they do when the table is one effect applied N
+times, which is the only way AE writes this.
+
+An array is rewritten only when *every* reference to it is one the rewrite
+understands — `x.length`, or `x[i]` inside an `effect(…)` call. A name that
+escapes anywhere else could be read as a string, and a number there would change
+what the body computes.
+
+```
+              module    strings         module    strings
+            (stage 0)  (stage 0)      (stage 2)  (stage 2)
+lights           5792        530           4661          8    −19.5%
+starfish         5763        479           4674          0    −18.9%
+ripple          33508        581          33257        519     −0.7%
+```
+
+`starfish` now ships no expression names at all, and `lights` ships one: the
+layer name `wire`, which is a `thisComp.layer('wire')` lookup and a different
+resolution problem.
+
+`proxyFor` is still there, and the reason is worth being precise about. It is no
+longer needed for *name matching* — it is needed because the surviving bodies
+still call proxy *methods*: `toComp`, `fromCompToSurface`, `pointOnPath`,
+`points`, `numKeys`, `nearestKey`. Removing it means resolving those to direct
+handles too, which is a different and larger piece of work than resolving names
+was. What has gone is the lookup: the strings, and the search that used them.
+
+##### The proxy, and what it takes to remove it
+
+`proxyFor` builds a callable object per layer record with about fifteen accessor
+definitions on it, and `placeAll` built one for *every* record at mount:
+`ripple` has 232 records, and its expressions name two of them. The maps that
+back `thisComp.layer(…)` held those proxies, which is what forced them all into
+existence — so they now hold record *indices*, and the object is built the first
+time something asks for one. 229 of `ripple`'s 232 are never built.
+
+That is the construction gone, not the code. `proxyFor` still ships, and the
+reason is worth stating precisely, because it is not the one we started with.
+Name lookup is resolved: the strings and the search that consumed them are gone.
+What keeps the proxy alive is that the surviving bodies still call its *methods*
+— `toComp`, `fromCompToSurface`, `pointOnPath`, `points`, `numKeys`,
+`nearestKey`. Removing it means rewriting each of those into a free function
+over a record handle, which is a different and larger job than resolving names:
+every one is a syntactic rewrite plus a runtime entry point, and
+`thisComp.layer('wire')` has to resolve to a handle the emitter can hand over,
+which the wire format has no slot for yet.
+
+Two of the corpus's bodies also build layer objects *dynamically* —
+`getNullLayers.push(effect(i)(j))` then `getNullLayers[i].anchorPoint` — so even
+a complete method rewrite needs a plain record handle those accessors can work
+on. `ripple` has none of that and could shed the proxy entirely; `lights` and
+`starfish` could not without it.
+
+Lazy construction costs +154 B of runtime (the flat record tables and
+`proxyOf`). It is worth it on any animation with more layers than expressions,
+which is all of them, and it is the shape the method rewrite needs anyway —
+a record handle looked up by index is exactly what a free function would take.
+
+##### Stage three: the proxy is gone
+
+The method rewrite the section above called "a different and larger job" landed.
+`backend::layers` runs after planning, per candidate scene, and rewrites every
+body so that a layer reference is a slot in the owning record's own table and
+every access is a free call:
+
+```text
+thisComp.layer('wire').toComp(p)   →  toComp(lyAt(thisLayer, 8), p, frame)
+barLayer.content('Path 1').path.points()
+                                   →  lyPoints(lyRel(thisLayer, 2), frame)
+thisComp.layer('traceNull').effect('Trace Path')('Progress')
+                                   →  lyEffect(lyRel(thisLayer, -3), 0, 0, frame)
+```
+
+No wire-format change was needed after all. The `E[]` table is JavaScript the
+compiler generates, so a resolved record index is simply a literal in the body.
+
+**Two spellings, because neither alone covers the corpus.** Bodies are
+deduplicated across every property they were applied to, so one literal has to
+be right for all of them. `lyAt(thisLayer, T)` when every using property agrees
+on the absolute slot — `lights` names `wire` from five layers and it is record 8
+for all five. `lyRel(thisLayer, D)` when the absolute slot differs but the
+offset from the owner does not — `ripple`'s precomp is inlined twenty-three
+times, so its `thisComp.layer('bar')` has twenty-three answers and one delta.
+`agree()` folds one resolution per use into a spelling or refuses; it prefers
+absolute because `Handle::At` is the only one gated on the uses sharing a table.
+
+**A reference that resolves to *nothing* is not writable, and refusing is the
+whole point.** The proxy answered `null` for a missing layer and the number `0`
+for a missing effect, and a body that then read a member off either *threw*,
+landing in `evalExpr`'s catch and falling back to the property's own value. The
+free functions are null-safe by design: `lyPos(null, f)` is `[0,0,0]` and
+`lyAnchor(0, f)` is `[0,0,0]`. So emitting `null` or `0` would not reproduce the
+old behaviour — it would compute on a fabricated point instead of aborting.
+`Handle` therefore has only the two record spellings, and `agree` returns `None`
+for everything else, which sends the body to the fallback where the behaviour is
+reproduced exactly. This was the one wrong-fold in the first cut of the pass.
+
+**There is no fallback.** A reference the pass cannot resolve fails the compile,
+with the body and `ULOTTIE_WHY=1` to say which construct defeated it. The first
+cut kept the old proxy behind `Caps::EXPR_LEGACY` for exactly this case, and no
+fixture ever reached it — which is the argument against keeping it. Dead code
+that only runs on input nobody has yet is how it rots, and an AOT compiler that
+silently degrades to a runtime lookup is not one. If a real file hits it, the
+answer is to resolve that construct, not to ship a second evaluator.
+
+**`verify()` has the last word, and shares no code with the walk.** It is a text
+scan of the finished body: any surviving layer member, or any surviving free
+`effect` / `thisComp`, sends the body to the fallback. The second half of that
+matters more than it looks — both names used to be bound in front of *every*
+body and are now never emitted, so a mention the walk did not rewrite would be a
+`ReferenceError` on every frame, which `evalExpr`'s catch turns into a silent
+fall back to the base value. Fail-open is the one thing this pass may not be. The failure it guards against is the walk believing it rewrote
+something it did not, and a scan sharing no code with the walk cannot share its
+blind spot.
+
+**`sites()` is fail-safe by construction.** Missing a site is a *wrong* fold, not
+a missed one: `agree` folds over the uses it was given and a use it never saw
+cannot disagree, so an incomplete walk emits a literal that is right for the
+sites it visited and wrong for the one it did not. `SceneData`, `AssetPlan` and
+`LayerRecord` are therefore destructured exhaustively, and a `Prop`-carrying
+field added to any of them stops compiling until it is walked or waved past.
+
+##### What it cost and what it bought
+
+Against the proxy build that preceded it:
+
+| fixture  | module          | engine      | bodies      | strings   |
+|----------|-----------------|-------------|-------------|-----------|
+| lights   | 5308 → **4454** | 8021 → 6508 | 1787 → 1118 | 191 → **0** |
+| starfish | 5297 → **4675** | 8032 → 6439 | 1199 →  983 | 378 → **0** |
+| ripple   | 33997 → **32560** | 8054 → 6201 | 1191 →  457 | 561 → 477 |
+
+`lights` and `starfish` ship no string table at all. Symbol *count* went up
+(89 → 97 on `lights`) while engine bytes fell: one 2.7 kB `proxyFor` became
+seventeen one-liners of which only the used ones are retained, and retention is
+exact — `Plan::helpers` reports what a body calls rather than inferring it from
+a word scan, which is why `ripple` drops `fromCompToSurface` and the others do
+not.
+
+##### Two bugs the new geometry sweep caught, both silent
+
+The shipped `--embedded` build was pixel-checked at one frame with
+`antialiasing: true` and geometry-checked never — precisely the hole a
+one-slot-off `lyAt`/`lyRel` hides in, since a constant offset on hairline
+geometry is what odiff's antialiasing pass discounts. Sweeping the geometry check
+over all five sample frames of the shipping build found:
+
+* **`starfish` was 10 px out at t=0.5**, and exact at the other four frames.
+  Not the layer pass — the extern build runs the identical rewritten bodies
+  through the identical free functions and was exact. `codegen` has two forms for
+  a keyframed property, an unrolled if-chain and (above `UNROLL_MAX` segments, or
+  whenever the expression engine needs a handle to hang keyframes off) a columnar
+  literal sampled by `kfEval`. The unrolled form emitted spatial tangents; the
+  columnar one dropped them, so a motion path became a straight line. Invisible
+  in the source: the property still animated, just along the wrong curve. Two of
+  that limb's position keyframes are *equal*, so the entire excursion between
+  them was the tangent — a straight line between two identical points does not
+  move at all. `a_generated_module_keeps_its_spatial_motion_paths` pins it.
+* **`ripple`'s `E[4]`** was still scanning an effect list and its parameters by
+  string on every read of every binding. `expr::resolve` only ever resolves the
+  *owning* layer's own effects; this one reads another layer's.
+  `render_effect` now resolves both selectors per use site and folds them to
+  slots when the uses agree, which also drops `"Trace Path"` and `"Progress"`
+  from the payload.
+
+#### Removing the fallback
+
+The layer pass shipped with a gated proxy behind it, `Caps::EXPR_LEGACY`, for
+references it could not resolve. No fixture ever reached it. That is the case
+for deleting it rather than the case for keeping it: dead code that only runs on
+input nobody has yet is how it rots, and an AOT compiler that quietly degrades
+to a runtime name lookup is not one. A reference the pass cannot resolve now
+fails the compile and says which construct defeated it.
+
+Gone with it: `lyView` (the proxy itself), `lyPlace`, `lyName`, `lyIndex`,
+`ctx.byName`, `ctx.byIndex`, the composition-scope column and its header slot,
+`LEGACY_ROOTS`, `Plan::legacy`, `Plan::keeps_names`, `reachable_names` and its
+tests, `Scene::prune_names`'s reason for existing, and the
+`ULOTTIE_NO_LAYER_PASS` escape that existed only to exercise the fallback.
+`Caps` went back to `u32` — bit 31 was taken for `EXPR_LEGACY` and the widening
+to `u64` had no other cause.
+
+The layer name table goes too. It existed so `thisComp.layer('…')` could resolve
+at runtime, and no emitted body performs that lookup any more, so every name is
+pruned rather than scanned for.
+
+The shipped bytes barely move — about 22 B, since the shaker was already cutting
+the unreachable half — and no snapshot changed, which is the point: this is the
+source getting smaller, not the output. What it buys is one path instead of two,
+and no second evaluator to keep in step with the first.
+
+##### Deciding the guard
+
+`ripple` shipped 27 B of expression name — `Pseudo/ADBE Trace Path-0002` — and a
+body that read it:
+
+```js
+if (thisProperty.propertyGroup(1)('Pseudo/ADBE Trace Path-0002') == true
+    && thisProperty.numKeys > 1) { $bm_rt = thisProperty.loopOut('cycle'); }
+else { $bm_rt = value; }
+```
+
+Both halves are things the compiler knows, so `fold_branches` decides the test
+and replaces the whole `if` with the arm it takes. The test goes, the literal
+goes, and the payload name goes with it through the lexical rule in
+`prune_effect_names` — which is the point of that rule being lexical: nothing
+had to be told the name was dead, it stopped being mentioned.
+
+The count has to reach the test **per property**, not per layer. One body serves
+many properties and they do not agree about `numKeys`, so the collection walk
+carries `(expression id, keyframe count)` per use rather than just the id. A
+first attempt evaluated every test with a stand-in count of zero and inverted
+`ripple`'s guard; the across-the-animation geometry gate caught it at t=0.25,
+which is exactly the hole that gate was added for.
+
+What lands is the arm's *statements*, not the block that held them: splicing
+the block whole left a bare `{ … }` wrapping nothing where the guard used to be.
+Continuation lines are pulled back one level so the unminified form, which is
+what compiler changes are reviewed in, reads as though the guard was never
+written.
+
+Only top-level `if`s whose test mentions no local are considered. A test reading
+a local would need the statements before it replayed, and this pass does not run
+the body — Bodymovin's guards read `thisProperty` and `effect(…)` and nothing
+else, which is the case worth having.
+
+`ripple` 32560 → 32416 B, and no expression name is left in any fixture. What
+remains in its string table is markup templates.
+
+##### Templates as named slots
+
+The string pool's last job for most animations was holding the repeated subtrees
+the planner factored out, referenced by offset from an `H_TEMPLATES` section
+that `mount` read back through `str[…]`. They are the module's own strings, not
+payload, so they are named in the module now — `const TPL = [ … ]` — and `ext.t`
+closes over them: `t: s => expand(s, TPL)`. The section, the interning and the
+indirection are all gone, and with them the `"s"` array itself on every fixture
+that had one.
+
+Two things to know. The generated path already emitted `TPL` this way, so this
+only brought the interpreter into line — but there are *three* module assembly
+sites (minified, the size probe, and the unminified reviewer) and the constant
+has to be emitted at all three. Missing one produced a module that referenced
+`TPL` without declaring it, which nothing but running it would have caught.
+
+And `ext.t` is now gated on `scene.data.tpl` being non-empty rather than on
+`Caps::TEMPLATES`. The two can disagree, and when they did the module threw at
+`init`. A `debug_assert` pins the direction that should hold.
+
+What is left in the pool: `lottie-logo` keeps one entry, `"matrix(1,0,0,1,"` —
+the constant prefix of a `TRANSLATE` binding, which is a binding argument rather
+than a template. Every other fixture emits no `"s"` at all.
+
+
+#### `translate()` instead of `matrix(1,0,0,1,…)`
+
+The last thing in the string pool was `"matrix(1,0,0,1,"` on `lottie-logo` — the
+baked prefix of a `TRANSLATE` binding. `TRANSLATE` is the specialisation for a
+layer whose position moves and whose anchor, scale and rotation do not: the
+matrix's linear part is a compile-time constant, so it ships as a string and the
+frame loop appends two numbers to it.
+
+An identity linear part is by far the commonest case, and `matrix(1,0,0,1,x,y)`
+is `translate(x,y)` — same transform, five fewer bytes, and the spelling an
+author would have written. So the compiler now sends *no* prefix for it and the
+binder supplies `translate(` itself. `Arg::Str` is interned biased by one, the
+way effect names already were, so `Arg::Null` in that slot reads as absent.
+
+The same shortening applies wherever the planner bakes a transform it knows
+outright, through `svg::transform_str`. That is worth much more than the pool
+entry: `ripple` is 460 B smaller and `lottie-logo` 77 B, because a static pure
+translation is what most groups in most files have.
+
+**No fixture emits a string pool at all now.**
+
+Where it stops: a full `TRANSFORM` binding still bakes as `matrix(…)` even when
+the matrix happens to be a translation at the first frame. `scene::bake` has to
+write exactly what the binder writes — that is what lets a served frame be
+hydrated — and teaching `bTransform` to notice an identity linear part would put
+four comparisons per binding into the frame loop to save five bytes per write.
+`ripple` has 785 elements; that trade is the wrong way round.
+
+##### Why the remaining matrices stay matrices
+
+After `translate()` landed, 285 transform attributes remain across the document
+snapshots, 6429 B of values: 122 `translate(x,y)`, 99 rotations with scale, and
+64 pure scales. The obvious next cut is `scale(s)` and `rotate(deg)` for the
+last two — and it is worth **zero bytes**, because not one of them has a zero
+translation. `matrix(s,0,0,s,e,f)` is 22 characters; the `translate(e,f)
+scale(s)` that would replace it is 25. SVG has no shorter spelling for "scale
+about a point", which is what every one of them is.
+
+Measured before writing any of it. The transform seam is done at this corpus.
+
+#### `D` is the stream
+
+`SceneData` serialized as an object for as long as there was a second entry to
+hold: the strings that could not become integers. Layer names, effect names and
+factored-out markup have each stopped being payload, so the wrapper had become
+one key describing a table with one row — `{"d": "…"}` on every fixture.
+
+It is the string now. `mount` takes `dec(D)` rather than `dec(D.d)`.
+
+A pool is still *possible* — a `TRANSLATE` whose linear part is not the identity
+still needs its prefix — so it reaches the runtime the way templates do, as a
+named module constant handed over through `ext.p`. No fixture in the corpus
+emits one, which is why this could stop being a payload field at all rather than
+an optional one.
+
+##### The dedup that wasn't
+
+`ripple` ends with two bodies that both loop a property, and the obvious read is
+that a rewrite made them identical and nothing re-ran the dedup. It is not what
+happened, and the pass to fix it was written and then reverted.
+
+```js
+$bm_rt = thisProperty.loopOut('cycle');   // what the decided guard left
+$bm_rt = loopOut('cycle');                // what was always written bare
+```
+
+They differ textually, so re-running the dedup — same canonicalisation the
+lowering uses — merges nothing, on any fixture. And they differ *semantically*:
+the emitter binds the bare name to a shim,
+`thisProperty?.loopOut ? … : ((mode, n) => value)`, which answers with the base
+value where the member access would throw. Merging them is a semantic
+normalisation, not a dedup.
+
+The normalisation that would work is rewriting `thisProperty.loopOut(` to the
+shimmed free binding — strictly the safer of the two, and it would make the
+bodies identical so a dedup could then merge them. Not done: the case for it is
+one duplicated body on one fixture.
+
+#### Why the binders keep returning closures
+
+Each binder resolves its element, its property evaluators and its attribute
+setters once at mount and returns `(f) => …`; a frame is `U[i](t)` over a flat
+array. `U` holds closures from twelve different factories, so that call site is
+megamorphic — it cannot be inlined and takes a polymorphic dispatch every call,
+230 times a frame on `ripple`. The obvious alternative is to group bindings by
+op and keep their state in parallel arrays, making each loop monomorphic. It is
+the same move the wire format already made: flat columns instead of a graph of
+small objects.
+
+Measured before building it, on `ripple`, in Chromium:
+
+```
+frame                       0.215  ms
+230 calls, monomorphic      0.0009 ms
+230 calls, megamorphic      0.0012 ms
+dispatch penalty            0.0003 ms  = 0.1% of a frame
+```
+
+**0.1%.** Regrouping by op recovers at most that, and costs the gate and clock
+columns being regrouped to match, so it is not being built. This agrees with the
+CDP profile: the frame is `setAttribute` and path-string assembly, and roughly
+0.9 µs of real work per binding against ~1.3 ns of dispatch.
+
+The synthetic does trivial work per call, so V8 optimises it harder than a real
+binder — but the gap is three orders of magnitude, not a close call.
+
+What this does *not* measure is the closure **allocation** at mount: one updater
+per binding plus one setter per attribute plus one evaluator per property, which
+on `ripple` is well over a thousand small objects. That is a mount-time cost, a
+different question, and still open.
+
+##### Mount, and what is not yet attributed
+
+The dispatch measurement says nothing about mount, which is the other half of
+the closure question — one updater per binding, one setter per attribute, one
+evaluator per property, all built before the first frame.
+
+```
+ripple        mount 1.300 ms   frame 0.287 ms   = 4.5 frames
+lottie-logo   mount ~0     ms   frame 0.015 ms
+```
+
+1.3 ms is real: it is on the critical path to first paint, roughly 8% of a
+60 Hz budget, and it dwarfs a frame. The binder and closure plumbing it runs
+through is 11,251 B unminified across `runtime/ops/` and `set.js`, of which a
+given animation ships the shaken subset.
+
+But **none of that 1.3 ms is attributed yet.** Mount also sets `innerHTML` on
+785 elements of markup, decodes the stream, materialises records and runs
+`querySelectorAll`. `lottie-logo` has 35 elements and ~10 bindings against
+`ripple`'s 785 and 230, so the two scale together and the comparison cannot
+separate DOM cost from closure cost.
+
+Attribute it before restructuring. The frame-loop version of this looked
+obviously worth building and turned out to be 0.1%; the same intuition is what
+is arguing for the mount version now. A CDP profile of a single `init` on
+`ripple`, split by self-time, settles it in one run.

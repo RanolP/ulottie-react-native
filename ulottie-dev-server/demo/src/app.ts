@@ -10,7 +10,8 @@ import { Bench, type Task } from 'tinybench';
 import { lottie } from './lottie.ts';
 
 import { compile } from './compiler.ts';
-import type { CompileResponse, Player, SizeEntry, Sizes, UlottieModule } from './types.ts';
+import { highlight, langOf } from './pretty.ts';
+import type { CompileResponse, Plan, Player, SizeEntry, Sizes, UlottieModule } from './types.ts';
 
 /** Every id here is in `index.html`; a missing one is a bug, not a case. */
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
@@ -59,7 +60,7 @@ async function loadFromSource(jsonText: string, label?: string) {
     return;
   }
   renderPlan(info);
-  renderSizes(info.sizes);
+  renderSizes(info.sizes, info.plan, info);
   isStatic = info.plan?.is_static ?? false;
 
   currentAnim = lottie.loadAnimation({
@@ -148,6 +149,11 @@ function renderPlan(info: CompileResponse | null) {
   if (plan.is_static) {
     badges.push('<span class="badge static">fully static — no runtime, no frame loop</span>');
   }
+  if (plan.generated) {
+    badges.push('<span class="badge gen">compiled to code — no interpreter, no payload</span>');
+  } else if (!plan.is_static) {
+    badges.push('<span class="badge muted">interpreter + payload</span>');
+  }
   if (plan.instanced) badges.push('<span class="badge">precomps instanced</span>');
   if (plan.templated) badges.push('<span class="badge">subtrees templated</span>');
   if (!badges.length) badges.push('<span class="badge muted">markup inlined, no instancing</span>');
@@ -198,9 +204,11 @@ function renderPlan(info: CompileResponse | null) {
 // ---------------------------------------------------------------------------
 
 /** One row: a delivery mode, and the parts whose sizes make up its total. */
+type Part = [name: string, size: SizeEntry, url?: string, prettyUrl?: string];
+
 interface Way {
   label: string;
-  parts: [name: string, size: SizeEntry][];
+  parts: Part[];
   baseline?: boolean;
   raw: number;
   gz: number;
@@ -210,7 +218,7 @@ interface Way {
  * Names the self-contained artifact, and says what was shaken out of it — the
  * tree-shaking claim belongs next to the row it explains, not in a footnote.
  */
-function selfContainedPart(s: Sizes): string {
+function selfContainedPart(s: Sizes, generated: boolean): string {
   const f = s.features;
   const shaken = ([
     ['expressions', f.expressions, f.expressions_cost],
@@ -220,13 +228,135 @@ function selfContainedPart(s: Sizes): string {
     .filter(([, kept]) => !kept)
     .map(([name, , cost]) => `${name} −${fmtBytes(Math.max(0, cost))}`)
     .join(', ');
-  return shaken
-    ? `one file, runtime inlined — shook out ${shaken}`
+  const how = generated
+    ? 'one file, compiled to code'
     : 'one file, runtime inlined';
+  return shaken ? `${how} — shook out ${shaken}` : how;
 }
 
-function renderSizes(s: Sizes | null) {
+/**
+ * Show one artifact's actual bytes.
+ *
+ * The table says a compiled module is 495 B; this is what 495 B looks like next
+ * to the 298 KB it replaces. The sprite is markup, so it also renders.
+ */
+let viewerUrls: { raw: string; pretty: string } = { raw: '', pretty: '' };
+let viewerRaw = false;
+
+/** Put the panel back to a known state before it shows anything else. */
+function resetViewer() {
+  const svgBox = $('viewer-svg');
+  // Cleared, not just hidden: the markup carries `<symbol id="…">`, and a
+  // leftover definition is live in the document for anything that references
+  // that id — including the mounted animations on this very page.
+  svgBox.innerHTML = '';
+  svgBox.hidden = true;
+  $('viewer-body').hidden = false;
+  const render = $('viewer-render') as HTMLButtonElement;
+  render.hidden = true;
+  render.textContent = 'rendered';
+  ($('viewer-format') as HTMLButtonElement).hidden = false;
+  viewerRaw = false;
+  ($('viewer-format') as HTMLButtonElement).textContent = 'minified';
+}
+
+/** Close the viewer and drop everything it put in the document. */
+function closeViewer() {
+  resetViewer();
+  $('viewer').hidden = true;
+  for (const r of $('size-table').querySelectorAll('tr.part')) r.classList.remove('open');
+}
+
+/**
+ * Fetch and show whichever form is selected.
+ *
+ * Both come from the compiler: `minified` is what ships, and the other is its
+ * own unminified output — the same form the snapshots are reviewed in, not a
+ * reformatting of the shipped bytes.
+ */
+async function paintSource() {
+  const body = $('viewer-body');
+  const url = viewerRaw ? viewerUrls.raw : viewerUrls.pretty;
+  body.textContent = 'loading…';
+  let text: string;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(String(res.status));
+    text = await res.text();
+  } catch (e) {
+    body.textContent = `could not load ${url} — ${(e as Error).message}`;
+    return;
+  }
+  // Enough to see the shape of it; laying out a few hundred kilobytes of
+  // source is slow and tells you nothing the first screens did not.
+  const LIMIT = 60000;
+  const clipped = text.length > LIMIT;
+  const shown = clipped ? text.slice(0, LIMIT) : text;
+  body.innerHTML = await highlight(shown, langOf(viewerUrls.raw));
+  if (clipped) {
+    body.insertAdjacentHTML(
+      'beforeend',
+      `<p class="note">… ${fmtBytes(text.length - LIMIT)} more</p>`,
+    );
+  }
+}
+
+/**
+ * Show one artifact's actual bytes.
+ *
+ * The table says a compiled module is 825 B; this is what 825 B looks like next
+ * to the 298 KB it replaces.
+ */
+async function showArtifact(name: string, size: SizeEntry, url: string, prettyUrl: string) {
+  resetViewer();
+  $('viewer').hidden = false;
+  $('viewer-title').textContent = name;
+  $('viewer-size').textContent = `${fmtBytes(size.raw)} raw · ${fmtBytes(size.gzipped)} gzipped`;
+  viewerUrls = { raw: url, pretty: prettyUrl || url };
+  await paintSource();
+
+  if (langOf(url) !== 'xml') return;
+  const render = $('viewer-render') as HTMLButtonElement;
+  render.hidden = false;
+  render.onclick = async () => {
+    const svgBox = $('viewer-svg');
+    const body = $('viewer-body');
+    const showing = !svgBox.hidden;
+    svgBox.hidden = showing;
+    body.hidden = !showing;
+    render.textContent = showing ? 'rendered' : 'source';
+    // Formatting applies to the source, not to a picture.
+    ($('viewer-format') as HTMLButtonElement).hidden = !showing;
+    if (showing) { svgBox.innerHTML = ''; return; }
+    const text = await fetch(viewerUrls.raw).then((r) => r.text()).catch(() => '');
+    // A sprite is `<symbol>` definitions; nothing draws until something
+    // references one, which is also how a page consumes it.
+    const id = /<symbol[^>]*\bid="([^"]+)"/.exec(text)?.[1];
+    const vb = /<symbol[^>]*\bviewBox="([^"]+)"/.exec(text)?.[1] ?? '0 0 512 512';
+    svgBox.innerHTML = id
+      ? `<div hidden>${text}</div>` +
+        // The frame is the symbol's own viewBox. Without it an animation whose
+        // static geometry sits in one corner — most of them, since bindings
+        // write the rest — reads as clipped rather than as a mostly-empty
+        // canvas, which is what it is.
+        `<svg class="canvas" viewBox="${vb}" preserveAspectRatio="xMidYMid meet">` +
+        `<use href="#${id}"/></svg>`
+      : text;
+    svgBox.insertAdjacentHTML(
+      'beforeend',
+      '<p class="note">the first frame, on the symbol\'s canvas — this is ' +
+        'what renders before any script does, and what the module hydrates</p>',
+    );
+  };
+}
+
+function renderSizes(s: Sizes | null, plan?: Plan, urls?: CompileResponse) {
   const tbody = $('size-table').querySelector('tbody')!;
+  // Every source change lands here, and the open artifact belonged to the
+  // previous one. Leaving it up is not only stale: a rendered sprite puts a
+  // live `<symbol id="…">` in the document, and the next animation's mount
+  // would resolve `url(#…)` against whatever is still defined.
+  closeViewer();
   if (!s) {
     tbody.innerHTML = '<tr><td colspan="4">no data</td></tr>';
     $('size-note').textContent = '';
@@ -241,9 +371,9 @@ function renderSizes(s: Sizes | null) {
   // previous version put a gzipped breakdown under a row showing raw and
   // gzipped side by side, which read as if the numbers should reconcile and
   // they could not.
-  const sum = (parts: Way['parts'], k: keyof SizeEntry) =>
+  const sum = (parts: Part[], k: keyof SizeEntry) =>
     parts.reduce((n, [, v]) => n + v[k], 0);
-  const way = (label: string, parts: Way['parts'], baseline = false): Way => ({
+  const way = (label: string, parts: Part[], baseline = false): Way => ({
     label,
     parts,
     baseline,
@@ -251,23 +381,37 @@ function renderSizes(s: Sizes | null) {
     gz: sum(parts, 'gzipped'),
   });
 
-  const ways: Way[] = [
-    way('lottie-web', [['Lottie JSON', s.json], ['lottie.min.js', s.lottie_runtime]], true),
-    way('ulottie — shared runtime', [
-      ['compiled module', s.js],
-      ['runtime it imports', slice],
-    ]),
-    way('ulottie — self-contained', [[selfContainedPart(s), s.js_embedded]]),
-  ];
-  if (s.js_extracted && s.sprite) {
-    ways.push(
-      way('ulottie — markup extracted', [
-        ['compiled module', s.js_extracted],
-        ['SVG sprite', s.sprite],
-        ['runtime it imports', slice],
-      ]),
-    );
-  }
+  const baseline = way('lottie-web', [
+    ['Lottie JSON', s.json, urls?.json_url, urls?.json_pretty_url],
+    ['lottie.min.js', s.lottie_runtime],
+  ], true);
+  const shared = way('ulottie — shared runtime', [
+    ['compiled module', s.js, urls?.js_url, urls?.js_pretty_url],
+    ['runtime it imports', slice, urls?.slice_url, urls?.slice_pretty_url],
+  ]);
+  // Extracted is a variant of the split, so it reads next to it and lists its
+  // parts in the same order: same module, same runtime slice, and then the one
+  // thing that differs — the markup moved out into a sprite.
+  const extracted =
+    s.js_extracted && s.sprite
+      ? way('ulottie — markup extracted', [
+          ['compiled module', s.js_extracted, urls?.js_extracted_url, urls?.js_extracted_pretty_url],
+          ['runtime it imports', slice, urls?.slice_url, urls?.slice_pretty_url],
+          ['SVG sprite', s.sprite, urls?.sprite_url, urls?.sprite_pretty_url],
+        ])
+      : null;
+  // Self-contained last: it is the one that shares nothing, so it ends the
+  // progression rather than interrupting the two that do.
+  const self = way('ulottie — self-contained', [
+    [
+      selfContainedPart(s, !!plan?.generated),
+      s.js_embedded,
+      urls?.js_embedded_url,
+      urls?.js_embedded_pretty_url,
+    ],
+  ]);
+
+  const ways: Way[] = [baseline, shared, ...(extracted ? [extracted] : []), self];
 
   const base = ways.find((w) => w.baseline)!;
   const best = Math.min(...ways.filter((w) => !w.baseline).map((w) => w.gz));
@@ -284,21 +428,44 @@ function renderSizes(s: Sizes | null) {
       // its name — repeating the figures reads as an error.
       const sole = w.parts.length === 1;
       const parts = w.parts
-        .map(([name, v]) => {
+        .map(([name, v, url, prettyUrl]) => {
           const cells = sole
             ? '<td></td><td></td>'
             : `<td>${fmtBytes(v.raw)}</td><td>${fmtBytes(v.gzipped)}</td>`;
-          return `<tr class="part"><td>${name}</td>${cells}<td></td></tr>`;
+          const attrs = url
+            ? ` class="part viewable" data-url="${url}" data-name="${name}"` +
+              ` data-pretty="${prettyUrl ?? url}"` +
+              ` data-raw="${v.raw}" data-gz="${v.gzipped}"`
+            : ' class="part"';
+          return `<tr${attrs}><td>${name}</td>${cells}<td></td></tr>`;
         })
         .join('');
       return total + parts;
     })
     .join('');
 
+  ($('viewer-format') as HTMLButtonElement).onclick = () => {
+    viewerRaw = !viewerRaw;
+    ($('viewer-format') as HTMLButtonElement).textContent = viewerRaw ? 'unminified' : 'minified';
+    void paintSource();
+  };
+  $('viewer-close').onclick = closeViewer;
+  for (const row of tbody.querySelectorAll<HTMLElement>('tr.viewable')) {
+    row.addEventListener('click', () => {
+      for (const r of tbody.querySelectorAll('tr.part')) r.classList.remove('open');
+      row.classList.add('open');
+      void showArtifact(
+        row.dataset.name!,
+        { raw: Number(row.dataset.raw), gzipped: Number(row.dataset.gz) },
+        row.dataset.url!,
+        row.dataset.pretty!,
+      );
+    });
+  }
+
   // One line, and only what the table cannot say for itself. The
   // tree-shaking detail lives in the breakdown, where the row it explains is.
   const notes: string[] = [];
-  const [, shared, self] = ways;
   if (self.gz > shared.gz) {
     // Two files gzip independently; one big file has a single 32 KiB DEFLATE
     // window, so past that the split genuinely wins. Surprising enough to say.
@@ -307,8 +474,22 @@ function renderSizes(s: Sizes | null) {
         `despite being ${fmtBytes(shared.raw - self.raw)} smaller raw — one ` +
         `${fmtBytes(self.raw)} stream outruns DEFLATE's 32 KiB window.`,
     );
+  } else if (plan?.generated) {
+    notes.push(
+      'Self-contained is the smallest way to ship one animation, and compiling ' +
+        'to code widens that: there is no interpreter and no payload left to ' +
+        'inline. It is still one copy per animation — a second one is smaller ' +
+        'again on the shared runtime, which amortises across the page.',
+    );
   } else {
     notes.push('The runtime is shared: a second animation adds only its module.');
+  }
+  if (plan && !plan.generated && !plan.is_static) {
+    notes.push(
+      'This one kept the interpreter — either the generator cannot express it, ' +
+        'or unrolling it came out larger. The compiler builds both and keeps ' +
+        'the smaller.',
+    );
   }
   $('size-note').textContent = notes.join(' ');
 }

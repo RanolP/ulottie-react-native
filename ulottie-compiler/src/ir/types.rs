@@ -517,6 +517,33 @@ impl ExprTable {
     pub fn lookup_by_hash(&self, hash: u64) -> Option<ExprId> {
         self.by_hash.get(&hash).copied()
     }
+    /// Drop every expression outside `keep`, and renumber what is left.
+    ///
+    /// Returns the old → new id map. Every property still holding an id has to
+    /// be rewritten through it, which is why this is not public API for
+    /// anything but [`crate::expr`] — the ids are stored across the whole
+    /// module and a partial remap would silently point a property at the wrong
+    /// body.
+    pub(crate) fn retain(&mut self, keep: &std::collections::BTreeSet<u32>) -> HashMap<u32, u32> {
+        let mut map = HashMap::new();
+        let mut kept = Vec::with_capacity(keep.len());
+        for (i, e) in std::mem::take(&mut self.expressions).into_iter().enumerate() {
+            if keep.contains(&(i as u32)) {
+                map.insert(i as u32, kept.len() as u32);
+                kept.push(e);
+            }
+        }
+        self.by_hash = kept
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.canonical_hash, ExprId(i as u32)))
+            .collect();
+        for (i, e) in kept.iter_mut().enumerate() {
+            e.id = ExprId(i as u32);
+        }
+        self.expressions = kept;
+        map
+    }
     /// Insert an expression, reusing an identical one if it is already here.
     ///
     /// After Effects duplicates the same expression onto every layer it is

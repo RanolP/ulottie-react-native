@@ -13,7 +13,7 @@ use super::prop::{Anim, AnimKind, Prop};
 use super::svg::{self, FlatPath};
 use std::collections::HashMap;
 
-use super::{geo, op, Arg, Binding, Caps, LayerRecord, Planner};
+use super::{geo, op, Arg, Binding, Caps, Effect, EffectParam, LayerRecord, Planner};
 
 /// Clock a subtree runs on.
 #[derive(Clone, Copy)]
@@ -193,7 +193,7 @@ impl Planner<'_> {
             if dp.is_static() && da.is_static() && ds.is_static() && dr.is_static() {
                 let m = matrix(&dp, &da, &ds, &dr);
                 if !is_identity(&m) {
-                    self.set(outer, "transform", svg::matrix_str(&m));
+                    self.set(outer, "transform", svg::transform_str(&m));
                 }
             } else {
                 self.bind(op::LAYER_TX, outer, vec![Arg::Num(rec as f64)], slot);
@@ -304,48 +304,29 @@ impl Planner<'_> {
     }
 
     /// Effects, in the shape `thisLayer.effect('name')('param')` reads.
-    fn encode_effects(&mut self, layer: &data::Layer) -> Option<serde_json::Value> {
-        let effects = layer.ef.as_ref()?;
-        let mut out = Vec::new();
-        for e in effects {
-            let params: Vec<serde_json::Value> = e
-                .ef
-                .iter()
-                .map(|p| {
-                    let mut m = serde_json::Map::new();
-                    if let Some(n) = &p.nm {
-                        m.insert("nm".into(), serde_json::Value::String(n.clone()));
-                    }
-                    if let Some(n) = &p.mn {
-                        m.insert("mn".into(), serde_json::Value::String(n.clone()));
-                    }
-                    if p.ty != 0 {
-                        m.insert("ty".into(), p.ty.into());
-                    }
-                    if let Some(v) = p.v {
-                        m.insert("v".into(), serde_json::json!(svg::q(v)));
-                    }
-                    if let Some(prop) = &p.p {
-                        let classified = self.classify(prop, 1);
-                        m.insert(
-                            "p".into(),
-                            serde_json::to_value(&classified).unwrap_or(serde_json::Value::Null),
-                        );
-                    }
-                    serde_json::Value::Object(m)
-                })
-                .collect();
-            let mut m = serde_json::Map::new();
-            if let Some(n) = &e.nm {
-                m.insert("nm".into(), serde_json::Value::String(n.clone()));
-            }
-            if let Some(n) = &e.mn {
-                m.insert("mn".into(), serde_json::Value::String(n.clone()));
-            }
-            m.insert("ef".into(), serde_json::Value::Array(params));
-            out.push(serde_json::Value::Object(m));
-        }
-        (!out.is_empty()).then(|| serde_json::Value::Array(out))
+    fn encode_effects(&mut self, layer: &data::Layer) -> Vec<Effect> {
+        let Some(effects) = layer.ef.as_ref() else {
+            return Vec::new();
+        };
+        effects
+            .iter()
+            .map(|e| Effect {
+                nm: e.nm.clone(),
+                mn: e.mn.clone(),
+                ef: e
+                    .ef
+                    .iter()
+                    .map(|p| EffectParam {
+                        nm: p.nm.clone(),
+                        mn: p.mn.clone(),
+                        ty: p.ty,
+                        v: p.v.map(svg::q),
+                        p: p.p.as_ref().map(|prop| self.classify(prop, 1)),
+                        p_off: 0,
+                    })
+                    .collect(),
+            })
+            .collect()
     }
 
     /// The layer's first path shape — what a bare `pointOnPath` reads.
@@ -463,6 +444,10 @@ impl Planner<'_> {
                 self.slots.truncate(bind_start);
                 self.bind_gate.truncate(bind_start);
                 self.layers.truncate(rec_start);
+                // `scopes` is parallel to `layers`; truncating one without the
+                // other left every record planned afterwards reading its
+                // neighbour's scope.
+                self.scopes.truncate(rec_start);
                 self.timelines.truncate(tl_start);
                 self.pending.truncate(pending_start);
                 return Ok(None);
@@ -475,7 +460,13 @@ impl Planner<'_> {
         let mut local = HashMap::new();
         let mut counter = 0u32;
         let mut markup = String::new();
-        self.emit_el(root, &mut markup, &mut counter, &mut local);
+        // No initial-frame bake for an asset body: it is stored once and
+        // replayed per instance, and two instances of the same precomp sit at
+        // different points on their own clocks, so there is no one frame to
+        // bake. Nothing is lost — instancing and the standalone forms never
+        // co-occur (see `backend::report`, and `compile_document`, which plans
+        // fully expanded).
+        self.emit_el(root, &mut markup, &mut counter, &mut local, &Default::default());
         let mut inline_counter = 0u32;
         let mut inline_markup = String::new();
         self.emit_inline_el(root, &mut inline_markup, &mut inline_counter);
@@ -501,6 +492,10 @@ impl Planner<'_> {
         // `Prop::Expr` belongs to.
         let delta = rec_start as u32;
         let mut records: Vec<LayerRecord> = self.layers.drain(rec_start..).collect();
+        // Drained with the records they belong to. Leaving them behind made
+        // `scopes` longer than `layers`, so every document record planned after
+        // the first instanced precomp read the wrong scope.
+        let scopes: Vec<u32> = self.scopes.drain(rec_start..).collect();
         for r in &mut records {
             if let Some(pr) = r.pr {
                 r.pr = Some(pr - delta);
@@ -510,8 +505,12 @@ impl Planner<'_> {
                     rebase_prop(p, delta);
                 }
             }
-            if let Some(ef) = &mut r.ef {
-                rebase_json(ef, delta);
+            for e in &mut r.ef {
+                for p in &mut e.ef {
+                    if let Some(p) = &mut p.p {
+                        rebase_prop(p, delta);
+                    }
+                }
             }
         }
         for b in &mut bindings {
@@ -557,6 +556,7 @@ impl Planner<'_> {
             bindings,
             slots,
             records,
+            scopes,
             timelines,
             nested,
         });
@@ -707,7 +707,7 @@ impl Planner<'_> {
         if pp.is_static() && rest_static {
             let m = matrix(&pp, &ap, &sp, &rp);
             if !is_identity(&m) {
-                self.set(el, "transform", svg::matrix_str(&m));
+                self.set(el, "transform", svg::transform_str(&m));
             }
             return;
         }
@@ -718,17 +718,25 @@ impl Planner<'_> {
             // concatenate two numbers onto a baked prefix.
             let zero = Prop::Vector(vec![0.0, 0.0]);
             let m = matrix(&zero, &ap, &sp, &rp);
-            let prefix = format!(
-                "matrix({},{},{},{},",
-                svg::nd(m[0], 1e5),
-                svg::nd(m[1], 1e5),
-                svg::nd(m[2], 1e5),
-                svg::nd(m[3], 1e5)
-            );
+            // An identity linear part needs no prefix at all: the binder
+            // spells that case `translate(x,y)` on its own. That is the
+            // majority of translate-only layers, and it was the last thing
+            // keeping a string pool alive in an otherwise pool-free module.
+            let prefix = if is_identity_linear(&m) {
+                Arg::Null
+            } else {
+                Arg::Str(format!(
+                    "matrix({},{},{},{},",
+                    svg::nd(m[0], 1e5),
+                    svg::nd(m[1], 1e5),
+                    svg::nd(m[2], 1e5),
+                    svg::nd(m[3], 1e5)
+                ))
+            };
             self.bind(
                 op::TRANSLATE,
                 el,
-                vec![Arg::Str(prefix), Arg::Num(m[4]), Arg::Num(m[5]), Arg::Prop(pp)],
+                vec![prefix, Arg::Num(m[4]), Arg::Num(m[5]), Arg::Prop(pp)],
                 slot,
             );
             return;
@@ -1183,7 +1191,7 @@ impl Planner<'_> {
             self.bind(
                 op::GRADIENT,
                 node,
-                vec![Arg::Num(gk as f64), Arg::Prop(sp), Arg::Prop(ep)],
+                vec![Arg::Tag(gk as u32), Arg::Prop(sp), Arg::Prop(ep)],
                 slot,
             );
         }
@@ -1436,30 +1444,6 @@ fn rebase_arg(a: &mut Arg, delta: u32) {
     }
 }
 
-/// Effect parameters carry serialized properties, so their layer references
-/// need the same shift.
-fn rebase_json(v: &mut serde_json::Value, delta: u32) {
-    match v {
-        serde_json::Value::Object(m) => {
-            let is_expr = m.contains_key("x") && m.contains_key("l");
-            if is_expr {
-                if let Some(l) = m.get_mut("l").and_then(|l| l.as_u64()) {
-                    m.insert("l".into(), (l - delta as u64).into());
-                }
-            }
-            for (_, val) in m.iter_mut() {
-                rebase_json(val, delta);
-            }
-        }
-        serde_json::Value::Array(a) => {
-            for x in a {
-                rebase_json(x, delta);
-            }
-        }
-        _ => {}
-    }
-}
-
 /// The geometry generator a shape needs when it cannot be baked.
 fn runtime_geometry(shape: &Shape) -> Caps {
     match shape {
@@ -1595,6 +1579,11 @@ pub(super) fn matrix(p: &Prop, a: &Prop, s: &Prop, r: &Prop) -> [f64; 6] {
         opacity: 100.0,
     };
     spec.to_matrix().m
+}
+
+/// The 2×2 part is the identity: no rotation, no scale, no skew.
+fn is_identity_linear(m: &[f64; 6]) -> bool {
+    m[0] == 1.0 && m[1] == 0.0 && m[2] == 0.0 && m[3] == 1.0
 }
 
 pub(super) fn is_identity(m: &[f64; 6]) -> bool {

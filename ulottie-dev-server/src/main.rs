@@ -260,6 +260,8 @@ async fn serve_runtime_module(
 ///   `/.output/<name>.extracted.js` markup extracted to a sprite
 ///   `/.output/<name>.sprite.svg`   that sprite
 ///   `/.output/<name>.instanced.js` precomps planned once and replayed
+///   `/.output/<name>.slice.js`     just the runtime modules it imports
+///   `/.output/<name>.pretty.*`     any of the above, unminified
 async fn ensure_compiled(
     State(paths): State<Arc<PathLayout>>,
     req: Request<axum::body::Body>,
@@ -270,28 +272,33 @@ async fn ensure_compiled(
         .strip_prefix("/.output/")
         .filter(|p| !p.contains('/') && !p.contains(".."))
     {
+        // `.pretty` sits between the stem and the extension. Strip it before
+        // routing — the variant is the same either way, only the minification
+        // differs — but cache under the *requested* name, so the two forms do
+        // not overwrite each other.
+        let (routed, pretty) = match file.find(".pretty.") {
+            Some(i) => (format!("{}{}", &file[..i], &file[i + ".pretty".len()..]), true),
+            None => (file.to_string(), false),
+        };
         // `<name>.sprite.svg` is produced as a side effect of compiling
         // `<name>.extracted.js`, so both requests drive the same build.
-        let (name, variant) = match file.strip_suffix(".embedded.js") {
-            Some(name) => (name, Variant::Embedded),
-            None => match file.strip_suffix(".instanced.js") {
-                Some(name) => (name, Variant::Instanced),
-                None => match file.strip_suffix(".extracted.js") {
-                Some(name) => (name, Variant::Extracted),
-                None => match file.strip_suffix(".sprite.svg") {
-                    Some(name) => (name, Variant::Extracted),
-                    None => match file.strip_suffix(".js") {
-                        Some(name) => (name, Variant::Extern),
-                        None => return next.run(req).await,
-                    },
-                },
-                },
-            },
+        // Longest suffix first: `.embedded.js` and `.slice.js` both end in
+        // `.js`, so the plain-module arm has to come last.
+        let named = |suffix: &str, v: Variant| routed.strip_suffix(suffix).map(|n| (n, v));
+        let (name, variant) = match named(".embedded.js", Variant::Embedded)
+            .or_else(|| named(".slice.js", Variant::Slice))
+            .or_else(|| named(".instanced.js", Variant::Instanced))
+            .or_else(|| named(".extracted.js", Variant::Extracted))
+            .or_else(|| named(".sprite.svg", Variant::Extracted))
+            .or_else(|| named(".js", Variant::Extern))
+        {
+            Some(pair) => pair,
+            None => return next.run(req).await,
         };
         let src = paths.fixtures_dir.join(format!("{name}.json"));
         if src.is_file() {
             let cache = paths.output_dir.join(file);
-            if let Err(e) = compile_if_stale(&src, &cache, name, variant, &paths).await {
+            if let Err(e) = compile_if_stale(&src, &cache, name, variant, pretty, &paths).await {
                 return e.into_response();
             }
         }
@@ -338,6 +345,9 @@ enum Variant {
     Embedded,
     Extracted,
     Instanced,
+    /// Not a module: the runtime modules an extern build imports, minified.
+    /// The size table names it, so the viewer has to be able to show it.
+    Slice,
 }
 
 async fn compile_if_stale(
@@ -345,6 +355,7 @@ async fn compile_if_stale(
     cache_path: &StdPath,
     name: &str,
     variant: Variant,
+    pretty: bool,
     paths: &PathLayout,
 ) -> Result<(), ApiError> {
     let src_mtime = fs::metadata(src)
@@ -373,6 +384,22 @@ async fn compile_if_stale(
         .iter()
         .map(|f| f.feature)
         .collect();
+    if variant == Variant::Slice {
+        let report = ulottie_compiler::compile_report(
+            &json,
+            &ulottie_compiler::CompileOptions { allow, ..Default::default() },
+        )
+        .map_err(|e| ApiError::compile(format!("compile {name}: {e}")))?;
+        let body = if pretty {
+            ulottie_compiler::runtime_slice_pretty(&report.caps)
+        } else {
+            minified_slice(&report)
+        };
+        fs::write(cache_path, body)
+            .await
+            .map_err(|e| ApiError::compile(format!("write {name}.slice.js: {e}")))?;
+        return Ok(());
+    }
     let markup = match variant {
         Variant::Extracted => ulottie_compiler::MarkupMode::Extracted(name.to_string()),
         _ => ulottie_compiler::MarkupMode::Inline,
@@ -394,6 +421,9 @@ async fn compile_if_stale(
             },
             markup,
             allow,
+            // Unminified is the compiler's own review form — one element and
+            // one binding per line — not a reformatting of the minified bytes.
+            minify: !pretty,
             ..Default::default()
         },
     )
@@ -407,12 +437,16 @@ async fn compile_if_stale(
         // another fixture's file.
         let symbol = ulottie_compiler::compile_symbol(&json, name)
             .map_err(|e| ApiError::compile(format!("extract {name}: {e}")))?;
+        let svg = ulottie_compiler::sprite(&[symbol]);
+        fs::write(paths.output_dir.join(format!("{name}.sprite.svg")), &svg)
+            .await
+            .map_err(|e| ApiError::compile(format!("write {name}.sprite.svg: {e}")))?;
         fs::write(
-            paths.output_dir.join(format!("{name}.sprite.svg")),
-            ulottie_compiler::sprite(&[symbol]),
+            paths.output_dir.join(format!("{name}.sprite.pretty.svg")),
+            ulottie_compiler::markup_pretty(&svg),
         )
         .await
-        .map_err(|e| ApiError::compile(format!("write {name}.sprite.svg: {e}")))?;
+        .map_err(|e| ApiError::compile(format!("write {name}.sprite.pretty.svg: {e}")))?;
         fs::write(paths.output_dir.join(format!("{name}.extracted.js")), js)
             .await
             .map_err(|e| ApiError::compile(format!("write {name}.extracted.js: {e}")))?;
@@ -505,7 +539,7 @@ async fn compile_handler(
     fs::write(&json_path, &json_compact)
         .await
         .map_err(|e| ApiError::compile(format!("write upload json: {e}")))?;
-    compile_if_stale(&json_path, &js_path, &id, Variant::Extern, &paths).await?;
+    compile_if_stale(&json_path, &js_path, &id, Variant::Extern, false, &paths).await?;
 
     // Compiled JS reads from disk (one round-trip per `/compile`, cheap).
     // Minified driver is in process memory — same source the `/driver.js`
@@ -560,13 +594,67 @@ async fn compile_handler(
         .map(|sym| ulottie_compiler::sprite(&[sym]))
         .unwrap_or_default();
 
+    // Every artifact the size table names is written, not just measured: the
+    // panel lets a row show its own bytes, and an upload is addressed by
+    // content hash rather than a fixture name, so the on-demand compile route
+    // cannot rebuild these from a source file that is not there.
+    let slice = minified_slice(&report);
+
+    // Every artifact twice: as it ships, and as the compiler writes it before
+    // minification. The second is what the viewer shows — the same form the
+    // snapshots are reviewed in, rather than a formatter's reconstruction.
+    let pretty = |mode, markup| {
+        ulottie_compiler::compile_with(
+            json_text,
+            &ulottie_compiler::CompileOptions {
+                runtime_mode: mode,
+                markup,
+                allow: allow_all.clone(),
+                minify: false,
+                ..Default::default()
+            },
+        )
+        .unwrap_or_default()
+    };
+    let pretty_extern = pretty(
+        ulottie_compiler::RuntimeMode::Extern,
+        ulottie_compiler::MarkupMode::Inline,
+    );
+    let pretty_embedded = pretty(
+        ulottie_compiler::RuntimeMode::Embedded,
+        ulottie_compiler::MarkupMode::Inline,
+    );
+    let pretty_extracted = pretty(
+        ulottie_compiler::RuntimeMode::Extern,
+        ulottie_compiler::MarkupMode::Extracted(id.clone()),
+    );
+    let pretty_json = serde_json::from_str::<serde_json::Value>(json_text)
+        .ok()
+        .and_then(|v| serde_json::to_string_pretty(&v).ok())
+        .unwrap_or_else(|| json_text.to_string());
+    let pretty_slice = ulottie_compiler::runtime_slice_pretty(&report.caps);
+    let pretty_sprite = ulottie_compiler::markup_pretty(&sprite);
+
+    for (name, body) in [
+        (format!("{id}.extracted.js"), extracted_js.as_bytes()),
+        (format!("{id}.sprite.svg"), sprite.as_bytes()),
+        (format!("{id}.slice.js"), slice.as_bytes()),
+        (format!("{id}.pretty.json"), pretty_json.as_bytes()),
+        (format!("{id}.pretty.js"), pretty_extern.as_bytes()),
+        (format!("{id}.embedded.pretty.js"), pretty_embedded.as_bytes()),
+        (format!("{id}.extracted.pretty.js"), pretty_extracted.as_bytes()),
+        (format!("{id}.slice.pretty.js"), pretty_slice.as_bytes()),
+        (format!("{id}.sprite.pretty.svg"), pretty_sprite.as_bytes()),
+    ] {
+        fs::write(paths.output_dir.join(name), body).await.ok();
+    }
+
     let sizes = contract::Sizes {
         json: size_entry(&json_compact),
         js: size_entry(&js_bytes),
         runtime_slice: {
             // A static animation imports nothing; gzipping the empty string
             // would report a 20-byte header as if it were payload.
-            let slice = minified_slice(&report);
             if slice.is_empty() {
                 contract::SizeEntry { raw: 0, gzipped: 0 }
             } else {
@@ -594,6 +682,15 @@ async fn compile_handler(
         json_url: format!("/.output/{id}.json"),
         js_url: format!("/.output/{id}.js"),
         js_embedded_url: format!("/.output/{id}.embedded.js"),
+        js_extracted_url: format!("/.output/{id}.extracted.js"),
+        sprite_url: format!("/.output/{id}.sprite.svg"),
+        slice_url: format!("/.output/{id}.slice.js"),
+        json_pretty_url: format!("/.output/{id}.pretty.json"),
+        js_pretty_url: format!("/.output/{id}.pretty.js"),
+        js_embedded_pretty_url: format!("/.output/{id}.embedded.pretty.js"),
+        js_extracted_pretty_url: format!("/.output/{id}.extracted.pretty.js"),
+        sprite_pretty_url: format!("/.output/{id}.sprite.pretty.svg"),
+        slice_pretty_url: format!("/.output/{id}.slice.pretty.js"),
         name: header.nm,
         total_frames,
         sizes,
@@ -603,6 +700,7 @@ async fn compile_handler(
             is_static: report.is_static,
             instanced: report.instanced,
             templated: report.templated,
+            generated: report.generated,
             elements: report.elements as u32,
             bindings: report.bindings as u32,
             records: report.records as u32,
@@ -667,6 +765,11 @@ struct FixtureSizes {
     extern_gz: usize,
     embedded_raw: usize,
     embedded_gz: usize,
+    /// The runtime slice an extern build imports, gzipped — what a page
+    /// downloads *in addition to* the module for a single animation.
+    slice_gz: usize,
+    /// Whether the self-contained build is generated code.
+    generated: bool,
     features: ulottie_compiler::EmbeddedFeatures,
 }
 
@@ -750,6 +853,7 @@ async fn measure_fixture(path: &StdPath) -> Result<FixtureSizes> {
     let extern_gz = gzip_size(extern_js.as_bytes());
 
     // Embedded mode.
+    let allow2 = allow.clone();
     let embedded_js = ulottie_compiler::compile_with(
         &json_text,
         &ulottie_compiler::CompileOptions {
@@ -761,6 +865,22 @@ async fn measure_fixture(path: &StdPath) -> Result<FixtureSizes> {
     .unwrap_or_default();
     let embedded_raw = embedded_js.len();
     let embedded_gz = gzip_size(embedded_js.as_bytes());
+
+    // The report carries both the slice and which backend won.
+    let report = ulottie_compiler::compile_report(
+        &json_text,
+        &ulottie_compiler::CompileOptions {
+            runtime_mode: ulottie_compiler::RuntimeMode::Embedded,
+            allow: allow2,
+            ..Default::default()
+        },
+    )
+    .ok();
+    let slice_gz = report
+        .as_ref()
+        .map(|r| gzip_size(ulottie_compiler::runtime_slice(&r.caps).as_bytes()))
+        .unwrap_or(0);
+    let generated = report.as_ref().is_some_and(|r| r.generated);
 
     let features = ulottie_compiler::analyze_features(&json_text)
         .ok()
@@ -779,6 +899,8 @@ async fn measure_fixture(path: &StdPath) -> Result<FixtureSizes> {
         extern_gz,
         embedded_raw,
         embedded_gz,
+        slice_gz,
+        generated,
         features,
     })
 }
@@ -819,28 +941,33 @@ fn print_table(
     let hdr_gz = |label: &str| format!("{:>8}", label);
 
     println!(
-        "\n {:<nw$}  {}  {}  {}  {}  {}  {}  Feat",
+        "\n {:<nw$}  {}  {}  {}  {}  {}  {}  {}  Feat  How",
         "Fixt",
         hdr("JSON"), hdr_gz("gz"),
         hdr("Ext"), hdr_gz("gz"),
+        hdr("+slice"),
         hdr("Emb"), hdr_gz("gz"),
         nw = nw,
     );
-    println!("{}", "-".repeat(nw + 64));
+    println!("{}", "-".repeat(nw + 80));
 
     for f in fixtures {
         println!(
-            " {:<nw$}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {}",
+            " {:<nw$}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {}  {}",
             f.name,
             fmt_bytes(f.json_raw), fmt_bytes(f.json_gz),
             fmt_bytes(f.extern_raw), fmt_bytes(f.extern_gz),
+            // What a page actually downloads for *one* animation in shared
+            // mode: the module plus the runtime slice it imports.
+            fmt_bytes(f.extern_gz + f.slice_gz),
             fmt_bytes(f.embedded_raw), fmt_bytes(f.embedded_gz),
             feat_str(&f.features),
+            if f.generated { "code" } else { "interp" },
             nw = nw,
         );
     }
 
-    println!("{}", "-".repeat(nw + 64));
+    println!("{}", "-".repeat(nw + 80));
     // Nothing imports this — compiled output imports the entry points it
     // binds. It is the ceiling: what a page would load if one animation used
     // every capability at once.

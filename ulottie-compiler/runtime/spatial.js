@@ -2,13 +2,27 @@
 //
 // A Lottie position keyframe can carry in/out tangents that bend the path
 // between two values, and the result is parameterized by arc length so the
-// motion is evenly paced. Both endpoints and both tangents are constants for
-// a given segment, so the sample table is built once and reused — the previous
-// implementation rebuilt 200 samples on every frame.
+// motion is evenly paced. Both endpoints and both tangents are constants for a
+// given segment, so the sample table is built once and reused.
+//
+// The split is deliberate: `spBuild` takes plain numbers and runs once per
+// segment, `spSample` runs per frame and touches nothing but the table it is
+// given. That keeps it usable from both callers — the interpreter, which has
+// its values in an `Int32Array` and materializes four small arrays on a
+// segment's first visit, and generated code, which knows the endpoints at
+// compile time and can build the table when the module loads.
 
 const SP_SEG = 200;
 
-function spBuild(v, ai, bv, bi, to, ti, so, d) {
+/**
+ * Arc-length sample table for one segment.
+ *
+ * @param {ArrayLike<number>} a start value, `d` components
+ * @param {ArrayLike<number>} b end value
+ * @param {ArrayLike<number>} to out-tangent, relative to `a`
+ * @param {ArrayLike<number>} ti in-tangent, relative to `b`
+ */
+export function spBuild(a, b, to, ti, d) {
   const pts = new Float64Array((SP_SEG + 1) * d);
   const cum = new Float64Array(SP_SEG + 1);
   let total = 0;
@@ -19,10 +33,10 @@ function spBuild(v, ai, bv, bi, to, ti, so, d) {
     const base = k * d;
     let dist = 0;
     for (let j = 0; j < d; j++) {
-      const p0 = v[ai + j];
-      const p3 = bv[bi + j];
-      const p1 = p0 + to[so + j];
-      const p2 = p3 + ti[so + j];
+      const p0 = a[j];
+      const p3 = b[j];
+      const p1 = p0 + to[j];
+      const p2 = p3 + ti[j];
       const x = c0 * p0 + c1 * p1 + c2 * p2 + c3 * p3;
       pts[base + j] = x;
       if (k) {
@@ -33,13 +47,12 @@ function spBuild(v, ai, bv, bi, to, ti, so, d) {
     if (k) total += Math.sqrt(dist);
     cum[k] = total;
   }
-  return { pts, cum, total };
+  return { pts, cum, total, d };
 }
 
-export function spatial(v, ai, bv, bi, to, ti, so, d, u, out, cache, seg) {
-  let tab = cache[seg];
-  if (!tab) tab = cache[seg] = spBuild(v, ai, bv, bi, to, ti, so, d);
-  const { pts, cum, total } = tab;
+/** Sample a built table at `u`, by arc length, into `out`. */
+export function spSample(tab, u, out) {
+  const { pts, cum, total, d } = tab;
   if (total === 0) {
     for (let j = 0; j < d; j++) out[j] = pts[j];
     return out;
@@ -58,4 +71,22 @@ export function spatial(v, ai, bv, bi, to, ti, so, d, u, out, cache, seg) {
     out[j] = x + (pts[b + j] - x) * f;
   }
   return out;
+}
+
+/**
+ * Build a segment's table straight from the payload stream.
+ *
+ * Lives here rather than in the interpolator so it is gated with the rest of
+ * the motion-path code: inline in `keyframed`, these four little arrays cost
+ * every keyframed animation ~135 bytes for a branch it never takes.
+ */
+export function spSeg(S, ai, bi, so, si, d, iv) {
+  const a = [], b = [], to = [], ti = [];
+  for (let k = 0; k < d; k++) {
+    a.push(S[ai + k] * iv);
+    b.push(S[bi + k] * iv);
+    to.push(S[so + k] * iv);
+    ti.push(S[si + k] * iv);
+  }
+  return spBuild(a, b, to, ti, d);
 }

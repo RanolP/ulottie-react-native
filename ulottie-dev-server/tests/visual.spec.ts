@@ -279,39 +279,108 @@ describe('instanced precomps render and animate', () => {
 
 // `thisComp.layer()` — by name or by index — resolves within one composition.
 // A document that inlines two precomps holds two sets of layers whose names and
-// indices both restart, so the runtime keys its lookup tables by composition
-// scope. That scope ships as `D.gy`; before it was wired up every inlined
-// record was placed at scope 0 and the last one silently won.
+// indices both restart, and two layers called `Ball` at index 1 are two
+// different layers. Before scoping was wired up every inlined record was placed
+// at scope 0 and the last one silently won.
+//
+// The compiler answers that question now, so the claim it makes is pinned on
+// the compiler side (`backend::layers::index_tests`). What is left here is the
+// runtime half: `lyLink` giving every record the table and slot the resolved
+// spelling indexes through, and the fallback lookup still keying on scope for
+// the bodies the pass refused.
 //
 // After Effects auto-names layers `Shape Layer 1` / `Null 1` per comp and
 // numbers them from 1, so this collision is the common case, not an exotic one.
-describe('layer lookup is scoped to its composition', () => {
-  test('same name and index in two comps stay distinct', async () => {
-    const { makeExpr } = await import(
+describe('a record knows its own table and slot', () => {
+  test('two comps with the same name and index stay distinct', async () => {
+    const { makeExpr, lyAt } = await import(
       /* @vite-ignore */ `/.output/runtime/expr.js?t=${Date.now()}`
     );
     // Two comps, each with one layer called 'Ball' at index 1 — the shape a
-    // document gets when it inlines two precomps.
-    const D = {
-      f: 60, i: 0, o: 60,
-      s: ['Ball'],
-      y: [{ i: 1, n: 0 }, { i: 1, n: 0 }],
-      gy: [1, 1], // delta-encoded: scopes 1 and 2
-    };
-    // The expression engine decorates `ctx` with the lookup tables under test.
-    const ctx = { D, svg: null, z: [], frame: 0 } as unknown as {
-      proxies: { _g: number }[];
-      byName: Map<string, unknown>;
-      byIndex: Map<string, unknown>;
+    // document gets when it inlines two precomps. Nothing looks either up by
+    // name any more, so what has to hold is that they are separate records and
+    // that `lyAt` reaches the right one from either.
+    //
+    // Built as the integer stream `mount` would decode, minus the base36 hop:
+    // `makeExpr` reads `ctx.S`, so going through the codec here would only test
+    // the codec. Layout is `scene/flat.rs` — header, then sections.
+    const HEAD = 17;
+    const LAYERS = HEAD;          // [count, …rowOffsets, …rows]
+    const ROW0 = LAYERS + 3;
+    const ROW1 = ROW0 + 3;
+    const NAME = 1;               // presence bit for the name field
+    const S = new Int32Array(ROW1 + 3);
+    S[1] = 60_000;                // frame rate, x1000
+    S[12] = LAYERS;
+    // The row table is delta-encoded, to keep the offsets small.
+    S.set([2, ROW0, ROW1 - ROW0], LAYERS);
+    // [mask, compIndex, nameIndex] — same name, same index, different comps.
+    S.set([NAME, 1, 0], ROW0);
+    S.set([NAME, 1, 0], ROW1);
+
+    // `y` is the record table `mount` decodes out of the stream — this test
+    // never calls `mount`, so it hands over the decoded form directly.
+    const ctx = { S, str: ['Ball'], fr: 60, y: [ROW0, ROW1], svg: null, z: [], frame: 0 } as unknown as {
+      recs: { _t: unknown[]; _i: number }[];
     };
     makeExpr([], ctx);
 
-    expect(ctx.proxies.length).toBe(2);
-    expect(ctx.proxies[0]).not.toBe(ctx.proxies[1]);
-    // Both maps are scope-keyed, so neither record may have evicted the other.
-    expect(ctx.byName.size, 'one entry per (scope, name)').toBe(2);
-    expect(ctx.byIndex.size, 'one entry per (scope, index)').toBe(2);
-    expect(ctx.proxies[0]._g).not.toBe(ctx.proxies[1]._g);
+    // A resolved reference is `lyAt(thisLayer, i)`, which walks the record's own
+    // table — so every record has to carry that table and its slot in it.
+    const [first, second] = ctx.recs;
+    expect(first).not.toBe(second);
+    expect(first._t, 'the record knows its table').toBe(ctx.recs);
+    expect(first._i).toBe(0);
+    expect(second._i).toBe(1);
+    expect(lyAt(first, 1), 'a slot resolves against the owner').toBe(second);
+    expect(lyAt(second, 0)).toBe(first);
+  });
+});
+
+// The attribute formatter is the hottest thing the runtime does, so it
+// assembles digits from the rounded integer instead of handing a float to
+// `toString`. That is only allowed if it is byte-identical to the float
+// spelling — a differing digit is a differing picture, and the pixel diff
+// would only catch it if the divergence happened to be large.
+// The spelling `num.js` produces is a contract, not an implementation detail:
+// it is what every snapshot in `_fixtures/__snapshots__/` was blessed against,
+// and the dropped leading zero is worth real bytes across a path string. Pin
+// the spelling and the per-role precision so a rewrite has to reproduce both.
+describe('the number formatter', () => {
+  test('spells values the way the snapshots expect', async () => {
+    const { r, r5, r2 } = await import(
+      /* @vite-ignore */ `/.output/runtime/num.js?t=${Date.now()}`
+    );
+    // [input, r (3dp), r5 (5dp), r2 (2dp)]
+    const cases: [number, string, string, string][] = [
+      [0, '0', '0', '0'],
+      [-0, '0', '0', '0'],
+      [1, '1', '1', '1'],
+      // A bare leading zero is dropped, on both signs.
+      [0.5, '.5', '.5', '.5'],
+      [-0.5, '-.5', '-.5', '-.5'],
+      // Trailing zeros never appear, whatever the role's precision.
+      [1.5, '1.5', '1.5', '1.5'],
+      [0.25, '.25', '.25', '.25'],
+      // Each role rounds at its own quantum.
+      [1.23456789, '1.235', '1.23457', '1.23'],
+      [0.000004, '0', '0', '0'],
+      [0.001, '.001', '.001', '0'],
+      // Rounding that carries into the whole part.
+      [0.9999, '1', '.9999', '1'],
+      [-0.9999, '-1', '-.9999', '-1'],
+      // Non-finite input must not throw — it reaches an attribute as-is.
+      [Infinity, 'Infinity', 'Infinity', 'Infinity'],
+      [NaN, 'NaN', 'NaN', 'NaN'],
+    ];
+    const bad: string[] = [];
+    for (const [x, e3, e5, e2] of cases) {
+      for (const [fn, want, name] of [[r, e3, 'r'], [r5, e5, 'r5'], [r2, e2, 'r2']] as const) {
+        const got = fn(x);
+        if (got !== want) bad.push(`${name}(${x}) = "${got}", expected "${want}"`);
+      }
+    }
+    expect(bad, `${bad.length} divergences`).toEqual([]);
   });
 });
 
@@ -325,13 +394,6 @@ describe('layer lookup is scoped to its composition', () => {
 // not care about colour, thickness or edge softness, only about where the
 // drawing actually is.
 const GEOMETRY_TOLERANCE = 0.02; // 2% of the viewport
-
-// Fixtures whose geometry does NOT yet match lottie-web. Same contract as
-// `_fixtures/allowances.json`: an entry is a known bug kept visible, and the
-// list should only ever shrink. Empty is the goal, and currently the truth —
-// it earned its keep by catching `ripple` rendering 67% too wide under precomp
-// instancing, which the pixel diff could not see.
-const GEOMETRY_DIVERGENCE: Record<string, string> = {};
 
 describe('geometry parity vs lottie-web', () => {
   beforeAll(async () => {
@@ -378,13 +440,58 @@ describe('geometry parity vs lottie-web', () => {
           .filter(k => Math.abs(a[k] - b[k]) > GEOMETRY_TOLERANCE)
           .map(k => `${k}: ${a[k].toFixed(3)} vs ${b[k].toFixed(3)}`);
 
-        const known = GEOMETRY_DIVERGENCE[fx.name];
-        if (known) {
-          // Pin it: if this starts matching, delete the entry.
-          expect(off.length, `${fx.name} now matches — remove it from GEOMETRY_DIVERGENCE`).toBeGreaterThan(0);
-          return;
-        }
         expect(off, `${fx.name} geometry diverges — ${off.join(', ')}`).toEqual([]);
+      } finally {
+        anim.destroy();
+      }
+    });
+  }
+
+  // The same check against the build that actually ships, at every sample
+  // frame rather than only the midpoint.
+  //
+  // `--embedded` is code-generated for the three expression fixtures: the
+  // record table and the expression handles are emitted as JS literals instead
+  // of decoded from the stream, so it is a genuinely different assembly of the
+  // layer references, not a repackaging of the extern one. Until this existed
+  // it was pixel-checked at t=0.5 and geometry-checked not at all, which is
+  // exactly the shape of hole a mis-resolved layer handle hides in: `lyAt` /
+  // `lyRel` off by one slot moves a layer by a constant, and a constant offset
+  // on hairline geometry is what odiff's antialiasing pass discounts. Geometry
+  // is blind to colour and edge softness and sees position, so it catches what
+  // the pixel gate cannot — and sweeping the frames catches the ones that only
+  // diverge once something has had time to interpolate.
+  //
+  // It earned its keep immediately: `starfish` was 10 px out at t=0.5 in the
+  // shipped build and exact in the extern one, because `codegen`'s columnar
+  // keyframe form dropped spatial tangents while its unrolled form kept them.
+  // Two of that limb's position keyframes are equal, so the whole excursion
+  // between them *was* the tangent — a straight line between two identical
+  // points does not move at all.
+  //
+  for (const fx of FIXTURES) {
+    test(`${fx.name} (embedded, across the animation)`, { timeout: 60_000 }, async () => {
+      const { ref, ulottie } = mountContainers();
+      const anim = await loadFixture(fx.name, ref, ulottie, 'embedded');
+      try {
+        const off: string[] = [];
+        for (const s of SAMPLES) {
+          anim.goToFrame(Math.floor(anim.totalFrames * s));
+          await new Promise(r => requestAnimationFrame(() => r(undefined)));
+          await new Promise(r => requestAnimationFrame(() => r(undefined)));
+
+          const a = drawnBox(ref);
+          const b = drawnBox(ulottie);
+          // Nothing drawn at this frame is nothing to compare, not a failure.
+          if (!a || !b) continue;
+          for (const k of Object.keys(a) as (keyof typeof a)[]) {
+            if (Math.abs(a[k] - b[k]) > GEOMETRY_TOLERANCE) {
+              off.push(`t=${s} ${k}: ${a[k].toFixed(3)} vs ${b[k].toFixed(3)}`);
+            }
+          }
+        }
+
+        expect(off, `${fx.name} embedded geometry diverges — ${off.join(', ')}`).toEqual([]);
       } finally {
         anim.destroy();
       }
@@ -406,6 +513,158 @@ describe('the sprite is a valid standalone SVG', () => {
       expect(err?.textContent ?? '').toBe('');
       expect(doc.documentElement.namespaceURI).toBe('http://www.w3.org/2000/svg');
       expect(doc.querySelector(`symbol[id="${fx.name}"]`)).toBeTruthy();
+    });
+  }
+});
+
+// Fixtures whose first frame depends on an expression. The compiler cannot
+// evaluate one ahead of time — that needs the expression engine, which is
+// JavaScript — so those properties bake to their fallback and the static
+// picture is an approximation. Everything else has to be exact.
+//
+// Pinned rather than skipped: if one of these starts matching, the expression
+// compiler landed and the entry should go.
+const EXPRESSION_DRIVEN = new Set(['lights', 'ripple', 'starfish']);
+
+// The sprite has to be a finished picture *before* any script runs: it is what
+// an SSR response paints, what `<noscript>` falls back to, and what an
+// `<img src="…svg">` shows. The planner writes only frame-invariant values into
+// markup, so without a bake a layer with an animated transform has no
+// `transform` at all and lands at the origin — `bouncy_ball` rendered
+// off-centre and `lights` rendered as one bulb on top of another.
+//
+// `player()` calls `apply(ip)` before scheduling anything, so a module mounted
+// with `autoplay: false` *is* the composition's first frame. That makes it the
+// oracle: every attribute the runtime writes on mount has to already be in the
+// sprite, with the same value.
+/**
+ * One element as a comparable shape.
+ *
+ * Attribute *order* is not meaningful and neither is serialization, so this
+ * compares maps rather than markup — `innerHTML` differs between a tree the XML
+ * parser produced and one built by the runtime, for reasons (explicit `xmlns`,
+ * attribute order) that have nothing to do with what is drawn.
+ *
+ * Per-mount id suffixes are meant to differ, and so is anything referencing
+ * one. `display` is read off `style` because the runtime sets the property
+ * rather than the attribute.
+ */
+const shape = (el: Element) => {
+  const attrs: Record<string, string> = {};
+  for (const at of el.attributes) {
+    if (at.name === 'id' || at.name === 'style' || at.name === 'xmlns') continue;
+    if (at.value.includes('url(#') || at.value.includes('--u')) continue;
+    attrs[at.name] = at.value;
+  }
+  attrs['@display'] = (el as SVGElement).style?.display ?? '';
+  return { tag: el.tagName, attrs };
+};
+
+/** Element-wise attribute differences between two rendered trees. */
+const compare = (a: ReturnType<typeof shape>[], b: ReturnType<typeof shape>[]) => {
+  const off: string[] = [];
+  for (const [i, x] of a.entries()) {
+    const y = b[i];
+    if (!y) { off.push(`[${i}] <${x.tag}> missing`); continue; }
+    if (x.tag !== y.tag) { off.push(`[${i}] ${x.tag} vs ${y.tag}`); continue; }
+    for (const k of new Set([...Object.keys(x.attrs), ...Object.keys(y.attrs)])) {
+      if (x.attrs[k] !== y.attrs[k]) {
+        off.push(`[${i}] <${x.tag}> ${k}: ${x.attrs[k]} vs ${y.attrs[k]}`);
+      }
+    }
+  }
+  return off;
+};
+
+describe('the sprite is the first frame, with no script', () => {
+  for (const fx of FIXTURES) {
+    test(`${fx.name}`, { timeout: 30_000 }, async () => {
+      const text = await fetch(`/.output/${fx.name}.sprite.svg`).then(r => r.text());
+      const symbol = new DOMParser()
+        .parseFromString(text, 'image/svg+xml')
+        .querySelector(`symbol[id="${fx.name}"]`);
+      expect(symbol, `no <symbol id="${fx.name}"> in the sprite`).toBeTruthy();
+      const baked = [...symbol!.querySelectorAll('*')].map(shape);
+
+      document.body.innerHTML = '';
+      const host = document.createElement('div');
+      document.body.appendChild(host);
+      const mod = await import(
+        /* @vite-ignore */ `/.output/${fx.name}.js?t=${Date.now()}`
+      );
+      const anim = mod.init(host, { autoplay: false, loop: false });
+      try {
+        const live = [...host.querySelector('svg')!.querySelectorAll('*')].map(shape);
+
+        // The runtime addresses elements by document-order index, so this is
+        // also what makes hydrating the sprite legal at all.
+        expect(baked.length, `${fx.name}: element count`).toBe(live.length);
+
+        const off = compare(baked, live);
+
+        if (EXPRESSION_DRIVEN.has(fx.name)) {
+          expect(
+            off.length,
+            `${fx.name} now bakes exactly — drop it from EXPRESSION_DRIVEN`,
+          ).toBeGreaterThan(0);
+          return;
+        }
+        expect(off, `${fx.name} static markup differs from frame ${0}`).toEqual([]);
+      } finally {
+        anim.destroy();
+      }
+    });
+  }
+});
+
+// The other half of the SSR flow: markup arrives already painted, and the
+// module adopts it instead of replacing it (`init(el, { hydrate: true })`).
+//
+// This is what the bake has to not break. Bindings address elements by
+// document-order index, so adding attributes is safe and adding *elements*
+// would not be — and nothing here would fail loudly if that changed, it would
+// just start writing the right values onto the wrong nodes.
+describe('a served first frame hydrates', () => {
+  for (const fx of FIXTURES) {
+    test(`${fx.name}`, { timeout: 30_000 }, async () => {
+      const text = await fetch(`/.output/${fx.name}.sprite.svg`).then(r => r.text());
+      const symbol = new DOMParser()
+        .parseFromString(text, 'image/svg+xml')
+        .querySelector(`symbol[id="${fx.name}"]`)!;
+
+      document.body.innerHTML = '';
+      // Stand in for the server's response: the symbol's children in a shell.
+      const served = document.createElement('div');
+      served.innerHTML =
+        `<svg viewBox="${symbol.getAttribute('viewBox')}" width="100%" height="100%"` +
+        ` preserveAspectRatio="xMidYMid meet" style="overflow:hidden">${symbol.innerHTML}</svg>`;
+      document.body.appendChild(served);
+      const before = served.querySelector('svg')!.querySelectorAll('*').length;
+
+      const fresh = document.createElement('div');
+      document.body.appendChild(fresh);
+
+      const mod = await import(
+        /* @vite-ignore */ `/.output/${fx.name}.js?t=${Date.now()}`
+      );
+      const a = mod.init(served, { hydrate: true, autoplay: false, loop: false });
+      const b = mod.init(fresh, { autoplay: false, loop: false });
+      try {
+        // Adopted, not re-rendered: the same nodes are still there.
+        expect(served.querySelector('svg')!.querySelectorAll('*').length).toBe(before);
+
+        // Mid-animation, not frame 0: an off-by-one in element indexing would
+        // still look right at the frame the markup was baked at.
+        const mid = Math.floor(b.totalFrames / 2);
+        a.goToAndStop(mid);
+        b.goToAndStop(mid);
+        const shot = (host: HTMLElement) =>
+          [...host.querySelector('svg')!.querySelectorAll('*')].map(shape);
+        expect(compare(shot(served), shot(fresh)), `${fx.name} hydrated`).toEqual([]);
+      } finally {
+        a.destroy();
+        b.destroy();
+      }
     });
   }
 });

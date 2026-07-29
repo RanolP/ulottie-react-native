@@ -11,6 +11,8 @@
 use crate::scene::{op, Caps, Scene};
 use crate::{MarkupMode, RuntimeMode};
 
+use super::codegen;
+use super::layers::Exprs;
 use super::pretty;
 use super::runtime::minify;
 use super::shake;
@@ -33,6 +35,12 @@ macro_rules! modules {
 
 const MODS: &[Mod] = modules![
     "num.js"     => "../../runtime/num.js",
+    "kfval.js"   => "../../runtime/kfval.js",
+    "play.js"    => "../../runtime/play.js",
+    "vlq.js"     => "../../runtime/vlq.js",
+    "wire.js"    => "../../runtime/wire.js",
+    "col.js"     => "../../runtime/col.js",
+    "scale.js"   => "../../runtime/scale.js",
     "set.js"     => "../../runtime/set.js",
     "rec.js"     => "../../runtime/rec.js",
     "ids.js"     => "../../runtime/ids.js",
@@ -83,13 +91,19 @@ const BINDERS: [(u8, Caps, &str, &str); 12] = [
     (op::LAYER_OP, Caps::LAYER_OP, "bLayerOpacity", "ops/layer.js"),
 ];
 
-/// Roots of the reachability walk: the mount entry point plus every binder the
-/// scene actually uses.
-fn roots(caps: Caps) -> Vec<&'static str> {
+/// Roots of the reachability walk: the mount entry point, every binder the scene
+/// actually uses, and every runtime function the emitted expression bodies call.
+///
+/// The expression helpers come in as roots rather than through `GATED`, because
+/// the layer pass reports exactly which ones it wrote into the bodies. A root is
+/// live whatever the capability gates say, so retention there is exact by
+/// construction instead of inferred from a word scan of the finished text.
+fn roots(caps: Caps, helpers: &[&'static str]) -> Vec<&'static str> {
     let mut r = vec!["mount"];
     if caps.contains(Caps::EXPRESSIONS) {
         r.push("makeExpr");
     }
+    r.extend_from_slice(helpers);
     if caps.contains(Caps::TEMPLATES) {
         r.push("expand");
     }
@@ -113,8 +127,8 @@ fn all_declarations() -> Vec<shake::Decl> {
 }
 
 /// The runtime this scene needs, shaken down to reachable declarations.
-fn bundle(caps: Caps) -> String {
-    let kept = shake::shake(all_declarations(), &roots(caps), caps);
+fn bundle(caps: Caps, helpers: &[&'static str]) -> String {
+    let kept = shake::shake(all_declarations(), &roots(caps, helpers), caps);
     let mut out = String::with_capacity(16384);
     for d in &kept {
         out.push_str(&d.text);
@@ -125,29 +139,48 @@ fn bundle(caps: Caps) -> String {
 /// Names of the runtime declarations a scene retains. Reported in unminified
 /// output so a review diff shows when a change starts (or stops) pulling
 /// something in.
-pub fn retained_symbols(caps: Caps) -> Vec<String> {
-    shake::shake(all_declarations(), &roots(caps), caps)
+pub fn retained_symbols(caps: Caps, helpers: &[&'static str]) -> Vec<String> {
+    shake::shake(all_declarations(), &roots(caps, helpers), caps)
         .into_iter()
         .map(|d| d.name)
         .collect()
 }
 
+/// The runtime a capability set pulls in, unminified — module comments and
+/// all, in dependency order.
+///
+/// Capability-only, so the expression helpers a particular module's bodies call
+/// are not part of the figure. That is what it is for: what a *feature* costs,
+/// not what one animation ended up shipping.
+pub fn runtime_pretty(caps: Caps) -> String {
+    bundle(caps, &[])
+}
+
 /// Minified source of the runtime a capability set pulls in.
 pub fn runtime_source(caps: Caps) -> String {
-    let mut src = bundle(caps);
-    src.push_str(&format!("export {{ {} }};\n", roots(caps).join(", ")));
+    let mut src = bundle(caps, &[]);
+    src.push_str(&format!("export {{ {} }};\n", roots(caps, &[]).join(", ")));
     minify(&src).unwrap_or(src)
 }
 
 /// Minified size of the runtime a capability set pulls in. Used to report what
 /// each optional feature costs.
 pub fn runtime_size(caps: Caps) -> usize {
-    let mut src = bundle(caps);
+    runtime_size_with(caps, &[])
+}
+
+/// What one module's runtime actually weighs, helpers included.
+///
+/// The expression helpers are roots rather than capabilities, so a capability
+/// set no longer describes the whole slice — measuring by caps alone reported
+/// `lyAt`, `lyPos` and the space walks as free.
+pub fn runtime_size_with(caps: Caps, helpers: &[&'static str]) -> usize {
+    let mut src = bundle(caps, helpers);
     // Anchor the entry points before minifying. The shaker strips `export`
     // keywords, so without this the module has no exports and no side effects
     // and the minifier correctly deletes all of it — which reported every
     // runtime as 0 bytes, and so every feature as costing nothing.
-    src.push_str(&format!("export {{ {} }};\n", roots(caps).join(", ")));
+    src.push_str(&format!("export {{ {} }};\n", roots(caps, helpers).join(", ")));
     minify(&src).unwrap_or(src).len()
 }
 
@@ -157,10 +190,19 @@ pub fn runtime_size(caps: Caps) -> usize {
 /// and a bundler assembles the rest. It exists so size reporting can show the
 /// upper bound on what a page could ever load.
 pub fn driver_source() -> String {
-    let mut src = bundle(Caps::all());
+    let mut src = bundle(Caps::all(), EXPR_HELPERS);
     src.push_str(&binder_table(Caps::all()));
     src
 }
+
+/// Every runtime symbol the expression bodies can be rewritten to call, plus the
+/// fallback surface. Only the "everything on" reports use this; a real module
+/// takes the exact set the layer pass reports for it.
+const EXPR_HELPERS: &[&str] = &[
+    "lyAt", "lyRel", "lyParent", "lyPos", "lyAnchor", "lyScale", "lyRot",
+    "lyOpacity", "lyPath", "lyPoints", "lyClosed", "lyEffect",
+    "toComp", "fromCompToSurface",
+];
 
 /// Minified counterpart of [`driver_source`], for size reporting.
 pub fn build_driver() -> String {
@@ -170,7 +212,10 @@ pub fn build_driver() -> String {
     // exporting only `mount` let the minifier drop the expression engine,
     // template expansion and sprite sourcing — and the "all capabilities"
     // figure then understated the runtime by roughly 40%.
-    src.push_str(&format!("export {{ {}, B }};\n", roots(Caps::all()).join(", ")));
+    src.push_str(&format!(
+        "export {{ {}, B }};\n",
+        roots(Caps::all(), EXPR_HELPERS).join(", ")
+    ));
     minify(&src).unwrap_or(src)
 }
 
@@ -178,11 +223,16 @@ pub fn build_driver() -> String {
 // Module emission
 // ---------------------------------------------------------------------------
 
+/// The expression helpers a scene's bodies call, as shake roots.
+fn helpers_of(exprs: Option<&Exprs>) -> Vec<&'static str> {
+    exprs.map(|e| e.helpers.iter().copied().collect()).unwrap_or_default()
+}
+
 pub fn emit(
     scene: &Scene,
     mode: RuntimeMode,
     compress: bool,
-    exprs: Option<&str>,
+    exprs: Option<&Exprs>,
     markup_mode: &MarkupMode,
 ) -> anyhow::Result<String> {
     if !compress {
@@ -202,30 +252,238 @@ pub fn emit(
         return Ok(minify(&src).unwrap_or(src));
     }
 
+    // An animation the generator can express becomes code instead of data —
+    // no payload, no binder table, no closure per property. It only ever
+    // applies to self-contained modules: an extern one shares the interpreter
+    // with every other animation on the page, so the trade runs the other way
+    // round there.
+    //
+    // Both are built and the smaller wins, the same way `Instancing::Auto`
+    // picks. Generated code is dramatically smaller for the animations the
+    // runtime dominates and dramatically *larger* for one like `ripple`, where
+    // 230 bindings each unroll — so which is better is a measurement, not a
+    // rule, and it is cheap to just take it.
+    let candidate = if mode == RuntimeMode::Embedded && matches!(markup_mode, MarkupMode::Inline) {
+        codegen::try_emit(scene).map(|code| generated(scene, &markup, code, exprs))
+    } else {
+        None
+    };
+
     let data = serde_json::to_string(&scene.data)?;
 
+    let helpers = helpers_of(exprs);
     match mode {
         RuntimeMode::Extern => {
-            src.push_str(&extern_imports(caps_of(scene, markup_mode), RUNTIME_BASE));
+            src.push_str(&extern_imports(
+                caps_of(scene, markup_mode),
+                RUNTIME_BASE,
+                &helpers,
+            ));
             src.push_str(&binder_table(scene.caps));
         }
         RuntimeMode::Embedded => {
-            src.push_str(&bundle(caps_of(scene, markup_mode)));
+            src.push_str(&bundle(caps_of(scene, markup_mode), &helpers));
             src.push_str(&binder_table(scene.caps));
         }
     }
     src.push_str(&format!("const M={markup};\nconst D={data};\n"));
+    // Factored-out subtrees are the module's own strings, not payload: naming
+    // them here keeps them out of the pool, and the pool then has nothing left
+    // in it at all for most animations.
+    if !scene.data.tpl.is_empty() {
+        let items: Vec<String> = scene.data.tpl.iter().map(|m| js_string(m)).collect();
+        src.push_str(&format!("const TPL=[{}];\n", items.join(",")));
+    }
+    if !scene.data.strings.is_empty() {
+        let items: Vec<String> = scene.data.strings.iter().map(|m| js_string(m)).collect();
+        src.push_str(&format!("const SP=[{}];\n", items.join(",")));
+    }
     if let Some(e) = exprs {
-        src.push_str(e);
+        src.push_str(&e.src);
     }
     src.push_str("export const markup=M;\n");
     src.push_str(&sprite_export(markup_mode));
     src.push_str(&format!(
         "export const init=(c,o)=>mount(M,D,B,c,o{});\n",
-        extensions(scene.caps, exprs.is_some(), markup_mode)
+        extensions(scene.caps, &scene.data.tpl, !scene.data.strings.is_empty(), exprs, markup_mode)
     ));
 
-    Ok(minify(&src).unwrap_or(src))
+    let interpreted = minify(&src).unwrap_or(src);
+    Ok(match candidate {
+        Some(g) if g.len() < interpreted.len() => g,
+        _ => interpreted,
+    })
+}
+
+/// Whether a self-contained build of this scene would be code-generated.
+///
+/// Answers the same question `emit` does — the generator can express it *and*
+/// the result is smaller — without keeping both strings around.
+pub fn is_generated(scene: &Scene, exprs: Option<&Exprs>) -> bool {
+    if scene.is_static() {
+        return false;
+    }
+    let markup = js_string(&carried(scene, &MarkupMode::Inline));
+    match codegen::try_emit(scene) {
+        Some(code) => {
+            let g = generated(scene, &markup, code, exprs);
+            let mut src = String::new();
+            src.push_str(&bundle(
+                caps_of(scene, &MarkupMode::Inline),
+                &helpers_of(exprs),
+            ));
+            src.push_str(&binder_table(scene.caps));
+            if let Ok(data) = serde_json::to_string(&scene.data) {
+                src.push_str(&format!("const M={markup};\nconst D={data};\n"));
+            }
+            if !scene.data.tpl.is_empty() {
+                let items: Vec<String> =
+                    scene.data.tpl.iter().map(|m| js_string(m)).collect();
+                src.push_str(&format!("const TPL=[{}];\n", items.join(",")));
+            }
+            if !scene.data.strings.is_empty() {
+                let items: Vec<String> =
+                    scene.data.strings.iter().map(|m| js_string(m)).collect();
+                src.push_str(&format!("const SP=[{}];\n", items.join(",")));
+            }
+            if let Some(e) = exprs {
+                src.push_str(&e.src);
+            }
+            src.push_str("export const markup=M;\n");
+            src.push_str(&format!(
+                "export const init=(c,o)=>mount(M,D,B,c,o{});\n",
+                extensions(scene.caps, &scene.data.tpl, !scene.data.strings.is_empty(), exprs, &MarkupMode::Inline)
+            ));
+            g.len() < minify(&src).unwrap_or(src).len()
+        }
+        None => false,
+    }
+}
+
+/// Assemble a generated module: the helpers it reaches, the markup, and an
+/// `init` that builds `apply` in straight-line code and hands it to the shared
+/// player.
+///
+/// The contrast with the interpreter path above is the point — there is no
+/// payload string, no binder table, and no `mount`. What ships is this
+/// animation and nothing else.
+fn generated(
+    scene: &Scene,
+    markup: &str,
+    code: codegen::Generated,
+    exprs: Option<&Exprs>,
+) -> String {
+    let mut src = String::with_capacity(4096);
+
+    // Only the helpers the generated body actually calls, plus the player.
+    let mut roots = vec!["player"];
+    if !scene.data.tpl.is_empty() {
+        roots.push("expand");
+    }
+    roots.extend(code.needs.iter().copied());
+    // The expression bodies name their own helpers; a generated module reaches
+    // them from the body text alone, which the shaker cannot see.
+    roots.extend(helpers_of(exprs));
+    src.push_str(&shaken(&roots));
+
+    // Easing handles hoisted to module scope: the solver takes them as an
+    // argument, and an inline literal would allocate an array every frame.
+    for (i, e) in code.easings.iter().enumerate() {
+        src.push_str(&format!(
+            "const Z{i}=[{},{},{},{}];\n",
+            crate::scene::svg::n(e[0]),
+            crate::scene::svg::n(e[1]),
+            crate::scene::svg::n(e[2]),
+            crate::scene::svg::n(e[3])
+        ));
+    }
+
+    // Constant path outlines, hoisted so a keyframed shape interpolates
+    // between objects that already exist.
+    for (i, p) in code.paths.iter().enumerate() {
+        src.push_str(&format!("const Q{i}={p};\n"));
+    }
+    // Arc-length and trim tables, built once when the module loads.
+    src.push_str(&code.pre);
+
+    if let Some(e) = exprs {
+        src.push_str(&e.src);
+    }
+    // Factored-out subtrees ship as markup strings and are expanded before any
+    // element is indexed — the planner numbered the *expanded* tree.
+    if !scene.data.tpl.is_empty() {
+        let items: Vec<String> = scene.data.tpl.iter().map(|m| js_string(m)).collect();
+        src.push_str(&format!("const TPL=[{}];\n", items.join(",")));
+    }
+    src.push_str(&format!("const M={markup};\nexport const markup=M;\n"));
+    // Two mounts of the same module must not share `<mask>`/gradient ids. The
+    // interpreter keeps this counter in core.js, which a generated module does
+    // not include.
+    if scene.data.uses_ids {
+        src.push_str("let uid=0;\n");
+    }
+
+    src.push_str("export const init=(c,o)=>{\n");
+    src.push_str("o=o||{};\n");
+    src.push_str(if scene.data.uses_ids {
+        "const H=M.split('--u').join('-'+(uid++));\nc.innerHTML=H;\n"
+    } else {
+        "const H=M;\nc.innerHTML=H;\n"
+    });
+    src.push_str("const svg=c.firstElementChild;\n");
+    if !scene.data.tpl.is_empty() {
+        src.push_str("expand(svg,TPL);\n");
+    }
+    // Elements are addressed by document-order index, the same numbering the
+    // planner assigned; only the bound ones are looked up.
+    // Not `E`: that is the expression table's name, and the collision made
+    // `initExpr(E, ctx)` receive the DOM node list.
+    src.push_str("const NL=svg.querySelectorAll('*');\n");
+    let binds: Vec<String> = code
+        .els
+        .iter()
+        .enumerate()
+        .map(|(i, idx)| format!("e{i}=NL[{idx}]"))
+        .collect();
+    src.push_str(&format!("const {};\n", binds.join(",")));
+    // One slot per written attribute, holding the last value written. This is
+    // what `attr()` allocated a closure for.
+    if !code.slots.is_empty() {
+        src.push_str(&format!("let {};\n", code.slots.join(",")));
+    }
+    if !code.decls.is_empty() {
+        src.push_str(&format!("const {};\n", code.decls.join(",")));
+    }
+    if code.exprs {
+        src.push_str("const ctx={frame:0,fr:");
+        src.push_str(&crate::scene::svg::n(scene.data.fr));
+        src.push_str("};\ninitExpr(E,ctx);\n");
+    }
+    src.push_str(&code.init);
+    src.push_str("const apply=(f)=>{\n");
+    if code.exprs {
+        src.push_str("ctx.frame=f;\n");
+    }
+    src.push_str(&code.body);
+    src.push_str("};\n");
+    src.push_str(&format!(
+        "return player(c,svg,H,apply,{},{},{},o);\n}};\n",
+        crate::scene::svg::n(scene.data.fr),
+        crate::scene::svg::n(scene.data.ip),
+        crate::scene::svg::n(scene.data.op)
+    ));
+
+    minify(&src).unwrap_or(src)
+}
+
+/// The runtime declarations a set of roots reaches, with module syntax removed.
+fn shaken(roots: &[&str]) -> String {
+    let kept = shake::shake(all_declarations(), roots, Caps::all());
+    let mut out = String::new();
+    for d in &kept {
+        out.push_str(&d.text);
+    }
+    out
 }
 
 /// The symbol a module sources its markup from, so a consumer can tell which
@@ -292,7 +550,7 @@ fn static_player(scene: &Scene, markup_mode: &MarkupMode) -> String {
 fn readable(
     scene: &Scene,
     mode: RuntimeMode,
-    exprs: Option<&str>,
+    exprs: Option<&Exprs>,
     markup_mode: &MarkupMode,
 ) -> anyhow::Result<String> {
     let mut src = String::with_capacity(scene.inline.len() * 2 + 4096);
@@ -319,19 +577,24 @@ fn readable(
         src.push_str("// Fully static after compilation: no runtime, no data table, no frame loop.\n");
     }
 
+    let helpers = helpers_of(exprs);
     if !scene.is_static() {
         match mode {
             RuntimeMode::Extern => {
-                src.push_str(&extern_imports(caps_of(scene, markup_mode), RUNTIME_BASE));
+                src.push_str(&extern_imports(
+                    caps_of(scene, markup_mode),
+                    RUNTIME_BASE,
+                    &helpers,
+                ));
                 src.push_str(&binder_table(scene.caps));
                 src.push('\n');
             }
             RuntimeMode::Embedded => {
                 src.push_str(&format!(
                     "// runtime symbols: {}\n",
-                    retained_symbols(caps_of(scene, markup_mode)).join(", ")
+                    retained_symbols(caps_of(scene, markup_mode), &helpers).join(", ")
                 ));
-                src.push_str(&bundle(caps_of(scene, markup_mode)));
+                src.push_str(&bundle(caps_of(scene, markup_mode), &helpers));
                 src.push_str(&binder_table(scene.caps));
                 src.push('\n');
             }
@@ -355,8 +618,25 @@ fn readable(
         src.push_str(";\n\n");
     }
 
+    // The module's own strings, named rather than interned — see the emitter's
+    // counterpart above.
+    if !scene.data.tpl.is_empty() {
+        src.push_str("const TPL = [\n");
+        for m in &scene.data.tpl {
+            src.push_str(&format!("  {},\n", js_string(m)));
+        }
+        src.push_str("];\n\n");
+    }
+    if !scene.data.strings.is_empty() {
+        src.push_str("const SP = [\n");
+        for m in &scene.data.strings {
+            src.push_str(&format!("  {},\n", js_string(m)));
+        }
+        src.push_str("];\n\n");
+    }
+
     if let Some(e) = exprs {
-        src.push_str(e);
+        src.push_str(&e.src);
         src.push('\n');
     }
     src.push_str("export const markup = M;\n");
@@ -373,7 +653,7 @@ fn readable(
     } else {
         src.push_str(&format!(
             "export const init = (c, o) => mount(M, D, B, c, o{});\n",
-            extensions(scene.caps, exprs.is_some(), markup_mode)
+            extensions(scene.caps, &scene.data.tpl, !scene.data.strings.is_empty(), exprs, markup_mode)
         ));
     }
     Ok(src)
@@ -390,18 +670,33 @@ fn caps_list(caps: Caps) -> String {
 /// than importing them from `core.js` is what keeps an animation from pulling
 /// in code it does not use — a reference inside `core.js` would survive into
 /// every module graph.
-fn extensions(caps: Caps, has_exprs: bool, markup_mode: &MarkupMode) -> String {
+fn extensions(
+    caps: Caps,
+    tpl: &[String],
+    pool: bool,
+    exprs: Option<&Exprs>,
+    markup_mode: &MarkupMode,
+) -> String {
     let mut parts = Vec::new();
     if let MarkupMode::Extracted(id) = markup_mode {
         parts.push(format!("s:fromSprite({})", js_string(id)));
     }
-    if caps.contains(Caps::TEMPLATES) {
-        parts.push("t:expand".to_string());
+    // Gated on the templates themselves, not on the capability: `TPL` is only
+    // declared when there is something to put in it, and the two conditions
+    // drifting apart is a module that throws at `init`.
+    if !tpl.is_empty() {
+        debug_assert!(caps.contains(Caps::TEMPLATES));
+        parts.push("t:s=>expand(s,TPL)".to_string());
+    }
+    if pool {
+        parts.push("p:SP".to_string());
     }
     if caps.contains(Caps::TIME_REMAP) {
         parts.push("r:resolve".to_string());
     }
-    if has_exprs {
+    // Every layer reference is a literal slot, so the engine needs no lookup
+    // tables to place records into.
+    if exprs.is_some() {
         parts.push("x:v=>makeExpr(E,v)".to_string());
     }
     if parts.is_empty() {
@@ -422,20 +717,34 @@ pub const RUNTIME_BASE: &str = "./runtime";
 /// Specifiers an extern build imports, in emission order. Reported by the size
 /// panel so a reader can see that an animation pulls four files, not a runtime.
 pub fn imported_modules(caps: Caps) -> Vec<String> {
-    extern_imports(caps, ".")
+    extern_imports(caps, ".", &[])
         .lines()
         .filter_map(|l| l.split_once("from './").map(|(_, r)| r))
         .filter_map(|r| r.split_once('\'').map(|(m, _)| m.to_string()))
         .collect()
 }
 
-fn extern_imports(caps: Caps, base: &str) -> String {
+fn extern_imports(caps: Caps, base: &str, helpers: &[&'static str]) -> String {
     let mut out = format!("import {{ mount }} from '{base}/core.js';\n");
     if caps.contains(Caps::EXTRACTED) {
         out.push_str(&format!("import {{ fromSprite }} from '{base}/sprite.js';\n"));
     }
     if caps.contains(Caps::EXPRESSIONS) {
-        out.push_str(&format!("import {{ makeExpr }} from '{base}/expr.js';\n"));
+        // The bodies call the layer helpers by bare name, so an extern build has
+        // to import each one it uses alongside the engine itself. Not the ones
+        // a body destructures out of `ctx` — those reach it through the engine
+        // and are not module bindings at the call site.
+        let mut names = vec!["makeExpr"];
+        names.extend(
+            helpers
+                .iter()
+                .copied()
+                .filter(|h| !super::emit_expressions::CTX_NAMES.contains(h)),
+        );
+        out.push_str(&format!(
+            "import {{ {} }} from '{base}/expr.js';\n",
+            names.join(", ")
+        ));
     }
     if caps.contains(Caps::TIME_REMAP) {
         out.push_str(&format!("import {{ resolve }} from '{base}/kf.js';\n"));
@@ -502,14 +811,14 @@ mod tests {
 
     #[test]
     fn bundling_drops_module_syntax() {
-        let out = bundle(Caps::all());
+        let out = bundle(Caps::all(), EXPR_HELPERS);
         assert!(!out.contains("import "), "bundle still has an import");
         assert!(!out.contains("export "), "bundle still has an export");
     }
 
     #[test]
     fn a_scene_only_carries_what_it_reaches() {
-        let translate_only = retained_symbols(Caps::TRANSLATE);
+        let translate_only = retained_symbols(Caps::TRANSLATE, &[]);
         assert!(translate_only.contains(&"bTranslate".to_string()));
         assert!(!translate_only.contains(&"bGradient".to_string()));
         assert!(!translate_only.contains(&"trimApply".to_string()));
@@ -517,14 +826,14 @@ mod tests {
         // `r` formats plain coordinates; a translate binder uses r2/r5 only.
         assert!(!translate_only.contains(&"r".to_string()));
 
-        let trimmed = retained_symbols(Caps::SHAPE | Caps::TRIM);
+        let trimmed = retained_symbols(Caps::SHAPE | Caps::TRIM, &[]);
         assert!(trimmed.contains(&"trimApply".to_string()));
         assert!(trimmed.contains(&"pathD".to_string()));
     }
 
     #[test]
     fn extern_imports_name_each_binder_module() {
-        let imports = extern_imports(Caps::TRANSLATE | Caps::FILL, "./runtime");
+        let imports = extern_imports(Caps::TRANSLATE | Caps::FILL, "./runtime", &[]);
         assert_eq!(
             imports,
             "import { mount } from './runtime/core.js';\n\
