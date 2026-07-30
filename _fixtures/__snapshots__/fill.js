@@ -6,7 +6,9 @@
 // Fully static after compilation: no runtime, no data table, no frame loop.
 const M =
   '<svg viewBox="0 0 512 512" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="overflow:hidden">' +
-    '<path d="M125.516,452.203L240.716,38.687L435.869,447.904L42.125,173.66L460.8,156.466L125.516,452.203Z" fill="#fffa47"/>' +
+    '<svg width="512" height="512">' +
+      '<path d="M125.516,452.203L240.716,38.687L435.869,447.904L42.125,173.66L460.8,156.466L125.516,452.203Z" fill="#fffa47"/>' +
+    '</svg>' +
   '</svg>';
 
 export const markup = M;

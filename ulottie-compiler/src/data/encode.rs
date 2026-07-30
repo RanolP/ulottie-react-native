@@ -60,24 +60,40 @@ fn shapes_supported(shapes: &[ir::ShapeNode]) -> bool {
     true
 }
 
+/// Whether a group transform does nothing, so the group itself can go.
+///
+/// Every component has to be **statically** identity. An animated one is
+/// identity only at whatever frames it passes through, and reading it as its
+/// default — which is what `unwrap_or` did on a `None` from `static_*` — quietly
+/// deleted the group and the animation with it. `lf30_t0igqye8` rotates a
+/// banknote about its own anchor: position equals anchor, scale is 100, opacity
+/// is 100, and the one thing that moves is the rotation, which read as 0. The
+/// group was flattened and the notes never turned.
 fn transform_is_identity(t: &ir::Transform) -> bool {
-    let position = static_vec3(&t.position).unwrap_or([0.0, 0.0, 0.0]);
-    let anchor = static_vec3(&t.anchor).unwrap_or([0.0, 0.0, 0.0]);
+    let (Some(position), Some(anchor)) = (static_vec3(&t.position), static_vec3(&t.anchor)) else {
+        return false;
+    };
     if (position[0] - anchor[0]).abs() > 1e-3
         || (position[1] - anchor[1]).abs() > 1e-3
         || (position[2] - anchor[2]).abs() > 1e-3
     {
         return false;
     }
-    let scale = static_vec3(&t.scale).unwrap_or([100.0, 100.0, 100.0]);
+    let Some(scale) = static_vec3(&t.scale) else {
+        return false;
+    };
     if (scale[0] - 100.0).abs() > 1e-3 || (scale[1] - 100.0).abs() > 1e-3 {
         return false;
     }
-    let rotation = static_scalar(&t.rotation).unwrap_or(0.0);
+    let Some(rotation) = static_scalar(&t.rotation) else {
+        return false;
+    };
     if rotation.abs() > 1e-3 {
         return false;
     }
-    let opacity = static_scalar(&t.opacity).unwrap_or(100.0);
+    let Some(opacity) = static_scalar(&t.opacity) else {
+        return false;
+    };
     if (opacity - 100.0).abs() > 1e-3 {
         return false;
     }
@@ -90,6 +106,38 @@ fn transform_is_identity(t: &ir::Transform) -> bool {
         .as_ref()
         .is_none_or(|p| static_scalar(p) == Some(0.0));
     skew_ok && skew_axis_ok
+}
+
+/// An effect parameter's value when it is a static colour: `{"a":0,"k":[r,g,b,a]}`.
+/// Anything animated returns `None` and the parameter stays out of the payload,
+/// which is what keeps the planner from freezing a colour that moves.
+fn static_color(raw: &serde_json::Value) -> Option<[f64; 4]> {
+    let obj = raw.as_object()?;
+    if obj.get("a").and_then(|a| a.as_f64()).unwrap_or(0.0) != 0.0 {
+        return None;
+    }
+    let k = obj.get("k")?.as_array()?;
+    if k.len() < 3 {
+        return None;
+    }
+    Some([
+        k[0].as_f64()?,
+        k[1].as_f64()?,
+        k[2].as_f64()?,
+        k.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0),
+    ])
+}
+
+/// The style list one item sees: its own group's, then everything inherited.
+///
+/// Both halves are in `it` order, and the group's own come first because a
+/// style declared closer to the geometry paints over one declared further out —
+/// lottie-web appends the inner group's element after the outer style's.
+fn styles_at(own: &[u32], inherited: &[u32]) -> Vec<u32> {
+    let mut v = Vec::with_capacity(own.len() + inherited.len());
+    v.extend_from_slice(own);
+    v.extend_from_slice(inherited);
+    v
 }
 
 fn static_scalar(p: &ir::Property<f64>) -> Option<f64> {
@@ -247,10 +295,18 @@ impl Encoder {
             for e in &layer.effects {
                 let mut params = Vec::with_capacity(e.parameters.len());
                 for p in &e.parameters {
-                    let (v, pid) = match &p.value {
-                        ir::EffectValue::Scalar(ir::Property::Static(s)) => (Some(*s), None),
-                        ir::EffectValue::Scalar(prop) => (None, Some(self.inline_scalar(prop)?)),
-                        ir::EffectValue::Other(_) => continue,
+                    let (v, pid, c) = match &p.value {
+                        ir::EffectValue::Scalar(ir::Property::Static(s)) => (Some(*s), None, None),
+                        ir::EffectValue::Scalar(prop) => {
+                            (None, Some(self.inline_scalar(prop)?), None)
+                        }
+                        // A colour is a vector, so it never parsed as a scalar
+                        // property and used to be dropped here. `ADBE Fill`
+                        // *is* its colour, so the static case comes through.
+                        ir::EffectValue::Other(raw) => match static_color(raw) {
+                            Some(c) => (None, None, Some(c)),
+                            None => continue,
+                        },
                     };
                     params.push(EffectParam {
                         nm: p.name.clone(),
@@ -258,11 +314,13 @@ impl Encoder {
                         ty: p.ty,
                         v,
                         p: pid,
+                        c,
                     });
                 }
                 effects.push(Effect {
                     nm: e.name.clone(),
                     mn: e.match_name.clone(),
+                    ty: e.ty,
                     ef: params,
                 });
             }
@@ -320,6 +378,21 @@ impl Encoder {
         self.encode_shape_tree_with(shapes, out, &[], None)
     }
 
+    /// Encode one group's item list.
+    ///
+    /// **The walk runs backwards, and that is the whole contract.** Lottie
+    /// authors `it` top-first, and lottie-web's `searchShapes` iterates it from
+    /// the end appending as it goes — so `it[0]` is appended last and paints on
+    /// top. Two rules fall out of that one, and both come out wrong if the list
+    /// is read forwards:
+    ///
+    /// * geometry is emitted in reverse `it` order;
+    /// * a fill, stroke or trim reaches only the items *above* it, which are
+    ///   exactly the ones this walk has not passed yet.
+    ///
+    /// The style list itself is kept in `it` order, the group's own ahead of
+    /// anything inherited, because `emit_styles` resolves an attribute to the
+    /// first style carrying it and the topmost is the one that shows.
     fn encode_shape_tree_with(
         &mut self,
         shapes: &[ir::ShapeNode],
@@ -327,18 +400,31 @@ impl Encoder {
         inherited_styles: &[u32],
         inherited_trim: Option<u32>,
     ) -> Result<()> {
-        let mut current_styles: Vec<u32> = inherited_styles.to_vec();
-        let mut current_trim: Option<u32> = inherited_trim;
-        let mut group_transform: Option<&ir::Transform> = None;
+        // The transform applies to the group as a whole wherever it sits in the
+        // list, so it is the one item that has to be known before the walk.
+        let group_transform = shapes.iter().rev().find_map(|s| match s {
+            ir::ShapeNode::Transform { transform, .. } => Some(transform),
+            _ => None,
+        });
+        let emit_into_group = group_transform.is_some_and(|t| !transform_is_identity(t));
+        let mut emitted: Vec<ShapeRef> = Vec::new();
+        let target = if emit_into_group {
+            &mut emitted
+        } else {
+            &mut *out
+        };
 
-        for s in shapes {
+        let mut own_styles: Vec<u32> = Vec::new();
+        let mut current_trim: Option<u32> = inherited_trim;
+
+        for s in shapes.iter().rev() {
             match s {
                 ir::ShapeNode::Fill { color, opacity, .. } => {
                     let c = self.inline_color(color)?;
                     let o = self.inline_scalar(opacity)?;
                     let id = self.payload.y.len() as u32;
                     self.payload.y.push(Style::Fill { c, o });
-                    current_styles.push(id);
+                    own_styles.insert(0, id);
                 }
                 ir::ShapeNode::Stroke {
                     color,
@@ -361,7 +447,7 @@ impl Encoder {
                         lj: linejoin_num(*linejoin),
                         ml: *miter_limit,
                     });
-                    current_styles.push(id);
+                    own_styles.insert(0, id);
                 }
                 ir::ShapeNode::GradientStroke {
                     gradient,
@@ -400,7 +486,7 @@ impl Encoder {
                         lj: linejoin_num(*linejoin),
                         ml: *miter_limit,
                     });
-                    current_styles.push(id);
+                    own_styles.insert(0, id);
                 }
                 ir::ShapeNode::GradientFill {
                     gradient,
@@ -435,7 +521,7 @@ impl Encoder {
                             ir::FillRule::EvenOdd => 2,
                         },
                     });
-                    current_styles.push(id);
+                    own_styles.insert(0, id);
                 }
                 ir::ShapeNode::TrimPath {
                     start,
@@ -459,25 +545,9 @@ impl Encoder {
                     });
                     current_trim = Some(id);
                 }
-                ir::ShapeNode::Transform { transform, .. } => {
-                    group_transform = Some(transform);
-                }
-                _ => {}
-            }
-        }
-
-        let emit_into_group = group_transform.is_some_and(|t| !transform_is_identity(t));
-        let mut emitted: Vec<ShapeRef> = Vec::new();
-        let target = if emit_into_group {
-            &mut emitted
-        } else {
-            &mut *out
-        };
-
-        for s in shapes {
-            match s {
                 ir::ShapeNode::Group { items, .. } => {
-                    self.encode_shape_tree_with(items, target, &current_styles, current_trim)?;
+                    let styles = styles_at(&own_styles, inherited_styles);
+                    self.encode_shape_tree_with(items, target, &styles, current_trim)?;
                 }
                 ir::ShapeNode::Rectangle {
                     size,
@@ -497,7 +567,7 @@ impl Encoder {
                     });
                     target.push(ShapeRef::Prim(PrimRef {
                         s: sid,
-                        y: current_styles.clone(),
+                        y: styles_at(&own_styles, inherited_styles),
                         tm: current_trim,
                     }));
                 }
@@ -508,7 +578,7 @@ impl Encoder {
                     self.payload.s.push(Shape::Ellipse { sz, ps, nm: None });
                     target.push(ShapeRef::Prim(PrimRef {
                         s: sid,
-                        y: current_styles.clone(),
+                        y: styles_at(&own_styles, inherited_styles),
                         tm: current_trim,
                     }));
                 }
@@ -518,7 +588,7 @@ impl Encoder {
                     self.payload.s.push(Shape::Path { pt, nm: None });
                     target.push(ShapeRef::Prim(PrimRef {
                         s: sid,
-                        y: current_styles.clone(),
+                        y: styles_at(&own_styles, inherited_styles),
                         tm: current_trim,
                     }));
                 }
@@ -566,7 +636,7 @@ impl Encoder {
                     });
                     target.push(ShapeRef::Prim(PrimRef {
                         s: sid,
-                        y: current_styles.clone(),
+                        y: styles_at(&own_styles, inherited_styles),
                         tm: current_trim,
                     }));
                 }
@@ -944,5 +1014,196 @@ mod tests {
             out.e.as_ref().and_then(|e| e[0].clone()),
             Some(Value::Scalar(2.333))
         );
+    }
+
+    // -- the shape walk ------------------------------------------------------
+
+    fn path_named(nm: &str) -> ir::ShapeNode {
+        ir::ShapeNode::Path {
+            name: Some(nm.into()),
+            ks: ir::Property::Static(ir::PathData::default()),
+            direction: ir::ShapeDirection::Normal,
+            hidden: false,
+        }
+    }
+
+    fn fill(r: f64) -> ir::ShapeNode {
+        ir::ShapeNode::Fill {
+            name: None,
+            match_name: None,
+            color: ir::Property::Static([r, 0.0, 0.0, 1.0]),
+            opacity: ir::Property::Static(100.0),
+            rule: ir::FillRule::NonZero,
+            hidden: false,
+        }
+    }
+
+    fn group(items: Vec<ir::ShapeNode>) -> ir::ShapeNode {
+        ir::ShapeNode::Group {
+            name: None,
+            match_name: None,
+            items,
+            hidden: false,
+        }
+    }
+
+    /// The red channel of each emitted primitive's first style, in the order
+    /// they were emitted. Enough to tell both the paint order and which style
+    /// reached which shape.
+    fn walk(shapes: &[ir::ShapeNode]) -> Vec<f64> {
+        let mut enc = Encoder::new();
+        let mut out = Vec::new();
+        enc.encode_shape_tree(shapes, &mut out).unwrap();
+        out.iter()
+            .map(|r| match r {
+                ShapeRef::Prim(p) => match p.y.first().and_then(|id| enc.payload.y.get(*id as usize))
+                {
+                    Some(Style::Fill { c: InlineProp::Static(Value::Vector(v)), .. }) => v[0],
+                    _ => -1.0,
+                },
+                ShapeRef::Group(_) => -2.0,
+            })
+            .collect()
+    }
+
+    /// Lottie authors `it` top-first and lottie-web appends it backwards, so
+    /// `it[0]` paints last. Reading the list forwards drew every overlapping
+    /// group in the wrong order — `lf20_hewaysm0` is two groups, and the white
+    /// heart came out underneath the red disc that should sit behind it.
+    #[test]
+    fn group_items_paint_in_reverse_it_order() {
+        let shapes = vec![group(vec![
+            group(vec![path_named("first"), fill(0.1)]),
+            group(vec![path_named("second"), fill(0.2)]),
+        ])];
+        assert_eq!(walk(&shapes), vec![0.2, 0.1]);
+    }
+
+    /// A fill applies to the paths *above* it and to nothing below, because
+    /// that is where the backwards walk has already been. Collecting every
+    /// style in the group first and handing all of them to every shape painted
+    /// the lower shapes with a fill After Effects never applied to them.
+    #[test]
+    fn a_fill_reaches_only_the_items_above_it() {
+        let shapes = vec![group(vec![
+            path_named("top"),
+            fill(0.1),
+            path_named("bottom"),
+            fill(0.2),
+        ])];
+        // Emitted bottom-first: `bottom` sees only the fill below it, `top`
+        // sees both and takes the nearer one.
+        assert_eq!(walk(&shapes), vec![0.2, 0.1]);
+    }
+
+    /// An inner group's own fill outranks one inherited from further out: its
+    /// element is appended after the outer style's, so it paints on top.
+    #[test]
+    fn an_inner_fill_outranks_an_inherited_one() {
+        let shapes = vec![group(vec![group(vec![path_named("p"), fill(0.1)]), fill(0.2)])];
+        assert_eq!(walk(&shapes), vec![0.1]);
+    }
+
+    /// Two contours over the same paint are one path, so the fill rule can
+    /// cancel the inner one. Emitted as two elements they are two solid shapes
+    /// and the counter fills in — which is what `krrt-7ccaf912`'s wordmark did
+    /// to every Korean letter in it.
+    ///
+    /// The merge is `Planner::merge_paths`; this drives the whole compiler so
+    /// what is asserted is the emitted document, not an intermediate.
+    #[test]
+    fn contours_sharing_a_paint_become_one_path() {
+        let doc = crate::compile_document(&ring("sh")).unwrap();
+        assert_eq!(
+            doc.matches("<path").count(),
+            1,
+            "the two contours share a fill and must share an element:\n{doc}"
+        );
+        // Both are still in it — merging is not dropping.
+        let d = doc.split("d=\"").nth(1).and_then(|s| s.split('"').next());
+        assert_eq!(
+            d.map(|d| d.matches('M').count()),
+            Some(2),
+            "…and both contours are in it:\n{doc}"
+        );
+    }
+
+    /// Where the merge stops, written down rather than discovered.
+    ///
+    /// A static `rc` or `el` is emitted as a native `<rect>`/`<ellipse>`, which
+    /// is smaller and rounder than the path it would otherwise be — and cannot
+    /// join a `d`. lottie-web turns every primitive into path data, so a hole
+    /// authored as two rectangles *would* cancel there and does not here. No
+    /// file in three corpora draws one that way (a counter is a `sh`), so the
+    /// native elements are kept; merging them means giving up the element and
+    /// getting the Lottie winding right on a generated outline.
+    #[test]
+    fn native_rect_and_ellipse_do_not_merge() {
+        let doc = crate::compile_document(&ring("rc")).unwrap();
+        assert_eq!(
+            doc.matches("<rect").count(),
+            2,
+            "known limit — if this ever merges, the comment above is stale:\n{doc}"
+        );
+    }
+
+    /// A 100×100 square with a 40×40 square inside it and one fill between
+    /// them: a frame, not two blocks. `kind` is `sh` or `rc`.
+    fn ring(kind: &str) -> String {
+        let shape = |w: f64| match kind {
+            "rc" => format!(
+                r#"{{"ty":"rc","s":{{"a":0,"k":[{w},{w}]}},"p":{{"a":0,"k":[100,100]}},"r":{{"a":0,"k":0}}}}"#
+            ),
+            _ => {
+                let (lo, hi) = (100.0 - w / 2.0, 100.0 + w / 2.0);
+                format!(
+                    r#"{{"ty":"sh","ks":{{"a":0,"k":{{"c":true,
+                       "v":[[{lo},{lo}],[{hi},{lo}],[{hi},{hi}],[{lo},{hi}]],
+                       "i":[[0,0],[0,0],[0,0],[0,0]],"o":[[0,0],[0,0],[0,0],[0,0]]}}}}}}"#
+                )
+            }
+        };
+        format!(
+            r#"{{"v":"5.7.0","fr":30,"ip":0,"op":30,"w":200,"h":200,"assets":[],"layers":[
+              {{"ind":1,"ty":4,"nm":"ring","sr":1,
+               "ks":{{"o":{{"a":0,"k":100}},"r":{{"a":0,"k":0}},"p":{{"a":0,"k":[0,0,0]}},
+                     "a":{{"a":0,"k":[0,0,0]}},"s":{{"a":0,"k":[100,100,100]}}}},
+               "ao":0,"ip":0,"op":30,"st":0,"bm":0,
+               "shapes":[{{"ty":"gr","it":[
+                 {},
+                 {},
+                 {{"ty":"fl","c":{{"a":0,"k":[1,0,0,1]}},"o":{{"a":0,"k":100}}}},
+                 {{"ty":"tr","p":{{"a":0,"k":[0,0]}},"a":{{"a":0,"k":[0,0]}},
+                   "s":{{"a":0,"k":[100,100]}},"r":{{"a":0,"k":0}},"o":{{"a":0,"k":100}}}}
+               ]}}]}}
+            ]}}"#,
+            shape(100.0),
+            shape(40.0)
+        )
+    }
+
+    /// A group transform is only identity when every component is *statically*
+    /// identity. Reading an animated one as its default deleted the group and
+    /// the animation with it — `lf30_t0igqye8` rotates a banknote about its own
+    /// anchor, so position, anchor, scale and opacity all looked like nothing
+    /// and the rotation was the only thing that moved.
+    #[test]
+    fn an_animated_transform_is_never_identity() {
+        let animated = ir::Transform {
+            anchor: ir::Property::Static([0.0, 0.0, 0.0]),
+            position: ir::Property::Static([0.0, 0.0, 0.0]),
+            scale: ir::Property::Static([100.0, 100.0, 100.0]),
+            rotation: ir::Property::Animated(ir::Keyframes {
+                frames: vec![frame(0.0, Some(-17.0), None), frame(62.0, Some(0.0), None)],
+            }),
+            opacity: ir::Property::Static(100.0),
+            skew: None,
+            skew_axis: None,
+        };
+        assert!(!transform_is_identity(&animated));
+
+        let mut still = animated.clone();
+        still.rotation = ir::Property::Static(0.0);
+        assert!(transform_is_identity(&still));
     }
 }

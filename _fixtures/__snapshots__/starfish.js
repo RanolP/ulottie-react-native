@@ -4,7 +4,7 @@
 // caps: SHAPE | KEYFRAMES | EASING | SPATIAL | PATH_KF | HOLD | PATH_D | TIMELINE | EXPRESSIONS | LAYER_TX | TEMPLATES | INSTANCES | TIME_REMAP | EXPR_PROPERTY | EXPR_COMP | EXPR_PATH
 
 import { mount } from './runtime/core.js';
-import { makeExpr, fromCompToSurface, lyAnchor, lyAt, lyEffect, toComp } from './runtime/expr.js';
+import { makeExpr, createPath, div, fromCompToSurface, lyAnchor, lyAt, lyEffect, mul, sub, sum, toComp } from './runtime/expr.js';
 import { resolve } from './runtime/kf.js';
 import { expand } from './runtime/tpl.js';
 import { bShape, oShape } from './runtime/ops/shape.js';
@@ -16,30 +16,34 @@ const A1=(x,S)=>{oShape(x,S[0])};
 
 const M =
   '<svg viewBox="0 0 800 600" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="overflow:hidden">' +
-    '<g transform="translate(400,300)">' +
-      '<path fill="#ffd667"/>' +
-    '</g>' +
-    '<g>' +
-      '<g transform="translate(-8.97,38.47)">' +
-        '<g data-t="0"/>' +
+    '<svg width="800" height="600">' +
+      '<g transform="translate(400,300)">' +
+        '<path fill="#ffd667"/>' +
       '</g>' +
-      '<g transform="matrix(1.5,0,0,2.39984,93.34,150.17)">' +
-        '<g transform="translate(-18,-28)">' +
-          '<path d="M12.5,0L-12.5,0C-12.5,0-11.534,10.693,0,11.111C10.726,11.5,12.5,0,12.5,0Z" fill="#3c3b3b"/>' +
+      '<g>' +
+        '<g transform="translate(-8.97,38.47)">' +
+          '<svg width="94" height="71">' +
+            '<g data-t="0"/>' +
+          '</svg>' +
+        '</g>' +
+        '<g transform="matrix(1.5,0,0,2.39984,93.34,150.17)">' +
+          '<g transform="translate(-18,-28)">' +
+            '<path d="M12.5,0L-12.5,0C-12.5,0-11.534,10.693,0,11.111C10.726,11.5,12.5,0,12.5,0Z" fill="#3c3b3b"/>' +
+          '</g>' +
+        '</g>' +
+        '<g transform="translate(113.32,94.03)">' +
+          '<g transform="translate(-18,-28)">' +
+            '<ellipse cx="0" cy="0" rx="9" ry="8" fill="#3c3b3b"/>' +
+          '</g>' +
         '</g>' +
       '</g>' +
-      '<g transform="translate(113.32,94.03)">' +
-        '<g transform="translate(-18,-28)">' +
-          '<ellipse cx="0" cy="0" rx="9" ry="8" fill="#3c3b3b"/>' +
-        '</g>' +
-      '</g>' +
-    '</g>' +
+    '</svg>' +
   '</svg>';
 
-const D = "0gskt10gpvi94q1k80ui1kq6qt7ku7ig8q100gt7gt7ko30gh4gt7gs30kn4gt7kv60io6io6kp70io6io6kv60kn4gt7uk10io6io6uk1uk1io6gt7uk1qq1io6io6uk1it1io6io6uk1sr1io6io6qr40or6gt7gr30io6io640000ql2200oh1kfk1grqi2gks9mini3kjvv3usm1itvj2jrjt2ktrj4npsh2gqncrmmu4rlhm1pukm1hnks1hpj3njmh5iggk1hkvt1soms4lnjs1sph5lrhi1mup1rtfgssi1pubskq1kll1kko6qlqh1rm4knt1vkseqmqbhvj2nl5vkqfjinajg4lsl1rph5mrhi1lup1stfvrsi1qubrkq1jll1jko6plqh1sm4jnt1glsepmqbivj2ol5glqfkinakg4msl184o9u1202kh1020464sh1mi16002000iks90002000iskt10002000ioqh606002000iooj10002000ighn20002000ighn206002000iooj10002000ighn20002000ighn206002000iooj10002000ighn20002000ighn206002000iooj10002000ighn20002000iulq106002000iooj10002000ighn20002000ighn20k100200k1q3000200k1m3000200k1i3000200k1u2000200k1q2000200k1m2000200k1i2000200k1u1000200k1q1000200k1m10i36grou2utjg2026j2n30i36glmg2ingv20i26vgenoh10i36gujp4guil7gktg3kf6oqh60nqh600usm50000rhq5jk30000ssj5qg3i36uhpi1iuhk20i16sq3ms20msi980q8uq1gl2ilhol2upqr80iqgucupqr80iqgucupqr80tqjv5upqr8060882gn3826o7o7000msu9g10o7q9ofqk1kn1uq1sk2mkrq6oju70irhj6oorj20mkrq6oju70mkrq6oju70ijjv5nis60mkrq6oju70mkrq6oju70irhj6oorj20ac0acea0020000gpl6ijg60ghkapqs40000ovq2ruh40gurahup10gpl6ijg60gpl6ijg60opnbvnj50gpl6olta0000gorbnhh10sus2hso40vol6hjg60opnbvnj5082gr3ai36inki3kmi60msq9a0k7m9uq1ok2stgr1tlkt20snkr3tuis10stgr1tlkt20stgr1tlkt20snkr3tuis10ag1eaqrol1hmo50hlp9pvjp10ilmh1hka0qrol1hmo50tpp3luu80mit4nk90hlmh1ika0tpp3luu8082mn4ei36grv7ujt70mvq9g10gltr1gmhm2gkng4unqt4gloi5grvo6gnhu8lshg3ulge0lqpr1hkma0lshg3ulge0lshg3ulge0lqpr1hkma0lshg3ulge0lshg3ulge0lqpr1hkma0ai1eai1eamqj2jvrf0jsoh1shl20000mqj2jvrf0jsoh1shl20000mqj2jvrf0lto9kmp10000lqj2kvrf0lto9kmp10000lqj2kvrf0lto9kmp1082su4i1i36nun3mppg30msq9a0q7iauq1uk2jgveuttn60kks7mguh70jgveuttn60jgveuttn60kks7mguh70ak1eaqfsgr70tpmbspj60mt6jvu70qfsgr70hvoakun50lt6kvu70pfrgr70hvoakun5082kq5m1i36iprv1gpho40msq9a0o7m9uq1sk2gsrg5ilhk60gimv5ighg50gsrg5ilhk60gsrg5ilhk60gimv5ighg50m1o1em1gvneolr10grr4gsnl10000gvneolr10iop2gst50000vunenlr10iop2gst5082qh6q1i36ukvg4iiut20i36ghlicuoqr80i36vufhjt60u1ks6aeaccacacacacas126ig3sg3sj146mh3gi3qi3kj3s166sl3mm3op28qp3iq3sq3kj1so2a6km4sq3mm1s8c6sm4sq3so2e6qt4sq3op1s8g16iu4sq3so2i16ip5sq3qs1s8k16qp5sq3so2m16og6sq3sv1s8o16gh6sq3so2q16un6sq3ui2s8s16mo6sq3oh3u1gp6qp6kh1gm2k78nk1nlqi1jmgi1nlqi1jmgi1rjo8nk1rjo8k78nk1rkvajmgi1rkvajmgi1vidnk1vidmji66gircosmfgsnl1sm7go7sm72424e2kp702oq720000oh1i36ijil1mlnd02it7o12ks7sg320kr7or7us720822mc40oh10qji180uu764qv70";
+const D = "0gskt10gpvi94q1k80ui1kq6qt7ku7ig8q100gt7gt7ko30gh4gt7gs30kn4gt7kv60io6io6kp70io6io6kv60kn4gt7uk10io6io6uk1uk1io6gt7uk1qq1io6io6uk1it1io6io6uk1sr1io6io6qr40or6gt7gr30io6io640000ql2200oh1kfk1grqi2gks9mini3kjvv3usm1itvj2jrjt2ktrj4npsh2gqncrmmu4rlhm1pukm1hnks1hpj3njmh5iggk1hkvt1soms4lnjs1sph5lrhi1mup1rtfgssi1pubskq1kll1kko6qlqh1rm4knt1vkseqmqbhvj2nl5vkqfjinajg4lsl1rph5mrhi1lup1stfvrsi1qubrkq1jll1jko6plqh1sm4jnt1glsepmqbivj2ol5glqfkinakg4msl184o9u1204kh1020664sh1mi16002000iks90002000iskt10002000ioqh606002000iooj10002000ighn20002000ighn206002000iooj10002000ighn20002000ighn206002000iooj10002000ighn20002000ighn206002000iooj10002000ighn20002000iulq106002000iooj10002000ighn20002000ighn20k100200k1q3000200k1m3000200k1i3000200k1u2000200k1q2000200k1m2000200k1i2000200k1u1000200k1q1000200k1m10i36grou2utjg2026j2n30i36glmg2ingv20i26vgenoh10i36gujp4guil7gktg3kf6oqh60nqh600usm50000rhq5jk30000ssj5qg3i36uhpi1iuhk20i16sq3ms20msi980q8uq1gl2ilhol2upqr80iqgucupqr80iqgucupqr80tqjv5upqr8060882gn3826o7o7000msu9g10o7q9ofqk1kn1uq1sk2mkrq6oju70irhj6oorj20mkrq6oju70mkrq6oju70ijjv5nis60mkrq6oju70mkrq6oju70irhj6oorj20ac0acea0020000gpl6ijg60ghkapqs40000ovq2ruh40gurahup10gpl6ijg60gpl6ijg60opnbvnj50gpl6olta0000gorbnhh10sus2hso40vol6hjg60opnbvnj5082gr3ai36inki3kmi60msq9a0k7m9uq1ok2stgr1tlkt20snkr3tuis10stgr1tlkt20stgr1tlkt20snkr3tuis10ag1eaqrol1hmo50hlp9pvjp10ilmh1hka0qrol1hmo50tpp3luu80mit4nk90hlmh1ika0tpp3luu8082mn4ei36grv7ujt70mvq9g10gltr1gmhm2gkng4unqt4gloi5grvo6gnhu8lshg3ulge0lqpr1hkma0lshg3ulge0lshg3ulge0lqpr1hkma0lshg3ulge0lshg3ulge0lqpr1hkma0ai1eai1eamqj2jvrf0jsoh1shl20000mqj2jvrf0jsoh1shl20000mqj2jvrf0lto9kmp10000lqj2kvrf0lto9kmp10000lqj2kvrf0lto9kmp1082su4i1i36nun3mppg30msq9a0q7iauq1uk2jgveuttn60kks7mguh70jgveuttn60jgveuttn60kks7mguh70ak1eaqfsgr70tpmbspj60mt6jvu70qfsgr70hvoakun50lt6kvu70pfrgr70hvoakun5082kq5m1i36iprv1gpho40msq9a0o7m9uq1sk2gsrg5ilhk60gimv5ighg50gsrg5ilhk60gsrg5ilhk60gimv5ighg50m1o1em1gvneolr10grr4gsnl10000gvneolr10iop2gst50000vunenlr10iop2gst5082qh6q1i36ukvg4iiut20i36ghlicuoqr80i36vufhjt60u1ks6aeaccacacacacas126ig3sg3sj146mh3gi3qi3kj3s166sl3mm3op28qp3iq3sq3kj1so2a6km4sq3mm1s8c6sm4sq3so2e6qt4sq3op1s8g16iu4sq3so2i16ip5sq3qs1s8k16qp5sq3so2m16og6sq3sv1s8o16gh6sq3so2q16un6sq3ui2s8s16mo6sq3oh3u1gp6qp6kh1gm2k78nk1nlqi1jmgi1nlqi1jmgi1rjo8nk1rjo8k78nk1rkvajmgi1rkvajmgi1vidnk1vidmji66gircosmfgsnl1sm7go7sm72424e2kp702oq720000oh1i36ijil1mlnd02it7o12ks7sg320kr7or7us720c22mc40oh10qji180uu764qv70";
 
 const TPL = [
-  '<g><g transform="translate(61.29,55.56)"><g mask="url(#m0--c)"><g transform="translate(-18,-28)"><ellipse cx="0" cy="0" rx="9" ry="8" fill="#3c3b3b"/></g></g></g><defs><mask id="m0--c" mask-type="luminance"><path fill="#fff" fill-rule="evenodd"/></mask></defs></g>',
+  '<g><g transform="translate(61.29,55.56)"><g clip-path="url(#k0--c)"><g transform="translate(-18,-28)"><ellipse cx="0" cy="0" rx="9" ry="8" fill="#3c3b3b"/></g></g></g><defs><clipPath id="k0--c"><path clip-rule="nonzero"/></clipPath></defs></g>',
 ];
 
 const E = [
@@ -50,7 +54,6 @@ const E = [
     return $bm_rt;
   },
   function(value, thisLayer, thisProperty, frame, ctx) {
-    const { sum, sub, mul, div } = ctx;
     const time = frame / ctx.frameRate;
     const frameDuration = 1 / ctx.frameRate;
     const nearestKey = thisProperty.nearestKey;
@@ -67,7 +70,6 @@ const E = [
     return $bm_rt;
   },
   function(value, thisLayer, thisProperty, frame, ctx) {
-    const { createPath } = ctx;
     var $bm_rt;
     var nullLayerNames = [lyAt(thisLayer, 13), lyAt(thisLayer, 12), lyAt(thisLayer, 11), lyAt(thisLayer, 10), lyAt(thisLayer, 9), lyAt(thisLayer, 8), lyAt(thisLayer, 7), lyAt(thisLayer, 6), lyAt(thisLayer, 5), lyAt(thisLayer, 4)];
     var origPath = thisProperty;

@@ -10,12 +10,14 @@ const A0=(x,S)=>{oTransform(x,S[0])};
 
 const M =
   '<svg viewBox="0 0 512 512" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="overflow:hidden">' +
-    '<g>' +
-      '<ellipse cx="204" cy="169" rx="76.5" ry="76.5" fill="#b53147"/>' +
-    '</g>' +
+    '<svg width="512" height="512">' +
+      '<g>' +
+        '<ellipse cx="204" cy="169" rx="76.5" ry="76.5" fill="#b53147"/>' +
+      '</g>' +
+    '</svg>' +
   '</svg>';
 
-const D = "0gskt10gopq30q100u70000600gt7gt7qp20gt7gt700mj5gt7mgi560o7gfmt1kdih2in3mt1kd2424op1il1mgg56u6o7i8ococgh1m7ococ00200k3u4m5s62g7";
+const D = "0gskt10gopq30q100u70000600gt7gt7qp20gt7gt700mj5gt7mgi560o7gfmt1kdih2in3mt1kd2424op1il1mgg56u6o7i8ococgh1m7ococ00202k3u4m5s62g7";
 
 export const markup = M;
 export const init = (c, o) => mount(M, D, P0, A0, c, o);

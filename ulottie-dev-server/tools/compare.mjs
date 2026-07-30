@@ -376,9 +376,23 @@ function outline(svgText) {
     }
     const own = /\stransform="([^"]*)"/.exec(attrs);
     const here = own ? mul(ctm, parseTransform(own[1])) : ctm;
+    // Hiding a layer is a *style* in both renderers — lottie-web writes
+    // `elem.style.display = 'none'` and so does this runtime — so reading only
+    // the presentation attribute counted every hidden layer as painted. That
+    // was worth 29 phantom elements on `lf20_GsFUFN` and read as a missing
+    // feature until the styles were checked.
+    const style = /\sstyle="([^"]*)"/.exec(attrs)?.[1] ?? '';
+    const css = (prop) =>
+      new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`, 'i').exec(style)?.[1].trim();
     const op = /\sopacity="([^"]*)"/.exec(attrs);
-    const gone = /\sdisplay="none"/.test(attrs) || /\svisibility="hidden"/.test(attrs);
-    const here_a = gone ? 0 : alpha * (op ? Number(op[1]) : 1);
+    const gone = /\sdisplay="none"/.test(attrs)
+      || /\svisibility="hidden"/.test(attrs)
+      || css('display') === 'none'
+      || css('visibility') === 'hidden';
+    const styleOpacity = css('opacity');
+    const here_a = gone
+      ? 0
+      : alpha * (op ? Number(op[1]) : 1) * (styleOpacity ? Number(styleOpacity) : 1);
 
     if (!hidden && here_a > 0 && PAINTED.has(open)) {
       const raw = {};
@@ -407,7 +421,54 @@ function outline(svgText) {
       if (NONRENDERING.has(open)) hidden++;
     }
   }
-  return lines;
+  return coalescePaints(lines);
+}
+
+/**
+ * One mark, however many elements each renderer spent on it.
+ *
+ * lottie-web builds a `<path>` per *style* and writes every shape sharing that
+ * style into it, so a filled-and-stroked shape is two elements: a fill with no
+ * stroke, then a stroke with `fill-opacity="0"`. The compiler emits one element
+ * carrying both. Both draw the same picture, and left alone the difference
+ * costs two rows of the diff for every shape in the file — which is the whole
+ * budget on anything real, so the actual divergence never gets printed.
+ *
+ * Merged only when the two are adjacent, the same tag, over the same box, and
+ * genuinely complementary: one paints no stroke, the other no fill. Two marks
+ * that happen to share a box keep their own rows.
+ */
+function coalescePaints(lines) {
+  const attr = (l, k) => l.attrs.find((a) => a.startsWith(`${k}=`))?.slice(k.length + 1);
+  const paints = (l, k) => {
+    const v = attr(l, k);
+    return v !== undefined && v !== 'none' && v !== '0';
+  };
+  const out = [];
+  for (const l of lines) {
+    const prev = out[out.length - 1];
+    const sameMark = prev
+      && prev.painted && l.painted
+      && prev.tag === l.tag
+      && prev.depth === l.depth
+      && String(prev.box) === String(l.box)
+      && ((paints(prev, 'fill') && !paints(prev, 'stroke')
+           && paints(l, 'stroke') && !paints(l, 'fill'))
+        || (paints(prev, 'stroke') && !paints(prev, 'fill')
+           && paints(l, 'fill') && !paints(l, 'stroke')));
+    if (!sameMark) {
+      out.push(l);
+      continue;
+    }
+    // Keep one row carrying both halves, in the order the diff renders them.
+    const merged = new Map();
+    for (const a of [...prev.attrs, ...l.attrs]) {
+      const k = a.slice(0, a.indexOf('='));
+      if (!merged.has(k) || merged.get(k).endsWith('=none')) merged.set(k, a);
+    }
+    prev.attrs = [...merged.values()];
+  }
+  return out;
 }
 
 // --- 2×3 affine, as `[a, b, c, d, e, f]` (the SVG matrix() order).

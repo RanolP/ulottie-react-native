@@ -15,6 +15,12 @@ use std::collections::HashMap;
 
 use super::{Arg, Binding, Caps, Effect, EffectParam, LayerRecord, Planner, op};
 
+/// After Effects' `ADBE Fill`. The numbering is Lottie's, and lottie-web keys
+/// its own filter table on it — see `registerEffect(21, SVGFillFilter)`.
+const EFFECT_FILL: u32 = 21;
+/// An effect parameter holding a colour.
+const EFFECT_PARAM_COLOR: u32 = 2;
+
 /// Clock a subtree runs on.
 #[derive(Clone, Copy)]
 pub enum TimeCtx {
@@ -158,22 +164,19 @@ impl Planner<'_> {
                 // sibling, authored where it is drawn. So each gets its chain
                 // privately, under the mask rather than over it — which is
                 // also why neither can join a shared wrapper afterwards.
-                nodes[i].outer = self.wrap_ancestors(layers, &nodes, i);
+                nodes[i].outer = self.wrap_ancestors(layers, &nodes, i, nodes[i].outer);
                 chained[i] = true;
             }
             let id = match masks.get(&(j, tt)) {
                 Some(id) => id.clone(),
                 None => {
-                    if !nested && !matte_source[j] {
-                        nodes[j].outer = self.wrap_ancestors(layers, &nodes, j);
-                    }
-                    let id = self.matte_mask(nodes[j].outer, tt);
+                    let content = self.matte_content(layers, &mut nodes, j, nested);
+                    let id = self.matte_mask(content, tt);
                     masks.insert((j, tt), id.clone());
                     id
                 }
             };
             nodes[i].mounted = self.masked(nodes[i].outer, &id);
-            matte_source[j] = true;
         }
         // A matte is out of the picture whether or not anything ended up
         // masked by it — the reference renderer moves every `td` layer into
@@ -310,13 +313,59 @@ impl Planner<'_> {
         }
     }
 
-    /// Wrap layer `i` in one `<g>` per ancestor, each carrying that ancestor's
-    /// transform, outermost last. Returns the outermost wrapper.
+    /// The subtree a `<mask>` is built from, for the layer that mattes.
+    ///
+    /// A layer carrying `td` is out of the picture entirely, so the mask can
+    /// simply take it. A layer merely *named* by another's `tp` is **also
+    /// drawn** — lottie-web only moves a `td` layer into `<defs>`, and reaches
+    /// anything else from the mask with `<use>`, which is the only way one
+    /// subtree can be in two places in a document.
+    ///
+    /// Hiding every matte source cost a whole picture: the krrt map animation
+    /// has a layer that is both, masked by the `td` layer above it and the
+    /// matte for two waves below, and taking it out of the picture took the map
+    /// with it.
+    ///
+    /// The `<use>` carries the ancestors' transforms on wrappers of its own so
+    /// the mask lands in the same space the matte was authored in; the layer's
+    /// own group keeps its own transform and stays where the tree puts it.
+    fn matte_content(
+        &mut self,
+        layers: &[data::Layer],
+        nodes: &mut [LayerNode],
+        j: usize,
+        nested: bool,
+    ) -> usize {
+        if layers[j].td.is_some() {
+            if !nested {
+                nodes[j].outer = self.wrap_ancestors(layers, nodes, j, nodes[j].outer);
+            }
+            return nodes[j].outer;
+        }
+        let id = self.next_id("u");
+        self.set(nodes[j].outer, "id", id.clone());
+        let u = self.el("use");
+        self.set(u, "href", format!("#{id}"));
+        if nested {
+            u
+        } else {
+            self.wrap_ancestors(layers, nodes, j, u)
+        }
+    }
+
+    /// Wrap `node` in one `<g>` per ancestor of layer `i`, each carrying that
+    /// ancestor's transform, outermost last. Returns the outermost wrapper.
     ///
     /// Used where a layer cannot join a shared wrapper — see the matte pass.
-    fn wrap_ancestors(&mut self, layers: &[data::Layer], nodes: &[LayerNode], i: usize) -> usize {
+    fn wrap_ancestors(
+        &mut self,
+        layers: &[data::Layer],
+        nodes: &[LayerNode],
+        i: usize,
+        node: usize,
+    ) -> usize {
         let dead: Vec<bool> = nodes.iter().map(|n| n.dead).collect();
-        let mut node = nodes[i].outer;
+        let mut node = node;
         for &a in ancestors(layers, &dead, i).iter().rev() {
             let w = self.el("g");
             self.emit_ancestor_transform(w, layers, nodes, a);
@@ -392,8 +441,31 @@ impl Planner<'_> {
 
         let outer = self.el("g");
         let has_content = layer.ty != 3;
+        // A precomp layer is clipped to the composition it references.
+        // lottie-web gives every `ty: 0` layer a `clipPath` of `w × h`, so
+        // anything authored outside that frame does not draw; nothing here did,
+        // and `lf20_GsFUFN` stages a character just off the left edge of its
+        // 1200×800 precomp — we drew the part After Effects cropped.
+        //
+        // A nested `<svg>` is that rect with no id to mint: `overflow: hidden`
+        // is the UA default for `svg:not(:root)`, and a viewport at 0,0 shifts
+        // no coordinates. A `<clipPath>` would need a document-unique id, which
+        // is what drags `runtime/ids.js` into every animation with a precomp —
+        // measured at +425 B on `precomp_star_circle`, for the same rectangle.
+        //
+        // It goes on the content group, *inside* the layer transform, because
+        // the frame is in the precomp's own coordinates. Same rule that sends a
+        // track matte to an untransformed wrapper, read the other way round.
+        let clip = match (layer.ty, layer.sw, layer.sh) {
+            (0, Some(w), Some(h)) if w > 0 && h > 0 => Some((w, h)),
+            _ => None,
+        };
         let inner = if has_content {
-            let n = self.el("g");
+            let n = self.el(if clip.is_some() { "svg" } else { "g" });
+            if let Some((w, h)) = clip {
+                self.set(n, "width", svg::n(w as f64));
+                self.set(n, "height", svg::n(h as f64));
+            }
             self.els[outer].children.push(n);
             n
         } else {
@@ -488,6 +560,10 @@ impl Planner<'_> {
             && !inert
         {
             self.emit_masks(inner, masks, slot)?;
+        }
+
+        if has_content && !inert {
+            self.emit_effects(inner, layer);
         }
 
         match layer.ty {
@@ -929,6 +1005,63 @@ impl Planner<'_> {
         id
     }
 
+    /// Layer effects that draw, as an SVG filter on the layer's content.
+    ///
+    /// Only `ADBE Fill` (`ty: 21`) so far, which is the whole of `lf20_W14Z1y`:
+    /// fourteen layers of coloured squares that After Effects paints a single
+    /// flat grey. Without it the squares kept their authored colours — a
+    /// visibly wrong picture that the pixel gate scored at 0.45%, comfortably
+    /// inside tolerance, because six small squares are not many pixels.
+    ///
+    /// It is one `feColorMatrix` that discards RGB and floods the constant
+    /// instead, scaling alpha by the effect's own opacity — the same matrix
+    /// `SVGFillFilter` writes, so the two agree to the digit. `support::scan`
+    /// reports every other renderable effect type rather than dropping it.
+    fn emit_effects(&mut self, target: usize, layer: &data::Layer) {
+        let Some(effects) = &layer.ef else { return };
+        for e in effects {
+            if e.ty != EFFECT_FILL {
+                continue;
+            }
+            // Parameters are addressed by position, the way `SVGFillFilter`
+            // reads `effectElements[2]` and `[6]`; a match name is friendlier
+            // and survives a reordering neither renderer would tolerate anyway.
+            let color = e
+                .ef
+                .iter()
+                .find(|p| p.ty == EFFECT_PARAM_COLOR)
+                .and_then(|p| p.c);
+            let Some(c) = color else { continue };
+            let opacity = e
+                .ef
+                .iter()
+                .find(|p| p.nm.as_deref() == Some("Opacity"))
+                .and_then(|p| p.v)
+                .unwrap_or(1.0);
+
+            let id = self.next_id("f");
+            let f = self.el("filter");
+            self.set(f, "id", id.clone());
+            let m = self.el("feColorMatrix");
+            self.set(m, "type", "matrix");
+            self.set(m, "color-interpolation-filters", "sRGB");
+            self.set(
+                m,
+                "values",
+                format!(
+                    "0 0 0 0 {} 0 0 0 0 {} 0 0 0 0 {} 0 0 0 {} 0",
+                    svg::n(c[0]),
+                    svg::n(c[1]),
+                    svg::n(c[2]),
+                    svg::n(opacity)
+                ),
+            );
+            self.els[f].children.push(m);
+            self.add_def(f);
+            self.set(target, "filter", format!("url(#{id})"));
+        }
+    }
+
     /// Put `target` under a mask.
     ///
     /// The mask goes on a wrapper, never on `target` itself. `target` carries
@@ -971,12 +1104,45 @@ impl Planner<'_> {
         id
     }
 
+    /// Layer masks, as a `<clipPath>` where one will do and a `<mask>` where it
+    /// will not.
+    ///
+    /// lottie-web picks the same way, in `MaskElement`: `clipPath` until some
+    /// mask is subtractive, inverted or not fully opaque, and only then a
+    /// luminance `mask`. The two are not interchangeable, and using a mask
+    /// throughout cost real coverage — a `<mask>` with no `maskUnits` takes the
+    /// default `objectBoundingBox` region, which is the *masked element's*
+    /// bounding box plus 10%, so a mask reaching past its content is quietly
+    /// cropped to it. The avatars in `krrt-9272cb41` came out with a visible
+    /// ring of background where the clip should have run to the edge.
+    ///
+    /// A clip has no region and no soft edge, which is exactly the semantics of
+    /// an additive opaque mask. Several contours in one `<clipPath>` **union**;
+    /// they are separate `<path>` children for that reason and must stay
+    /// separate — merging them into one `d` would let opposite windings cancel
+    /// under `clip-rule="nonzero"`, which is why `merge_paths` does not walk in
+    /// here.
     fn emit_masks(&mut self, target: usize, masks: &[data::LayerMask], slot: u32) -> Result<()> {
         let (cw, ch) = (self.payload.c.w as f64, self.payload.c.h as f64);
-        let id = self.next_id("m");
-        let mask = self.el("mask");
-        self.set(mask, "id", id.clone());
-        self.set(mask, "mask-type", "luminance");
+        // Bodymovin writes `"o": {"a":0,"k":100}` on a mask that is simply
+        // opaque, so the test is the *value* and not the field's presence —
+        // lottie-web spells it `properties[i].o.k !== 100`. Anything less than
+        // fully opaque, or animated, needs real alpha and so needs a mask.
+        let opaque = |o: &Option<InlineProp>| match o {
+            None => true,
+            Some(InlineProp::Static(Value::Scalar(v))) => (*v - 100.0).abs() < 1e-6,
+            _ => false,
+        };
+        let hard = masks
+            .iter()
+            .all(|m| (m.m == "a" || m.m == "n") && !m.inv && opaque(&m.o));
+
+        let id = self.next_id(if hard { "k" } else { "m" });
+        let holder = self.el(if hard { "clipPath" } else { "mask" });
+        self.set(holder, "id", id.clone());
+        if !hard {
+            self.set(holder, "mask-type", "luminance");
+        }
 
         let has_subtract = masks.iter().any(|m| m.m == "s" || m.inv);
         if has_subtract {
@@ -984,14 +1150,18 @@ impl Planner<'_> {
             self.set(bg, "width", svg::n(cw));
             self.set(bg, "height", svg::n(ch));
             self.set(bg, "fill", "#fff");
-            self.els[mask].children.push(bg);
+            self.els[holder].children.push(bg);
         }
 
         for m in masks {
             let subtract = m.m == "s" || m.inv;
             let p = self.el("path");
-            self.set(p, "fill", if subtract { "#000" } else { "#fff" });
-            self.set(p, "fill-rule", "evenodd");
+            if hard {
+                self.set(p, "clip-rule", "nonzero");
+            } else {
+                self.set(p, "fill", if subtract { "#000" } else { "#fff" });
+                self.set(p, "fill-rule", "evenodd");
+            }
             let shape = self.classify(&m.pt, 2);
             match &shape {
                 Prop::Path(path) => {
@@ -1002,11 +1172,15 @@ impl Planner<'_> {
                     self.bind(op::SHAPE, p, vec![Arg::Prop(shape), Arg::Null], slot);
                 }
             }
-            self.els[mask].children.push(p);
+            self.els[holder].children.push(p);
         }
 
-        self.add_def(mask);
-        self.set(target, "mask", format!("url(#{id})"));
+        self.add_def(holder);
+        self.set(
+            target,
+            if hard { "clip-path" } else { "mask" },
+            format!("url(#{id})"),
+        );
         Ok(())
     }
 
@@ -1124,6 +1298,16 @@ impl Planner<'_> {
                 let Some(shape) = self.payload.s.get(prim.s as usize).cloned() else {
                     return Ok(());
                 };
+                // A shape no fill and no stroke reaches is not drawn at all.
+                // lottie-web writes a shape's `d` into its *styles'* elements
+                // and creates none of its own, so a shape with no style is
+                // simply never painted — where SVG would default `fill` to
+                // black. After Effects exports one of these per composition as
+                // an unpainted `Frame` rectangle, and `lf30_jrfgebuy` drew five
+                // solid black boxes over its own artwork.
+                if !self.paints(&prim.y) {
+                    return Ok(());
+                }
                 let trim = prim
                     .tm
                     .and_then(|id| self.payload.y.get(id as usize).cloned());
@@ -1395,6 +1579,22 @@ impl Planner<'_> {
     // -----------------------------------------------------------------------
     // Styles
     // -----------------------------------------------------------------------
+
+    /// Whether any of these styles puts paint on the canvas. A trim is a
+    /// modifier, not a paint, so a shape carrying only one draws nothing.
+    fn paints(&self, ids: &[u32]) -> bool {
+        ids.iter().any(|id| {
+            matches!(
+                self.payload.y.get(*id as usize),
+                Some(
+                    Style::Fill { .. }
+                        | Style::GradientFill { .. }
+                        | Style::Stroke { .. }
+                        | Style::GradientStroke { .. }
+                )
+            )
+        })
+    }
 
     fn emit_styles(&mut self, el: usize, ids: &[u32], slot: u32) {
         // The reference renderer applies styles back-to-front, so for any one

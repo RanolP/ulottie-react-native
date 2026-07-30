@@ -10,15 +10,17 @@ const A0=(x,S)=>{oTransform(x,S[0])};
 
 const M =
   '<svg viewBox="0 0 1080 1080" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="overflow:hidden">' +
-    '<rect width="1080" height="1080" fill="#ffffff"/>' +
-    '<g>' +
-      '<g transform="translate(128.98,64.97)">' +
-        '<rect x="-206.975" y="-206.975" width="413.95" height="413.95" rx="206.975" ry="206.975" fill="#63d3bf"/>' +
+    '<svg width="1080" height="1080">' +
+      '<rect width="1080" height="1080" fill="#ffffff"/>' +
+      '<g>' +
+        '<g transform="translate(128.98,64.97)">' +
+          '<rect x="-206.975" y="-206.975" width="413.95" height="413.95" rx="206.975" ry="206.975" fill="#63d3bf"/>' +
+        '</g>' +
       '</g>' +
-    '</g>' +
+    '</svg>' +
   '</svg>';
 
-const D = "0gmqe0gpst10q100qh10000c00gt7gt7qp200gt7gp70kn4gt7gt70mj5gt7qp20mj5gt7uk10mj5gt7msq5e0k1o2s3g5k6o7sgopg1inngt1sgopg1ihlp8sgopg1inngt1sgopg1ihlp8sgopg1inngt1sgopg1ihlp8sgopg1inngt12426260lmom3000000000000000000000lmom3i34upvu3spsk8mgi5i1k1i2q2u3s4k5k6i7q7g5g5o3m6g5g5g5g5o3m6g5g5g5g5o3m6g5g588888a8800202s4mbubog12sg1";
+const D = "0gmqe0gpst10q100qh10000c00gt7gt7qp200gt7gp70kn4gt7gt70mj5gt7qp20mj5gt7uk10mj5gt7msq5e0k1o2s3g5k6o7sgopg1inngt1sgopg1ihlp8sgopg1inngt1sgopg1ihlp8sgopg1inngt1sgopg1ihlp8sgopg1inngt12426260lmom3000000000000000000000lmom3i34upvu3spsk8mgi5i1k1i2q2u3s4k5k6i7q7g5g5o3m6g5g5g5g5o3m6g5g5g5g5o3m6g5g588888a8800204s4mbubog12sg1";
 
 export const markup = M;
 export const init = (c, o) => mount(M, D, P0, A0, c, o);

@@ -752,10 +752,28 @@ pub fn plan_with(
 
     let roots = p.build_layer_forest(&payload.l, build::TimeCtx::Root)?;
 
+    // The composition clips to its own frame, and the root `<svg>` cannot do
+    // it. `overflow:hidden` there clips to the *viewport* — the box the module
+    // was mounted in — while `viewBox` and `preserveAspectRatio` map the
+    // composition into part of that box. Letterbox a 667×508 animation into a
+    // square and the bands above and below are inside the viewport and outside
+    // the composition, so a layer overhanging the frame draws in them:
+    // `lf20_qbvfmu8h` renders 555 composition units tall instead of 508.
+    //
+    // lottie-web wraps its whole tree in `<g clip-path="…">` over a `w × h`
+    // rect. A nested `<svg>` is the same rectangle with no id to mint, and it
+    // has to be one wrapper above everything rather than an attribute per
+    // layer, because the frame is in composition space — outside every layer's
+    // own transform.
+    let frame = p.el("svg");
+    p.set(frame, "width", svg::n(payload.c.w as f64));
+    p.set(frame, "height", svg::n(payload.c.h as f64));
+    p.els[frame].children = roots;
+
     // Definitions (masks, gradients) live at the end of the root: SVG resolves
     // `url(#…)` references regardless of document order, and putting them last
     // keeps the visible tree's element indices stable and small.
-    let mut root_children = roots;
+    let mut root_children = vec![frame];
     if !p.defs.is_empty() {
         let defs = std::mem::take(&mut p.defs);
         let node = p.el("defs");
@@ -907,6 +925,11 @@ pub(crate) struct Planner<'a> {
     id_seq: usize,
 }
 
+/// Containers whose children describe a region rather than draw one. A `<path>`
+/// in here is a contour of a shape, not a mark on the canvas.
+const NON_RENDERING: &[&str] = &["defs", "clipPath", "mask", "symbol", "pattern", "marker"];
+
+
 impl<'a> Planner<'a> {
     // -- arena --------------------------------------------------------------
 
@@ -948,12 +971,98 @@ impl<'a> Planner<'a> {
 
     // -- pruning ------------------------------------------------------------
 
+
     /// Drop groups that carry nothing: no attributes, no bindings, or no
     /// children at all. A `<g>` that only ever existed to hold an identity
     /// transform costs a DOM node and a layout box for nothing.
     fn prune_all(&mut self, roots: &mut Vec<usize>) {
         let spliced = self.prune_list(std::mem::take(roots));
+        self.merge_paths(&spliced);
         *roots = spliced;
+    }
+
+    /// Shapes that share a style are one path, because the fill rule applies
+    /// *across* them.
+    ///
+    /// lottie-web builds a `<path>` per **style** and writes every shape using
+    /// that style into the one element; this compiler builds one per shape. For
+    /// a hole — two contours wound opposite ways — that is the entire
+    /// difference: in one element the non-zero rule cancels the inner contour,
+    /// in two the inner one is filled solid. Type is full of them, and
+    /// `krrt-7ccaf912`'s wordmark came out as eight solid blobs with every
+    /// counter filled in. The pixel gate scored that **0.03%**, because the
+    /// letters are small and odiff's antialiasing pass discounts thin marks —
+    /// it was found by looking at it.
+    ///
+    /// The test is deliberately syntactic: adjacent siblings, both plain
+    /// `<path>`, every attribute equal but `d`, and neither carrying a binding
+    /// (`pinned`). Under exactly those conditions the two are the same paint in
+    /// the same space at adjacent z, so concatenating their `d` changes nothing
+    /// a renderer can see except the winding — which is the point. It runs
+    /// after pruning, so paths that a dropped identity `<g>` was separating
+    /// merge too.
+    ///
+    /// A shape whose geometry or paint is written per frame keeps its own
+    /// element. Merging those means one binding owning a *slice* of an
+    /// attribute, which the wire has no room for; the case that matters is
+    /// static, because a hole is drawn once.
+    fn merge_paths(&mut self, roots: &[usize]) {
+        for &id in roots {
+            // Contours inside a clip or a mask **union**; they are separate
+            // children for that reason. Concatenating them would put them under
+            // one fill rule and let opposite windings cancel, which is the
+            // opposite of what a two-contour mask means.
+            if NON_RENDERING.contains(&self.els[id].tag) {
+                continue;
+            }
+            let kids = std::mem::take(&mut self.els[id].children);
+            self.merge_paths(&kids);
+            let mut out: Vec<usize> = Vec::with_capacity(kids.len());
+            for k in kids {
+                match out.last().copied() {
+                    Some(prev) if self.same_paint(prev, k) => {
+                        let more = self.attr(k, "d").unwrap_or_default();
+                        if let Some(a) = self.els[prev].attrs.iter_mut().find(|(n, _)| n == "d") {
+                            a.1.push_str(&more);
+                        }
+                    }
+                    _ => out.push(k),
+                }
+            }
+            self.els[id].children = out;
+        }
+    }
+
+    /// Whether `b` can be folded into `a`: the same `<path>` in every respect
+    /// but its `d`, and neither a binding target.
+    fn same_paint(&self, a: usize, b: usize) -> bool {
+        let (x, y) = (&self.els[a], &self.els[b]);
+        if x.tag != "path" || y.tag != "path" || x.pinned || y.pinned {
+            return false;
+        }
+        if x.instance.is_some() || y.instance.is_some() || !x.children.is_empty() {
+            return false;
+        }
+        fn keyed(e: &El) -> Vec<(&str, &str)> {
+            let mut v: Vec<(&str, &str)> = e
+                .attrs
+                .iter()
+                .filter(|(n, _)| n != "d")
+                .map(|(n, s)| (n.as_str(), s.as_str()))
+                .collect();
+            v.sort_unstable();
+            v
+        }
+        // A path with no `d` draws nothing and has nothing to contribute.
+        self.attr(a, "d").is_some() && self.attr(b, "d").is_some() && keyed(x) == keyed(y)
+    }
+
+    fn attr(&self, id: usize, name: &str) -> Option<String> {
+        self.els[id]
+            .attrs
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.clone())
     }
 
     fn prune_list(&mut self, list: Vec<usize>) -> Vec<usize> {

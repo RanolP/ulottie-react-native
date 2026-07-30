@@ -463,6 +463,12 @@ pub struct Effect {
     pub nm: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mn: Option<String>,
+    /// After Effects' effect type. Only expressions used to read effects, and
+    /// they look them up by name — the planner needs the type, because that is
+    /// what says whether the effect *draws*. lottie-web keys its filter table
+    /// on the same number.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub ty: u32,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub ef: Vec<EffectParam>,
 }
@@ -479,6 +485,11 @@ pub struct EffectParam {
     pub v: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub p: Option<InlineProp>,
+    /// A static colour parameter (`ty: 2`), which is a vector and so cannot
+    /// travel in `v`. Only the static case: an animated effect colour is
+    /// reported rather than frozen.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub c: Option<[f64; 4]>,
 }
 
 #[derive(Debug, Clone, Serialize)]

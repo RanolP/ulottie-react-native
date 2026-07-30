@@ -6,7 +6,9 @@
 // Fully static after compilation: no runtime, no data table, no frame loop.
 const M =
   '<svg viewBox="0 0 512 512" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="overflow:hidden">' +
-    '<ellipse cx="256" cy="256" rx="128" ry="128" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#fffa48" stroke-width="30"/>' +
+    '<svg width="512" height="512">' +
+      '<ellipse cx="256" cy="256" rx="128" ry="128" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#fffa48" stroke-width="30"/>' +
+    '</svg>' +
   '</svg>';
 
 export const markup = M;

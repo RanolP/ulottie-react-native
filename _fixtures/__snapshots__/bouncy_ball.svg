@@ -1,5 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="overflow:hidden">
-  <g transform="matrix(1,0,0,1,31,-63)">
-    <ellipse cx="204" cy="169" rx="76.5" ry="76.5" fill="#b53147"/>
-  </g>
+  <svg width="512" height="512">
+    <g transform="matrix(1,0,0,1,31,-63)">
+      <ellipse cx="204" cy="169" rx="76.5" ry="76.5" fill="#b53147"/>
+    </g>
+  </svg>
 </svg>

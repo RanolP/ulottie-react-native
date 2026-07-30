@@ -106,6 +106,21 @@ pub fn matrix_str(m: &[f64; 6]) -> String {
 }
 
 /// Lottie stores colour channels as 0..=1 floats. SVG wants 0..=255 ints.
+///
+/// **This rounds and lottie-web truncates** — `bmFloor(v * 255)` in
+/// `SVGElementsRenderer`, though it rounds gradient stops, in
+/// `GradientProperty`. Truncating was tried and reverted, because it does not
+/// survive the wire: a channel is quantized to three decimals like every other
+/// value, and `0.196078…` — which is `50/255`, what bodymovin writes — becomes
+/// `0.196`, whose 255ths are 49.98. Rounding absorbs that (the quantization
+/// error is at most 0.13 of a colour step, against a half-step of slack);
+/// flooring reads one step low, and the baked document and the runtime then
+/// disagree about a colour they were both given. Matching lottie-web exactly
+/// means colours reaching the wire as bytes, not as 0..1 decimals.
+///
+/// The difference is one unit in one channel, only for a colour the source
+/// authored with fewer decimals than `n/255`, and it moves no pixel odiff
+/// scores: measured across the 33-file corpus, flooring changed nothing.
 pub fn channel(c: f64) -> u8 {
     (c.clamp(0.0, 1.0) * 255.0).round() as u8
 }

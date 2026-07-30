@@ -1,8 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1080" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="overflow:hidden">
-  <rect width="1080" height="1080" fill="#ffffff"/>
-  <g transform="matrix(.4,0,0,.4,492.16,842.45)">
-    <g transform="translate(128.98,64.97)">
-      <rect x="-206.975" y="-206.975" width="413.95" height="413.95" rx="206.975" ry="206.975" fill="#63d3bf"/>
+  <svg width="1080" height="1080">
+    <rect width="1080" height="1080" fill="#ffffff"/>
+    <g transform="matrix(.4,0,0,.4,492.16,842.45)">
+      <g transform="translate(128.98,64.97)">
+        <rect x="-206.975" y="-206.975" width="413.95" height="413.95" rx="206.975" ry="206.975" fill="#63d3bf"/>
+      </g>
     </g>
-  </g>
+  </svg>
 </svg>

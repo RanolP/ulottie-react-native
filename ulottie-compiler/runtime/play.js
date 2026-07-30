@@ -7,6 +7,13 @@
 //
 // Everything else a generated module does is generated.
 
+// Frames crossing the API are 0-based within `[ip, op)`, the way lottie-web
+// counts them: `goToAndStop(n, true)` renders `ip + n` there, and every caller
+// in this repo pairs the two calls as though they named the same picture. The
+// clock below stays absolute because that is what `apply` takes, so `ip` is
+// added on the way in and taken off on the way out. It only shows on an
+// animation whose `ip` is not 0 — `lf20_tWzLYe` starts at 3.0000001 and was
+// being compared three frames out of step, which read as a rendering bug.
 export function player(container, svg, markup, apply, fr, ip, op, opt) {
   const span = op - ip || 1;
   let raf = 0;
@@ -44,7 +51,7 @@ export function player(container, svg, markup, apply, fr, ip, op, opt) {
       }
     }
     apply(frame);
-    fire('frame', frame);
+    fire('frame', frame - ip);
   }
 
   function halt() {
@@ -59,7 +66,7 @@ export function player(container, svg, markup, apply, fr, ip, op, opt) {
     totalFrames: span,
     frameRate: fr,
     duration: span / fr,
-    get currentFrame() { return frame; },
+    get currentFrame() { return frame - ip; },
     get isPlaying() { return !!raf; },
     get loop() { return loop; },
     set loop(v) { loop = v; loops = 0; },
@@ -73,10 +80,10 @@ export function player(container, svg, markup, apply, fr, ip, op, opt) {
     },
     pause() { halt(); return p; },
     stop() { halt(); frame = ip; apply(ip); return p; },
-    seek(f) { frame = f; apply(f); return p; },
-    goToFrame(f) { halt(); frame = f; apply(f); return p; },
+    seek(f) { frame = ip + f; apply(frame); return p; },
+    goToFrame(f) { halt(); frame = ip + f; apply(frame); return p; },
     goToAndStop(f) { return p.goToFrame(f); },
-    goToAndPlay(f) { frame = f; apply(f); return p.play(); },
+    goToAndPlay(f) { frame = ip + f; apply(frame); return p.play(); },
     on(name, fn) { (subs[name] || (subs[name] = [])).push(fn); return p; },
     off(name, fn) {
       const l = subs[name];

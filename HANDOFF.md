@@ -15,7 +15,7 @@ faster than lottie-web (~75 KB gzipped) while matching it pixel for pixel.
 ## Gates
 
 ```
-cargo nextest run --features eval                    # 157 unit / frame-snapshot / size-budget / hygiene tests
+cargo nextest run --features eval                    # 165 unit / frame-snapshot / size-budget / hygiene tests
 cd ulottie-dev-server && yarn test                   # 192 tests: 29 output snapshots, 66 pixel-diff, 12 perf
 cargo run --release --bin ulottie-compiler -- <fixture> --document   # standalone SVG
 cargo run --release --bin ulottie-dev-server -- sizes
@@ -806,31 +806,62 @@ top-level declaration unreachable from its exports.
 
 | Fixture | before | after | |
 |---|---|---|---|
-| rectangle | 5.6K | **392B** | 14× |
-| ellipse | 5.6K | **394B** | 14× |
-| fill | 5.7K | **411B** | 14× |
-| trim_path | 7.0K | **517B** | 14× |
-| bouncy_ball | 5.7K | **2.3K** | 2.5× |
-| boucing-ball | 5.9K | **2.7K** | 2.2× |
-| precomp_star_circle | 6.0K | **3.2K** | 1.9× |
+| rectangle | 5.6K | **401B** | 14× |
+| ellipse | 5.6K | **406B** | 14× |
+| fill | 5.7K | **421B** | 14× |
+| trim_path | 7.0K | **516B** | 14× |
+| bouncy_ball | 5.7K | **1.4K** | 4.1× |
+| boucing-ball | 5.9K | **1.9K** | 3.1× |
+| precomp_star_circle | 6.0K | **2.4K** | 2.5× |
 | lottie-logo | 8.3K | **4.7K** | 1.8× |
-| starfish | 11.0K | **8.3K** | 1.3× |
-| lights | 10.3K | **7.3K** | 1.4× |
-| ripple | 11.6K | 11.7K → **12.6K** | — (see below) |
+| starfish | 11.0K | **6.4K** | 1.7× |
+| lights | 10.3K | **6.0K** | 1.7× |
+| ripple | 11.6K | 11.7K → **12.3K** | — (see below) |
 
-The first four are **fully static after compilation** — markup plus an inert player
-handle, no runtime, no data table, no animation frame. `trim_path`'s trim range is
-constant, so the trimmed outline itself is resolved at compile time.
+#### What the clipping costs
 
-The whole runtime, every capability on, is **11.7K gz** — but no animation loads
-all of it, and four of the ops in it are the four geometry kinds, of which any
-one animation uses one or two. Extern modules average ~1.2K gz and import only
-their own slice.
+Clipping every composition and every precomp to its own frame is new output for
+new correctness, so it is worth knowing the price rather than assuming it.
+Against the same compiler without it, over the eleven fixtures:
 
-**`ripple` is still the outlier** (extern 5.5K → 3.8K gz): the planner expands
-each of its 46 precomp uses into the markup, so its 1020 elements — not its
-animation — set its size. Instancing would take it to 2.4K; it is declined on
-frame time, below.
+| | document raw | module gzip |
+|---|---|---|
+| clipping | **+2135** | **+137** |
+
+Most fixtures pay one `<svg width="…" height="…">` — 36 raw, 10–14 gzipped.
+`precomp_star_circle` pays eleven (+396 raw, +25 gz) and `ripple` forty-seven
+(+1718 raw, +25 gz), because a precomp gets one each. `trim_path` is 282 bytes
+*smaller* than before, which is `merge_paths` folding its four separately
+stroked contours into one path.
+
+Three ways to bring it down were built and reverted, at the cost of markup
+nobody could read. Recorded so the next attempt starts further along:
+
+* **Dropping `width`/`height`.** A nested `<svg>` defaults both to `100%` of
+  the current viewport, and the root's `viewBox` has already made that the
+  composition rect — verified in Chrome, where a bare nested `<svg>` clips a
+  667×508 composition to exactly 304 of 400 panel pixels and an unclipped one
+  bleeds to all 400. Correct, and −25 raw per clip. But `<svg>` with nothing on
+  it reads as a mistake, and the doubled `<svg><svg>` a same-sized precomp
+  produces reads as a bug.
+* **Dropping a clip that reproduces the viewport it sits in**, which genuinely
+  clips nothing — `precomp_star_circle` went from eleven to eight. Sound: the
+  flag has to be cleared by anything that *moves*, so what survives is the
+  precomps under a rotation, where a 512×512 frame really is a different 512
+  square. Worth having, but it only pays once the bare form above does.
+* **Folding a transform-only `<g>` into its only child.** 231 of the corpus's
+  971 document elements are single-child groups, 186 of them in `ripple`; it
+  took the tree to 809 and `trim_path` to 307 bytes below where it started.
+  Four things it must refuse, each a bug otherwise: two transforms on one
+  element (`writes_transform` has to name `LAYER_TX` as well as `TRANSFORM` and
+  `TRANSLATE`, and `lights` came apart at the geometry gate when it did not);
+  any compositing attribute on the group; a child carrying `mask`, whose
+  wrapper is untransformed *on purpose*; and a nested `<svg>`, since a transform
+  on one is SVG 2.
+
+`clip-path: view-box` on the root was tried first and does not work — for the
+root `<svg>` the reference box is its CSS border box, so it clips to the mount
+box the way `overflow` already does. The nested `<svg>` is not avoidable.
 
 #### Precomp instancing: automatic, and currently declining
 
@@ -1062,6 +1093,10 @@ Run `yarn workspace ulottie-dev-server vitest run tests/perf.spec.ts` to reprodu
 `init(container, options)` returns a player with `play/pause/stop/seek/goToFrame/
 goToAndStop/goToAndPlay`, `loop/speed/direction/currentFrame/isPlaying/duration/
 totalFrames/frameRate`, `on/off` for `frame`/`loop`/`complete`, and `destroy()`.
+
+**Frames are 0-based within `[ip, op)`, the way lottie-web counts them** —
+`goToFrame(n)` is its `goToAndStop(n, true)`, and `totalFrames` is `op - ip` for
+both. Only an animation whose `ip` is not 0 can tell the difference.
 `options` takes `autoplay` (`'auto'` by default — plays unless the OS asks for
 reduced motion), `loop`, and `hydrate` for attaching to server-rendered markup.
 
@@ -1138,9 +1173,11 @@ six bugs, and every one of them was invisible to the fixture suite:
   merges the axes interpolated linearly — reading both handles off the segment's
   *starting* keyframe is the pairing Lottie writes.
 - **Track mattes were paired by adjacency**, ignoring `tp`. A matte can name its
-  layer by `ind`, need not be next to it, and can matte several.
+  layer by `ind`, need not be next to it, and can matte several. (It also need
+  not be hidden — see the third corpus below for the other half of that.)
 - **A `td` layer was drawn when nothing matted it.** It is a matte; it is never
-  in the picture.
+  in the picture. The converse is not true, and cost a whole illustration — see
+  the third corpus.
 
 Image layers, image assets and keyframed gradient ramps were implemented rather
 than degraded; see above.
@@ -1148,10 +1185,238 @@ than degraded; see above.
 `car-13` is the 0.74%: a luma matte inside a twice-instanced precomp that also
 carries a layer mask. Its labels sit a pixel or two off. Ruled out so far: it
 is not instancing (identical in all three build variants), and it is not the
-layer masks themselves (dropping them takes it to 8.4%). The untested lead is
-that **lottie-web clips every precomp layer to its own `w × h`** — eight
-`<clipPath>`s in its render against none in ours — which this compiler does not
-implement at all.
+layer masks themselves (dropping them takes it to 8.4%). The untested lead was
+that **lottie-web clips every precomp layer to its own `w × h`**, which this
+compiler did not implement at all — it does now, see below.
+
+### And what a thirty-three-file corpus found after that
+
+The second sweep is jlottie's demo list: thirty-three animations off
+lottiefiles, none of them chosen to be easy — 1.8 MB of flipbook cartoon, a
+2 MB image sequence, a 2 682 × 1 509 illustration, a waving-flag mesh, a
+fourteen-layer effect stack. **Twenty-three of thirty-three diverged**, one of
+them by 34%. All thirty-three match now, twenty-five of them at exactly 0.000%,
+and the worst residual is 0.09% of antialiased edges and one-unit colour.
+
+The six URLs jlottie itself has commented out were fetched too, and are worth
+keeping: five of them now match, and the sixth is the one open correctness item
+below (`lf20_yoatyllj`).
+
+They came down to six bugs, and the first one is most of the story:
+
+- **Shape groups painted in the wrong order.** Lottie authors an `it` array
+  top-first; lottie-web's `searchShapes` walks it *backwards* and appends as it
+  goes, so `it[0]` is appended last and paints on top. The compiler read the
+  list forwards. Any group whose children overlap came out inside-out —
+  `lf20_hewaysm0` is a white heart and a red disc, and the disc covered the
+  heart. **This one fix took the corpus from 23 failures to 3.**
+
+  Eleven fixtures never caught it because their groups do not overlap: it is
+  the two-groups-in-one-group shape that fails, and every fixture is either one
+  geometry per group or laid out side by side. `group_items_paint_in_reverse_it_order`
+  is the unit test that would have.
+
+- **A fill reached every shape in its group.** The same backwards walk decides
+  which items a style covers: a fill applies to the paths *above* it and to
+  nothing below, because below is where the walk has already been. The encoder
+  collected every style in a first pass and handed all of them to every shape.
+  Same for a trim. And an inherited style outranked the group's own, which is
+  the wrong way round — an inner group's element is appended after the outer
+  style's, so the inner one paints on top.
+
+- **A group transform with only an animated component was elided.**
+  `transform_is_identity` read each component with `static_*(…).unwrap_or(default)`,
+  so an *animated* rotation read as 0, an animated scale as 100, an animated
+  position as the origin. `lf30_t0igqye8` rotates a banknote about its own
+  anchor: position equals anchor, scale is 100, opacity is 100, and the only
+  thing that moves is the rotation. Every static test passed, the group was
+  flattened, and the notes never turned.
+
+- **Nothing was clipped to the composition.** The root `<svg>` carries
+  `overflow:hidden`, which clips to the *viewport* — the box the module is
+  mounted in — while `viewBox` and `preserveAspectRatio` map the composition
+  into part of it. Letterbox a 667 × 508 animation into a square and the bands
+  above and below are inside the viewport and outside the composition, so a
+  layer overhanging the frame draws in them: `lf20_qbvfmu8h` rendered 555
+  composition units tall instead of 508. lottie-web wraps its whole tree in
+  `<g clip-path="…">` over a `w × h` rect.
+
+- **`ADBE Fill` was dropped silently**, and it is fourteen of `lf20_W14Z1y`'s
+  layers: coloured squares After Effects paints a single flat grey. Implemented
+  as the one `feColorMatrix` lottie-web writes. Every *other* effect type that
+  draws is now reported by `support::scan` as `layer-effect` rather than
+  vanishing.
+
+- **A shape reached by no paint was drawn black.** lottie-web writes a shape's
+  `d` into its *styles'* elements and creates none of its own, so a shape with
+  no fill and no stroke is never painted — where SVG defaults `fill` to black.
+  After Effects exports one of these per composition as an unpainted `Frame`
+  rectangle. `lf30_jrfgebuy` drew five solid black boxes over its own artwork,
+  at 20%.
+
+Two things that are **not** bugs, recorded so they are not chased again:
+
+- **lottie-web does not implement merge paths either.** Its modifier table is
+  `tm`, `pb`, `rp`, `rd`, `zz`, `op` — no `mm`. Ten files in this corpus carry
+  one, all ten match, and implementing it would make this compiler differ from
+  the thing it is diffed against.
+- **lottie-web truncates colour channels and this rounds them** —
+  `bmFloor(v * 255)` against `Math.round`, though lottie-web itself rounds
+  gradient stops. Truncating was tried and reverted: a channel is quantized to
+  three decimals on the wire like every other value, and `0.196078…` — which is
+  `50/255`, what bodymovin writes — comes back as `0.196`, whose 255ths are
+  49.98. Rounding absorbs that; flooring reads one step low and the baked
+  document and the runtime stop agreeing. Matching lottie-web exactly needs
+  colours on the wire as bytes. It is worth one unit in one channel and moved no
+  odiff score anywhere in the corpus.
+
+#### The player counted frames from `ip` and lottie-web counts from 0
+
+`goToAndStop(n, true)` renders `ip + n` in lottie-web; `goToFrame(n)` rendered
+frame `n` here. Every call site in this repo — `compare.mjs`, `visual.spec.ts`,
+`perf.spec.ts`, the demo — already pairs the two as though they named the same
+picture, and `totalFrames` was already `op - ip`, so the convention was
+inconsistent with itself. It only shows on an animation whose `ip` is not 0:
+`lf20_tWzLYe` starts at 3.0000001 and was being compared three frames out of
+step, which read as a rendering bug and scored 2.1%. The clock stays absolute
+because that is what `apply` takes; `ip` is added on the way in and taken off on
+the way out.
+
+#### Two blind spots in `compare.mjs` itself
+
+Both made the structural diff argue about things that were not there:
+
+- **Hidden layers counted as painted.** `outline()` tested the `display="none"`
+  *attribute*; both renderers hide a layer with `elem.style.display = 'none'`.
+  Worth 29 phantom elements on `lf20_GsFUFN`, which read as a missing feature.
+  It now reads `style` for `display`, `visibility` and `opacity` too.
+- **One mark, two elements.** lottie-web builds a `<path>` per *style* and
+  writes every shape sharing it into that one element, so a filled-and-stroked
+  shape is a fill element plus a stroke element; the compiler emits one carrying
+  both. Left alone that is two diff rows per shape, which is the whole 24-row
+  budget on anything real — the actual divergence never got printed.
+  `coalescePaints` merges an adjacent, same-box, complementary pair.
+
+  What it does **not** merge is lottie-web putting *several shapes* into one
+  style element across a nested group, so a painted-element count of
+  "lottie-web 54, ulottie 63" is still expected on a file whose groups hold more
+  than one path. Siblings are merged in the compiler now — see below, because
+  that turned out not to be cosmetic at all.
+
+### A third corpus, and what `td` versus `tp` actually mean
+
+Three production assets from Karrot: two logo animations and a
+1.2 MB map carrying nine embedded PNGs. All three are within tolerance now; the
+map's residual is a deliberate divergence, recorded below.
+
+Two of the three were reported by eye, not by the gate — filled counters in a
+wordmark that odiff scored at 0.03%. That is the shared-style rule, two sections
+down.
+
+**A layer named by someone's `tp` is drawn *as well as* matting.** The two
+fields answer different questions: `td` says "this layer is a matte, never draw
+it", `tp` says "the layer I am masked by is that one". After Effects' newer
+track-matte model uses a layer that is not hidden, so the two are independent —
+and the map animation has one layer that is both, masked by the `td` layer above
+it and the matte for two ripples below. Hiding every matte source took the map
+out of the picture entirely.
+
+A subtree can only be in one place in a document, so the mask reaches a
+still-drawn source by reference: an id on the layer's own group and a `<use>` in
+the mask, wrapped in its ancestors' transforms so it lands in the space the
+matte was authored in. That is what lottie-web's `getMatte` does too. It works
+in all three delivery modes — `ids.js` rewrites `href` because it walks *every*
+attribute rather than a list of the id-bearing ones, which is the reason that
+scan was written wide. `tests/track_matte.rs` pins both halves, including that
+the `<use>`'s href resolves to an element that is actually in the picture.
+
+**The residual on that file is lottie-web's own bug, and it is deliberate.**
+lottie-web writes the same `<use href="#…">` but only ever puts that id on a
+layer with `td` — `createContainerElements` sets it inside `if (this.data.td)`,
+still true in 5.13.0. So for a `tp` source without `td` the reference dangles,
+the alpha mask is empty, and the layer it was meant to shape disappears.
+lottie-web's own comment above `getMatte` calls the path "not a common case …
+for backward compatibility". The two `Wave` ripples in this animation are
+therefore invisible there and drawn here, which is ~10% on the two sampled
+frames where a wave is live and 0.0–0.5% on the other seven. Reproducing it
+would mean emitting a dangling `url(#…)` on purpose and dropping a visual the
+author put in the file; this renders what After Effects means instead. It is the
+one place in this corpus where matching lottie-web and rendering the animation
+are not the same thing.
+
+#### Shapes that share a style are one path
+
+This is the rule that took longest to see, because the pixel gate cannot see it
+at all.
+
+lottie-web builds a `<path>` per **style** and writes every shape using that
+style into the one element. This compiler built one per shape. For a hole — two
+contours wound opposite ways — that is the entire difference: in one element the
+non-zero rule cancels the inner contour, in two the inner one is filled solid.
+
+It reached the corpus three ways, in ascending order of how obvious it was:
+
+```
+lottie-web   1 × <path d="M374.53,92.39 C…            (one element, two contours)
+ulottie      2 × <path d="M-374.53,-92.39 L905.47,-92.39 L905.47,627.61 L-374.53,627.61 Z"
+                 <path d="M-374.53,627.61 L905.47,627.61 L905.47,-92.39 L-374.53,-92.39 Z"
+```
+
+That is `lf20_yoatyllj`, one of the six URLs jlottie's own demo has commented
+out — and now the reason is known. Its two rectangles cancel to *nothing*, so
+two elements painted a white rectangle over sixty-five marks and the book, bulb,
+pencil, planet and balloon all disappeared. 4%.
+
+`krrt-7ccaf912`'s wordmark is the same rule at the other end of the scale: every
+counter in the logo text filled in, and the hole in the bag handle with them.
+**The pixel gate scored that 0.03%** — the letters are small and odiff's antialiasing
+pass discounts thin marks — so it passed every automated check in this repo and
+was found by a person looking at the render. It is the sharpest example yet of
+what the [pixel gate's blind spot](#the-pixel-gate-has-a-blind-spot) costs.
+
+The rest of the corpus hid it because two shapes with the *same* fill differ
+only where the winding cancels: a hole filled in with its own colour is
+invisible unless something shows through it.
+
+**What landed** is `Planner::merge_paths`, and it is deliberately syntactic:
+adjacent siblings, both plain `<path>`, every attribute equal but `d`, and
+neither carrying a binding. Under exactly those conditions the two are the same
+paint in the same space at adjacent z, so concatenating their `d` changes
+nothing a renderer can see except the winding — which is the point. It runs
+after pruning, so paths an identity `<g>` was separating merge too.
+
+Three things it does **not** do, each for a reason:
+
+* **A bound path keeps its element.** Merging shapes whose geometry or paint is
+  written per frame means a binding owning a *slice* of an attribute, which the
+  wire has no room for. A hole is drawn once, so the static case is the case.
+* **A native `<rect>`/`<ellipse>` does not join a `d`.** lottie-web turns every
+  primitive into path data; this keeps the native element, which is smaller and
+  rounder. No file in three corpora authors a counter as a rectangle, and
+  `native_rect_and_ellipse_do_not_merge` will fail loudly if that stops being
+  true.
+* **It does not walk into a `<clipPath>` or a `<mask>`.** Contours in there
+  **union**; they are separate children for that reason, and concatenating them
+  would put them under one fill rule and let opposite windings cancel — the
+  opposite of what a two-contour mask means.
+
+lottie-web also flattens group transforms into the path data, so it merges
+shapes across nested groups where this cannot. That is the part still missing,
+and no file in these corpora needs it.
+
+#### A mask is a `<clipPath>` unless it needs to be a `<mask>`
+
+`MaskElement` picks `clipPath` until some mask is subtractive, inverted or not
+fully opaque, and only then a luminance `mask`. The test is on the opacity's
+*value* — bodymovin writes `"o": {"a":0,"k":100}` on a mask that is simply
+opaque, so checking whether the field is present answers "needs alpha" for
+almost every mask in existence.
+
+Matching that is not cosmetic. A `<mask>` with no `maskUnits` takes the default
+`objectBoundingBox` region, which is the *masked element's* bounding box plus
+10% — so a mask reaching past its content is quietly cropped to it. A clip has
+no region and no soft edge, which is exactly the semantics of an additive opaque
+mask, and it is cheaper.
 
 ---
 
@@ -1160,10 +1425,14 @@ implement at all.
 Ordered by value. The recon that produced these numbers is worth re-reading before
 starting any of them.
 
-0. **Clip precomp layers to their own bounds.** lottie-web gives every `ty: 0`
-   layer a `clipPath` of `data.w × data.h`. Nothing here does, so a precomp
-   whose content overflows draws the overflow. It is the open lead on
-   `car-13`, and the only feature the comparison found that is still missing.
+0. **The rest of the layer effects.** `ADBE Fill` is implemented; `support::scan`
+   now reports `tint`, `stroke`, `tritone`, `pro levels`, `drop shadow`,
+   `matte3`, `gaussian blur` and `transform` as `layer-effect` instead of
+   dropping them. Each is one filter primitive in lottie-web
+   (`elements/svgElements/effects/`), and `emit_effects` is the place. Only the
+   static colour case is on the wire so far — an animated effect parameter is
+   left out of the payload rather than frozen, which is what keeps a moving
+   colour from baking wrong.
 
 1. **Compile the expression bodies.** Names are resolved, the proxy is gone and
    dead bodies are swept, but what survives still runs as JavaScript through
@@ -1178,9 +1447,11 @@ starting any of them.
    a wire flag marking a property frame-invariant so the runtime evaluates it
    once at mount instead of every frame.
 3. **Make silent feature drops loud.** `can_encode` never rejects: blend modes,
-   repeaters, merge paths, hold keyframes, skew, `sr`, auto-orient and 3D
-   rotation are all dropped without a word. Wanted: a diagnostics list on
-   stderr plus a sidecar JSON, with hard rejection behind `--strict`.
+   repeaters, hold keyframes, skew, `sr`, auto-orient and 3D rotation are all
+   dropped without a word. (Merge paths and drawing layer effects are reported
+   now. Merge paths is not a divergence — lottie-web has no `mm` modifier
+   either.) Wanted: a diagnostics list on stderr plus a sidecar JSON, with hard
+   rejection behind `--strict`.
 4. **Trim `m=2` (individually) is ignored**, and nonzero trim offsets on open paths
    clamp where lottie-web wraps. No fixture covers either — add one first.
 5. **Pause when offscreen.** There is no IntersectionObserver or
@@ -1215,6 +1486,25 @@ starting any of them.
   at t=55..70, gives it `st: 55`, and still means composition time. The one
   place it survives is a precomp handing a clock to its children. Applying it
   the "obvious" way breaks four files at once.
+- **A shape group's `it` array is top-first, so the walk that reads it runs
+  backwards.** That single fact decides three things, and all three were wrong:
+  which item paints on top (`it[0]` does), which items a fill or a trim covers
+  (only the ones above it), and whether an inner style beats an inherited one
+  (it does). `encode_shape_tree_with` is one reverse pass for exactly this
+  reason — do not split it back into a collect-then-emit pair.
+- **A group transform is identity only when every component is *statically*
+  identity.** `static_*(…).unwrap_or(default)` on an animated property answers
+  the default, which reads as "nothing happens here" and deletes the group.
+- **`td` takes a layer out of the picture; `tp` does not.** A layer named by
+  another's `tp` mattes *and* draws, so the mask reaches it with `<use>` rather
+  than swallowing it. Only `td` means "never draw this".
+- **Every composition and every precomp layer is clipped to its own `w × h`,
+  with a nested `<svg>`.** `overflow:hidden` on the root clips to the viewport,
+  not to the viewBox, and the two differ the moment the mount box is not the
+  composition's aspect ratio. A nested `<svg>` is the same rectangle a
+  `<clipPath>` would give without a document-unique id — which is what would
+  drag `runtime/ids.js` into every animation with a precomp, measured at +425 B
+  on `precomp_star_circle` for one rectangle.
 - **Both easing handles live on the keyframe a segment starts at** — `o`
   leaving it, `i` arriving at the next. Reading `i` off the following keyframe
   finds nothing there and silently interpolates linearly.

@@ -1,5 +1,9 @@
 // Colour serialization. Lottie stores channels as 0..1 floats plus a separate
 // 0..100 style opacity; SVG wants one paint string.
+//
+// `+ 0.5 | 0` rounds where lottie-web's `bmFloor` truncates. That is deliberate
+// and `svg::channel` in the compiler says why: a channel is quantized to three
+// decimals on the wire, and rounding is what survives it.
 
 export function css(c, o) {
   const r = (c[0] * 255 + 0.5) | 0;

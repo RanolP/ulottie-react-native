@@ -40,6 +40,7 @@ pub enum Feature {
     EvenOddFill,
     AnimatedGradient,
     ImageAsset,
+    LayerEffect,
 }
 
 impl Feature {
@@ -69,6 +70,7 @@ impl Feature {
             EvenOddFill => "even-odd-fill",
             AnimatedGradient => "animated-gradient",
             ImageAsset => "image-asset",
+            LayerEffect => "layer-effect",
         }
     }
 
@@ -98,6 +100,7 @@ impl Feature {
             EvenOddFill => "the fill uses the non-zero rule",
             AnimatedGradient => "the gradient ramp is read as static and may render as NaN",
             ImageAsset => "the image has no source to draw from",
+            LayerEffect => "the layer is drawn without the effect",
         }
     }
 
@@ -126,6 +129,7 @@ impl Feature {
             EvenOddFill,
             AnimatedGradient,
             ImageAsset,
+            LayerEffect,
         ];
         ALL.iter().copied().find(|f| f.name() == s)
     }
@@ -147,6 +151,22 @@ pub struct Finding {
 /// Shape types the backend renders. Anything else is reported.
 const KNOWN_SHAPES: &[&str] = &[
     "gr", "sh", "el", "rc", "sr", "tr", "fl", "st", "gf", "gs", "tm",
+];
+
+/// Effect types that change the picture — the ones lottie-web builds an SVG
+/// filter for, from its `registerEffect` table. Everything else in an `ef` list
+/// is a slider or a checkbox that only an expression reads, and reporting those
+/// would bury the real findings.
+const RENDERING_EFFECTS: &[u64] = &[
+    20, // tint
+    21, // fill — implemented
+    22, // stroke
+    23, // tritone
+    24, // pro levels
+    25, // drop shadow
+    28, // matte3
+    29, // gaussian blur
+    35, // transform
 ];
 
 /// Walk a Lottie document and report everything the compiler would ignore.
@@ -268,6 +288,27 @@ fn scan_layers(layers: &[Value], where_: &str, out: &mut Vec<Finding>) {
                     push(out, Feature::MaskOpacity, &at);
                 }
             }
+        }
+
+        // Effects that draw. Most of an `ef` list is inert — sliders and
+        // checkboxes an expression reads — and reporting those would bury the
+        // list in noise, so this asks only about the types lottie-web hands to
+        // a filter. `ADBE Fill` is implemented; the rest change the picture and
+        // were being dropped without a word.
+        for e in l
+            .get("ef")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+        {
+            let Some(ty) = e.get("ty").and_then(Value::as_u64) else {
+                continue;
+            };
+            if !RENDERING_EFFECTS.contains(&ty) || ty == 21 {
+                continue;
+            }
+            let nm = e.get("nm").and_then(Value::as_str).unwrap_or("");
+            push(out, Feature::LayerEffect, &format!("{at} effect `{nm}`"));
         }
 
         if let Some(shapes) = l.get("shapes").and_then(Value::as_array) {

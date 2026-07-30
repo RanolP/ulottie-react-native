@@ -43,6 +43,12 @@ fn embedded(name: &str) -> String {
 /// inlines whether or not it remaps anything (~85 B), and track mattes give
 /// `lottie-logo` a `<mask>` and an inversion `<filter>` it previously did not
 /// draw at all. Both are new output for new capability, not drift.
+///
+/// Raised 2026-07-31 for `precomp_star_circle`: a precomp layer is now clipped
+/// to the composition it references, the way lottie-web clips one, and that is
+/// `<svg width="512" height="512">` on each of its ten. +362 B raw and **0 B
+/// gzipped** — ten identical strings are what LZ77 is for — so the budget is
+/// the only place it shows at all.
 const BUDGETS: &[(&str, usize)] = &[
     // Fully static: markup plus an inert player, no runtime at all.
     ("rectangle", 700),
@@ -59,7 +65,7 @@ const BUDGETS: &[(&str, usize)] = &[
     ("boucing-ball", 4_400),
     // `lottie-logo` moves little because two thirds of it is baked markup,
     // which the generator does not touch.
-    ("precomp_star_circle", 8_800),
+    ("precomp_star_circle", 9_700),
     ("lottie-logo", 14_000),
     ("starfish", 22_500),
     ("lights", 20_500),

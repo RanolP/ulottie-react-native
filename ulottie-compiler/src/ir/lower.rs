@@ -1062,6 +1062,9 @@ fn lower_effects(module: &mut Module, ef: Option<&serde_json::Value>) -> Result<
     Ok(out)
 }
 
+/// An effect parameter holding a colour, in After Effects' numbering.
+const PARAM_COLOR: u32 = 2;
+
 fn lower_effect_param(module: &mut Module, p: &serde_json::Value) -> Result<Option<EffectParam>> {
     let Some(obj) = p.as_object() else {
         return Ok(None);
@@ -1071,6 +1074,11 @@ fn lower_effect_param(module: &mut Module, p: &serde_json::Value) -> Result<Opti
     let ty = obj.get("ty").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     let index = obj.get("ix").and_then(|v| v.as_u64()).map(|n| n as u32);
     let value = match obj.get("v") {
+        // A colour parameter is a vector, and `AstProperty` accepts it — so
+        // reading it as a scalar succeeded and produced a number that meant
+        // nothing. It has to take the raw path or `ADBE Fill` never sees the
+        // colour that is the whole of the effect.
+        Some(v_obj) if ty == PARAM_COLOR => EffectValue::Other(v_obj.clone()),
         Some(v_obj) => {
             // Try to interpret as a scalar Property; otherwise stash raw.
             if let Ok(prop) = serde_json::from_value::<AstProperty>(v_obj.clone()) {

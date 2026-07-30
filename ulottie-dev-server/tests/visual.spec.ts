@@ -416,7 +416,10 @@ describe('an animated mask keeps animating', () => {
       for (let f = 0; f <= anim.totalFrames; f += 4) {
         anim.goToFrame(f);
         await new Promise(r => requestAnimationFrame(() => r(undefined)));
-        for (const p of ulottie.querySelectorAll('mask path')) {
+        // Either holder: an additive, opaque, non-inverted mask compiles to a
+        // `<clipPath>`, the way lottie-web's `MaskElement` picks between the
+        // two. Which one it is says nothing about whether the shape moves.
+        for (const p of ulottie.querySelectorAll('mask path, clipPath path')) {
           seen.add(p.getAttribute('d') ?? '');
         }
       }

@@ -18,15 +18,21 @@ const A3=(x,S)=>{oEllipse(x,S[0]);oFill(x,S[1]);oStroke(x,S[2])};
 
 const M =
   '<svg viewBox="0 0 512 512" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="overflow:hidden">' +
-    '<g data-t="2"/>' +
-    '<g data-t="1"/>' +
+    '<svg width="512" height="512">' +
+      '<svg width="512" height="512">' +
+        '<g data-t="2"/>' +
+      '</svg>' +
+      '<svg width="512" height="512">' +
+        '<g data-t="1"/>' +
+      '</svg>' +
+    '</svg>' +
   '</svg>';
 
-const D = "0gskt10gskt100q1000qt1kv10i20000o7000o7000o7000o7000o7000o7000o7000o7200o7400o7600o7800o7a00o7c00o7e00o7g100o7000o70amgg540o7gg2gg200680s3m6o70gaga0680s3m6o70g5g500p524222maqaqbucie02me20000o7g10000o7000o7000o7000o7000o7000o7000o7000o7mgg540o700kr5kr524gg2gg22422gl1gm1i38oo1kn2km5gt764s3o7oc02422kn1go1i38keqj1kj2gt70oc660s3o70c02422op1kq1oq16om1so1or120000o760sfgg1020sg104ms1us10k124000g3g120s2i140m2k160g2m180q1o1a0k1q1c0es1e08u1g140g20";
+const D = "0gskt10gskt100q1000qt1kv10i20000o7000o7000o7000o7000o7000o7000o7000o7200o7400o7600o7800o7a00o7c00o7e00o7g100o7000o70amgg540o7gg2gg200680s3m6o70gaga0680s3m6o70g5g500p524222maqaqbucie02me20000o7g10000o7000o7000o7000o7000o7000o7000o7000o7mgg540o700kr5kr524gg2gg22422gl1gm1i38oo1kn2km5gt764s3o7oc02422kn1go1i38keqj1kj2gt70oc660s3o70c02422op1kq1oq16om1so1or120000o760sfgg1020sg104ms1us10k12a000m4g120g4i140o3k160g3m180o2o1a0g2q1c0o1s1e0g1u1g144g20";
 
 const TPL = [
   '<g><path fill="#fffa48" stroke-linecap="round" stroke-linejoin="round" stroke="#ff5704" stroke-width="6"/></g>',
-  '<g><g transform="matrix(-.70711,-.70711,.70711,-.70711,256,618.04)"><g data-t="0"/></g><g transform="matrix(0,-1,1,0,0,512)"><g data-t="0"/></g><g transform="matrix(.70711,-.70711,.70711,.70711,-106.04,256)"><g data-t="0"/></g><g transform="matrix(-1,0,0,-1,512,512)"><g data-t="0"/></g><g transform="matrix(-.70711,.70711,-.70711,-.70711,618.04,256)"><g data-t="0"/></g><g transform="matrix(0,1,-1,0,512,0)"><g data-t="0"/></g><g transform="matrix(.70711,.70711,-.70711,.70711,256,-106.04)"><g data-t="0"/></g><g data-t="0"/></g>',
+  '<g><g transform="matrix(-.70711,-.70711,.70711,-.70711,256,618.04)"><svg width="512" height="512"><g data-t="0"/></svg></g><g transform="matrix(0,-1,1,0,0,512)"><svg width="512" height="512"><g data-t="0"/></svg></g><g transform="matrix(.70711,-.70711,.70711,.70711,-106.04,256)"><svg width="512" height="512"><g data-t="0"/></svg></g><g transform="matrix(-1,0,0,-1,512,512)"><svg width="512" height="512"><g data-t="0"/></svg></g><g transform="matrix(-.70711,.70711,-.70711,-.70711,618.04,256)"><svg width="512" height="512"><g data-t="0"/></svg></g><g transform="matrix(0,1,-1,0,512,0)"><svg width="512" height="512"><g data-t="0"/></svg></g><g transform="matrix(.70711,.70711,-.70711,.70711,256,-106.04)"><svg width="512" height="512"><g data-t="0"/></svg></g><svg width="512" height="512"><g data-t="0"/></svg></g>',
   '<g><ellipse stroke-linecap="round" stroke-linejoin="round"/></g>',
 ];
 
