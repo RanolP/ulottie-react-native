@@ -16,7 +16,8 @@ faster than lottie-web (~75 KB gzipped) while matching it pixel for pixel.
 
 ```
 cargo nextest run --features eval                    # 165 unit / frame-snapshot / size-budget / hygiene tests
-cd ulottie-dev-server && yarn test                   # 192 tests: 29 output snapshots, 66 pixel-diff, 12 perf
+cd ulottie-dev-server && yarn test                   # 255 tests: 37 output snapshots, 3 coverage, 90 pixel-diff, 12 perf
+node ulottie-dev-server/tools/census.mjs --coverage   # what the fixtures do not exercise
 cargo run --release --bin ulottie-compiler -- <fixture> --document   # standalone SVG
 cargo run --release --bin ulottie-dev-server -- sizes
 node ulottie-dev-server/tools/compare.mjs <any.json> --dom            # any file, vs lottie-web
@@ -1143,6 +1144,62 @@ two SVG trees at the worst frame. Making that readable is most of the tool.
   eighty characters are the PNG header makes every frame of a sequence look
   like the same one.
 
+### The fixture set is 28 of 59, and the gate says so
+
+Eleven fixtures were the whole standing gate for a long time. An external corpus
+of forty-two animations then found **nine** compiler bugs they could not — two
+in code the fixtures ran on every commit, the rest in code nothing ran at all.
+That second kind is now visible rather than a matter of opinion.
+
+`census::FEATURES` is a closed vocabulary of every construct worth a fixture,
+and `_fixtures/coverage.json` is the gap, one line and one reason each.
+`tests/coverage.spec.ts` asserts the two are exactly complementary, in both
+directions:
+
+* a construct with no fixture and no entry **fails** — so adding a check to the
+  census, or a capability to the compiler, cannot quietly go untested;
+* an entry that is now covered **fails** — so the list only ever shrinks, and
+  writing the fixture is what deletes the line.
+
+It imports `census.mjs` rather than growing a second scanner, because two
+implementations of "what does this file use" would drift and the point is to be
+able to trust the number.
+
+```
+node ulottie-dev-server/tools/census.mjs --coverage
+```
+
+prints where it stands, split by what the gap actually means. **28 of 59**, and
+the 31 uncovered are 8 implemented, 5 dropped silently and 18 rejected. The
+interesting column is the first one — implemented code with no fixture is
+exactly where this session's expensive bugs lived.
+
+Four fixtures came out of rlottie to close six of it — see
+`_fixtures/PROVENANCE.md` for how they were picked, which matters more than
+which they are. All 93 rlottie examples were diffed against lottie-web; 42
+render at exactly 0.000% with no `--allow`; those were set-covered against the
+gap, and each survivor re-checked at fifteen frames *and* inspected to confirm
+the feature is present in **both** DOMs.
+
+That last step is the whole method. `worm.json` renders at 0.000% across twelve
+frames and covers `stroke:dash` — and lottie-web writes `stroke-dasharray=" 10"`
+where this compiler writes nothing. Adopting it would have recorded a missing
+feature as a passing test. It is the third time this session a perfect pixel
+score has been wrong, so treat 0.000% as a necessary condition and not a
+sufficient one.
+
+`gradient_radial` earned its keep before it was committed: it failed
+`output_hygiene` on the first run, because `emit_gradient` set `Caps::GRADIENT`
+before knowing whether the handles move. A gradient that never moves bakes into
+the markup completely, so every animation with any gradient at all was shipping
+`bGradient` and `oGradient` unreachable. The capability is set by the binding
+now.
+
+The 18 rejections want a different fixture: one that asserts the compile *fails*
+with the right finding. `shape:twist` is the one to look at first — it has no
+`support::Feature` at all, so a twist is not merely unimplemented, it is
+unreported.
+
 `tools/census.mjs` is the companion: it walks the raw document and counts
 *every* feature, so something nobody has thought about yet shows up as a row
 rather than as a rendering difference. `support::scan` only reports what it
@@ -1446,12 +1503,20 @@ starting any of them.
    source. Doing it in the compiler needs an evaluator; a cheaper first step is
    a wire flag marking a property frame-invariant so the runtime evaluates it
    once at mount instead of every frame.
-3. **Make silent feature drops loud.** `can_encode` never rejects: blend modes,
+3. **Close the coverage gap, starting with the implemented half.**
+   `node ulottie-dev-server/tools/census.mjs --coverage` lists it: 14 constructs
+   with working code and no fixture — every subtractive and inverted mask, three
+   of the four matte modes, radial gradients, animated ramps, gradient fills,
+   image layers. Each is a small hand-written Lottie, which is also the only
+   kind whose licence is unambiguous: every public corpus in the wild is a pile
+   of LottieFiles downloads, including rlottie's, whose `COPYING` scopes MIT to
+   `src/` and says nothing about `example/resource/`.
+4. **Make silent feature drops loud.** `can_encode` never rejects: blend modes,
    repeaters, hold keyframes, skew, `sr`, auto-orient and 3D rotation are all
    dropped without a word. (Merge paths and drawing layer effects are reported
    now. Merge paths is not a divergence — lottie-web has no `mm` modifier
-   either.) Wanted: a diagnostics list on stderr plus a sidecar JSON, with hard
-   rejection behind `--strict`.
+   either.) `shape:twist` has no `Feature` at all. Wanted: a diagnostics list on
+   stderr plus a sidecar JSON, with hard rejection behind `--strict`.
 4. **Trim `m=2` (individually) is ignored**, and nonzero trim offsets on open paths
    clamp where lottie-web wraps. No fixture covers either — add one first.
 5. **Pause when offscreen.** There is no IntersectionObserver or

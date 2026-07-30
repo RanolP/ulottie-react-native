@@ -224,7 +224,7 @@ export default defineConfig(({ command }) => ({
         // compiler binary and writes files next to the fixtures.
         test: {
           name: 'snapshot',
-          include: ['tests/output.spec.ts'],
+          include: ['tests/output.spec.ts', 'tests/coverage.spec.ts'],
           environment: 'node',
         },
       },

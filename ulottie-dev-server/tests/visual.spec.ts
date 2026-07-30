@@ -32,6 +32,13 @@ const FIXTURES: ReadonlyArray<{ name: string; tolerance?: number }> = [
   { name: 'ripple' },
   { name: 'precomp_star_circle' },
   { name: 'lights' },
+  // Feature fixtures: each is the smallest file in a 93-animation survey that
+  // exercises one construct nothing else did, and renders at exactly 0.000%
+  // across fifteen frames. See _fixtures/PROVENANCE.md.
+  { name: 'gradient_radial' },
+  { name: 'image_layer' },
+  { name: 'mask_subtract' },
+  { name: 'matte_alpha' },
 ];
 
 const SAMPLES = [0, 0.25, 0.5, 0.75, 0.99] as const;

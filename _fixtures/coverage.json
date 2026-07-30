@@ -1,0 +1,58 @@
+{
+  "//": [
+    "Constructs `census.mjs` tracks that no fixture in `_fixtures/animations`",
+    "exercises. `tests/coverage.spec.ts` asserts this list is exactly the gap:",
+    "an entry that becomes covered has to be deleted, and a gap with no entry",
+    "fails. So the list can only shrink, and 'we should test that some day' is a",
+    "line with a reason on it rather than a memory.",
+    "",
+    "The value says what is untested, not what is missing — several of these are",
+    "implemented code paths with no fixture at all, which is where the expensive",
+    "bugs have come from. `implemented:` and `rejected:` mark which is which.",
+    "",
+    "Written 2026-07-31, after an external corpus of 42 animations found nine",
+    "compiler bugs the eleven fixtures could not. See HANDOFF."
+  ],
+
+  "uncovered": {
+    "mask:i": "implemented: falls to the same subtract branch. Lottie's intersect is not a mask mode this compiler distinguishes; a fixture would say whether that is right.",
+    "mask:n": "implemented: mode `n` is lowered as Add. Untested.",
+    "mask:a-inv": "implemented: `inv` routes an additive mask through the subtract branch. Untested.",
+    "mask:s-inv": "implemented: as above, doubly. Untested.",
+
+    "matte:mode-3": "implemented: luma matte, `mask-type=\"luminance\"`. Untested.",
+    "matte:mode-4": "implemented: luma inverted, which goes through `invert_filter`. Untested.",
+
+    "gradient:animated-ramp": "implemented: one RAMP binding per `<stop>`, added for the external corpus and never pinned by a fixture.",
+    "gradient:highlight": "not implemented: a displaced focus (`h`/`a`) is read and dropped. Needs a fixture and a `support::scan` finding.",
+
+    "asset:image-embedded": "implemented: a data URI carried straight into the markup.",
+
+    "stroke:dash": "not implemented: `d` on a stroke is read and dropped, silently. No finding either.",
+    "trim:individually": "not implemented: `m=2` is ignored, so a multi-shape group trims as one. Listed in *What is left*.",
+    "shape:no-op": "not implemented: the `no` style is dropped.",
+
+    "shape:repeater": "rejected: `support::Feature::Repeater`. No fixture asserts the rejection.",
+    "shape:rounded-corners": "rejected: `RoundedCorners`. Corners stay sharp.",
+    "shape:merge": "rejected: `MergePaths` — and correctly so, lottie-web has no `mm` modifier either.",
+    "shape:pucker-bloat": "rejected: `PuckerBloat`. The distortion is dropped and the path draws as authored.",
+    "shape:twist": "rejected: no `Feature` at all — a twist is not even reported.",
+    "shape:offset-path": "rejected: `OffsetPath`. The path is drawn at its authored position, not offset.",
+    "shape:zig-zag": "rejected: `ZigZag`. The path is read and the modifier dropped, so the shape draws smooth.",
+
+    "transform:skew": "rejected: `Skew`. `sk`/`sa` are read and dropped, so the layer draws unskewed.",
+    "transform:3d-rotation": "rejected: `ThreeD`. Separate `rx`/`ry`/`rz` are dropped and the layer draws flat.",
+    "3d-layer": "rejected: `ThreeD`, from `ddd` rather than from the rotation.",
+    "auto-orient": "rejected: `AutoOrient`.",
+    "time-stretch": "rejected: `TimeStretch`.",
+
+    "layer:text": "rejected: `TextLayer`. Nothing is drawn for it at all.",
+    "text:layer": "rejected: the same layer seen from the layer side.",
+    "text:fonts": "rejected: an embedded font list, which only a text layer needs.",
+    "text:glyphs": "rejected: embedded glyph outlines.",
+    "layer:audio": "rejected: `UnknownLayerType`.",
+    "layer:camera": "rejected: `UnknownLayerType`.",
+
+    "markers": "not implemented: `markers` are dropped. They name frame ranges, so the player has no `goToAndPlay('segment')`."
+  }
+}

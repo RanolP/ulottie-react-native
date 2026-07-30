@@ -1,11 +1,16 @@
 // What Lottie features a set of files actually uses.
 //
 //   node ulottie-dev-server/tools/census.mjs <input.json|dir> [...] [--per-file]
+//   node ulottie-dev-server/tools/census.mjs --coverage
 //
 // `support::scan` in the compiler answers the narrower question — what is
 // *unsupported* — and only for things it already knows to look for. This walks
 // the raw document and counts everything, so a feature nobody has thought
 // about yet shows up as a row rather than as a rendering difference.
+//
+// It is also importable: `census(file)` and [`FEATURES`] are what the coverage
+// gate in `tests/coverage.spec.ts` reads, so "which Lottie constructs does the
+// fixture set exercise" is a number rather than a judgement call.
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import * as path from 'node:path';
@@ -21,6 +26,92 @@ const LAYER_TY = {
   0: 'precomp', 1: 'solid', 2: 'image', 3: 'null', 4: 'shape',
   5: 'text', 6: 'audio', 13: 'camera',
 };
+
+/**
+ * Every construct the coverage gate tracks, and what it means.
+ *
+ * A closed list, deliberately: the point is that adding a row here without a
+ * fixture to match fails the build, so "we should test that some day" becomes a
+ * line in `_fixtures/coverage.json` with a reason attached instead of a memory.
+ *
+ * The census emits some keys that are open-ended rather than a feature —
+ * `version:`, `fps:`, `effect:<ty>` (After Effects has hundreds), `blend-mode:`
+ * — and those are counted but not tracked; see [`OPEN_ENDED`].
+ */
+export const FEATURES = {
+  'layer:precomp': 'a layer instancing a composition',
+  'layer:solid': 'a solid-colour layer',
+  'layer:image': 'an image layer',
+  'layer:null': 'a null layer, transform only',
+  'layer:shape': 'a shape layer',
+  'layer:text': 'a text layer',
+  'layer:audio': 'an audio layer',
+  'layer:camera': 'a camera layer',
+
+  'shape:group': 'a shape group',
+  'shape:rect': 'a rectangle',
+  'shape:ellipse': 'an ellipse',
+  'shape:star/polygon': 'a polystar',
+  'shape:path': 'a bezier path',
+  'shape:fill': 'a solid fill',
+  'shape:stroke': 'a solid stroke',
+  'shape:gradient-fill': 'a gradient fill',
+  'shape:gradient-stroke': 'a gradient stroke',
+  'shape:transform': "a group's own transform",
+  'shape:trim': 'a trim-path modifier',
+  'shape:repeater': 'a repeater modifier',
+  'shape:rounded-corners': 'a round-corners modifier',
+  'shape:merge': 'a merge-paths modifier',
+  'shape:pucker-bloat': 'a pucker/bloat modifier',
+  'shape:twist': 'a twist modifier',
+  'shape:offset-path': 'an offset-path modifier',
+  'shape:zig-zag': 'a zig-zag modifier',
+  'shape:no-op': 'a no-op style',
+
+  'gradient:linear': 'a linear gradient',
+  'gradient:radial': 'a radial gradient',
+  'gradient:animated-ramp': 'a gradient whose stops move',
+  'gradient:highlight': 'a radial gradient with a displaced focus',
+
+  'mask:a': 'an additive layer mask',
+  'mask:s': 'a subtractive layer mask',
+  'mask:i': 'an intersecting layer mask',
+  'mask:n': 'a mask set to none',
+  'mask:a-inv': 'an inverted additive mask',
+  'mask:s-inv': 'an inverted subtractive mask',
+
+  'matte:source': 'a layer marked `td`, drawn only as a matte',
+  'matte:mode-1': 'alpha matte',
+  'matte:mode-2': 'alpha matte, inverted',
+  'matte:mode-3': 'luma matte',
+  'matte:mode-4': 'luma matte, inverted',
+
+  'asset:precomp': 'a precomposition asset',
+  'asset:image-embedded': 'an image asset carried as a data URI',
+  'asset:image-external': 'an image asset referenced by path',
+
+  'transform:skew': 'a skewed transform',
+  'transform:3d-rotation': 'separate X/Y/Z rotation',
+  '3d-layer': 'a layer flagged 3D',
+  'auto-orient': 'a layer that turns to face its motion path',
+  'time-remap': "a precomp on its own remapped clock",
+  'time-stretch': 'a layer playing at a non-unit rate',
+
+  'keyframe:hold': 'a held (step) keyframe',
+  'stroke:dash': 'a dashed stroke',
+  'trim:individually': 'trim applied per shape rather than across the group',
+  'expression': 'an expression on any property',
+  'markers': 'composition markers',
+  'text:layer': 'a text layer, seen from the layer side',
+  'text:fonts': 'an embedded font list',
+  'text:glyphs': 'embedded glyph outlines',
+};
+
+/**
+ * Keys the census emits that name a value rather than a capability. Counting
+ * them is useful; requiring a fixture per After Effects effect id is not.
+ */
+export const OPEN_ENDED = ['version:', 'fps:', 'effect:', 'blend-mode:'];
 
 /** Bump `key` in `tally`, remembering one example location. */
 const hit = (tally, key, where) => {
@@ -91,7 +182,7 @@ function walkLayers(layers, tally, scope) {
   }
 }
 
-async function census(file) {
+export async function census(file) {
   const doc = JSON.parse(await readFile(file, 'utf8'));
   const tally = {};
   hit(tally, `version:${doc.v ?? '?'}`);
@@ -126,7 +217,15 @@ async function expand(inputs) {
   return files;
 }
 
+// Importable above this line, a command below it.
+if (import.meta.main) await main();
+
+async function main() {
 const argv = process.argv.slice(2);
+if (argv.includes('--coverage')) {
+  await coverage();
+  process.exit(0);
+}
 const perFile = argv.includes('--per-file');
 const files = await expand(argv.filter((a) => !a.startsWith('--')));
 if (!files.length) {
@@ -156,4 +255,37 @@ console.log('\n' + ' '.repeat(w) + '  ' + names.map((n) => n.replace(/^car-/, ''
 for (const k of keys) {
   const row = names.map((n) => (all.get(n)[k] ? String(all.get(n)[k].n).padStart(4) : '   ·')).join('');
   console.log(k.padEnd(w) + '  ' + row);
+}
+}
+
+/**
+ * Where the committed fixtures stand against [`FEATURES`], and what each gap
+ * leaves untested. The gate in `tests/coverage.spec.ts` asserts the *shape* of
+ * this — that every gap is documented and every documented gap is real; this
+ * prints it, which is the part a person wants when deciding what to write next.
+ */
+async function coverage() {
+  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../_fixtures');
+  const dir = path.join(root, 'animations');
+  const seen = new Set();
+  for (const f of (await readdir(dir)).filter((e) => e.endsWith('.json'))) {
+    for (const k of Object.keys(await census(path.join(dir, f)))) seen.add(k);
+  }
+  const { uncovered } = JSON.parse(await readFile(path.join(root, 'coverage.json'), 'utf8'));
+  const all = Object.keys(FEATURES);
+  const gap = all.filter((f) => !seen.has(f));
+
+  console.log(`\nfeature coverage: ${all.length - gap.length} of ${all.length} exercised by _fixtures/animations\n`);
+  const w = Math.max(...gap.map((f) => f.length));
+  for (const kind of ['implemented', 'not implemented', 'rejected']) {
+    const rows = gap.filter((f) => (uncovered[f] ?? '').startsWith(kind));
+    if (!rows.length) continue;
+    console.log(`  ${kind} — ${rows.length}`);
+    for (const f of rows) {
+      console.log(`    ${f.padEnd(w)}  ${uncovered[f].slice(kind.length + 2)}`);
+    }
+    console.log();
+  }
+  const rest = gap.filter((f) => !/^(implemented|not implemented|rejected)/.test(uncovered[f] ?? ''));
+  if (rest.length) console.log('  unclassified —', rest.join(', '), '\n');
 }

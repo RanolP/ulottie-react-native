@@ -74,6 +74,12 @@ const BUDGETS: &[(&str, usize)] = &[
     // sets the size. Bringing this down needs precomp templating: emit the
     // subtree once and clone it at mount, before element indexing.
     ("ripple", 100_000),
+    // Feature fixtures — small by construction, and budgeted so they stay that
+    // way. `matte_alpha` carries the mask and the inversion filter.
+    ("gradient_radial", 8_000),
+    ("image_layer", 3_000),
+    ("mask_subtract", 4_000),
+    ("matte_alpha", 14_000),
 ];
 
 #[test]

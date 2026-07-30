@@ -14,6 +14,14 @@ fill
   caps:    none
   runtime: none (fully static, or legacy runtime)
 
+gradient_radial
+  caps:    TRANSFORM | DISPLAY | KEYFRAMES | EASING | TIMELINE | TEMPLATES | INSTANCES
+  runtime: 56 symbols: A_PROGRAM, A_STRIDE, EASE, F_EASE, F_END, F_HOLD, F_SPATIAL, H_ASSETS, H_EASINGS, H_FLAGS, H_FR, H_GATES, H_IP, H_LAYERS, H_OP, H_PROGRAM, H_REMAPS, H_TIMELINES, H_USES, INV, P10, T_EXPR, T_SCALAR, T_VECTOR, U_EL_BASE, U_PARENT, U_SLOT_BASE, U_STRIDE, bDisplay, bTransform, clone, dec, div, expand, fmt, mount, mtx, oDisplay, oTransform, open, pease, player, pseg, pslice, put, pv, pvv, r2, r5, scopeIds, seq, slowed, suffixIds, xv, xvv, zip
+
+image_layer
+  caps:    TRANSFORM | KEYFRAMES
+  runtime: 47 symbols: A_PROGRAM, A_STRIDE, F_EASE, F_END, F_HOLD, F_SPATIAL, H_ASSETS, H_EASINGS, H_FLAGS, H_FR, H_GATES, H_IP, H_LAYERS, H_OP, H_PROGRAM, H_REMAPS, H_TIMELINES, H_USES, INV, P10, T_EXPR, T_SCALAR, T_VECTOR, U_EL_BASE, U_PARENT, U_SLOT_BASE, U_STRIDE, bTransform, dec, fmt, mount, mtx, oTransform, open, pease, player, pseg, pslice, put, pv, pvv, r2, r5, seq, slowed, xv, xvv
+
 lights
   caps:    SHAPE | KEYFRAMES | EASING | PATH_KF | PATH_D | EXPRESSIONS | LAYER_TX | EXPR_PROPERTY | EXPR_COMP | EXPR_PATH
   runtime: 125 symbols: ARC, A_PROGRAM, A_RECORDS, A_STRIDE, EASE, F3, FIELDS, FULL, F_EASE, F_END, F_HOLD, F_SPATIAL, H_ASSETS, H_EASINGS, H_FLAGS, H_FR, H_GATES, H_IP, H_LAYERS, H_OP, H_PROGRAM, H_REMAPS, H_TIMELINES, H_USES, INV, KC, O3, OPAQUE, ORIGIN, P10, R_A, R_EFFECTS, R_H, R_NAME, R_O, R_P, R_PARENT, R_R, R_SC, T_ANIM, T_EXPR, T_KIND_PATH, T_PATH, T_SCALAR, T_VECTOR, U_EL_BASE, U_PARENT, U_SLOT_BASE, U_STRIDE, ZERO, animInfo, arcTable, bLayerTx, bShape, baseValue, column, createPath, dec, div, effectParam, effectValue, effects, evalExpr, fmt, fromCompToSurface, hasTrim, initExpr, keyValue, keyedProperty, keyframes, kzero, lerpPath, localTransform, locate, lyAnchor, lyAt, lyEffect, lyFields, lyLink, lyParent, lyPath, lyPos, lyRot, lyScale, makeExpr, mkPath, mount, mtx, mul, oLayerTx, oShape, open, pairs, pathD, pathProperty, pdPair, pdSep, pease, player, pointOnPath, pseg, pslice, put, pv, pvp, pvv, r, r2, r5, radiansToDegrees, readProp, record, records, resolve, runsum, seq, slowed, stubProperty, sub, sum, tangentOnPath, thisPropertyFor, toComp, xcol, zip
@@ -21,6 +29,14 @@ lights
 lottie-logo
   caps:    TRANSLATE | DISPLAY | SHAPE | KEYFRAMES | EASING | PATH_D | TRIM
   runtime: 68 symbols: A_PROGRAM, A_STRIDE, EASE, F_EASE, F_END, F_HOLD, F_SPATIAL, H_ASSETS, H_EASINGS, H_FLAGS, H_FR, H_GATES, H_IP, H_LAYERS, H_OP, H_PROGRAM, H_REMAPS, H_TIMELINES, H_USES, INV, P10, SAMPLES, T_EXPR, T_PATH, T_SCALAR, T_VECTOR, U_EL_BASE, U_PARENT, U_SLOT_BASE, U_STRIDE, bDisplay, bShape, bTranslate, dec, fmt, hasTrim, mkPath, mount, oDisplay, oShape, oTranslate, open, pathD, pdPair, pdSep, pease, player, pseg, pslice, put, pv, pvp, pvv, r, r2, seq, slowed, tmBetween, tmConcat, tmCut, tmLocate, tmSplit, trim, trimApply, trimCols, trimTable, xv, xvv
+
+mask_subtract
+  caps:    SHAPE | KEYFRAMES | PATH_KF | PATH_D
+  runtime: 45 symbols: A_PROGRAM, A_STRIDE, F_EASE, F_END, F_HOLD, H_ASSETS, H_EASINGS, H_FLAGS, H_FR, H_GATES, H_IP, H_LAYERS, H_OP, H_PROGRAM, H_REMAPS, H_TIMELINES, H_USES, INV, P10, T_EXPR, T_PATH, U_EL_BASE, U_PARENT, U_SLOT_BASE, U_STRIDE, bShape, dec, fmt, hasTrim, lerpPath, mkPath, mount, oShape, open, pathD, pdPair, pdSep, pease, player, pseg, put, pvp, r, seq, slowed
+
+matte_alpha
+  caps:    TRANSFORM | SHAPE | FILL | KEYFRAMES | EASING | SPATIAL | PATH_KF | PATH_D | TIMELINE | TEMPLATES | INSTANCES
+  runtime: 74 symbols: A_PROGRAM, A_STRIDE, EASE, F_EASE, F_END, F_HOLD, F_SPATIAL, H_ASSETS, H_EASINGS, H_FLAGS, H_FR, H_GATES, H_IP, H_LAYERS, H_OP, H_PROGRAM, H_REMAPS, H_TIMELINES, H_USES, INV, P10, SP_SEG, T_EXPR, T_PATH, T_SCALAR, T_VECTOR, U_EL_BASE, U_PARENT, U_SLOT_BASE, U_STRIDE, bFill, bShape, bTransform, clone, css, dec, div, expand, fmt, hasTrim, lerpPath, mkPath, mount, mtx, oFill, oShape, oTransform, open, pathD, pdPair, pdSep, pdim, pease, player, pseg, pslice, put, pv, pvp, pvv, r, r2, r5, scopeIds, seq, slowed, spBuild, spSample, spSeg, suffixIds, vscratch, xv, xvv, zip
 
 precomp_star_circle
   caps:    ELLIPSE | FILL | STROKE | KEYFRAMES | GEOM_STAR | PATH_D | TIMELINE | TEMPLATES | INSTANCES

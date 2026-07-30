@@ -1761,7 +1761,6 @@ impl Planner<'_> {
         e: Option<&InlineProp>,
         slot: u32,
     ) -> String {
-        self.caps |= Caps::GRADIENT;
         let id = self.next_id("g");
         let radial = gk == 2;
         let node = self.el(if radial {
@@ -1778,11 +1777,18 @@ impl Planner<'_> {
         let ep = e
             .map(|x| self.classify(x, 2))
             .unwrap_or(Prop::Vector(vec![0.0, 0.0]));
+        // The capability is set by the *binding*, not by the gradient. A
+        // gradient whose handles never move bakes into the markup completely —
+        // `<linearGradient>` with its coordinates written out — and then
+        // `bGradient`/`oGradient` are code the module cannot reach.
+        // `gradient_radial` is exactly that shape, and said so the first time
+        // it ran: `output_hygiene` named both symbols.
         if sp.is_static() && ep.is_static() {
             let a = sp.as_vec().unwrap_or(&[0.0, 0.0]);
             let b = ep.as_vec().unwrap_or(&[0.0, 0.0]);
             self.set_gradient_geometry(node, radial, a[0], a[1], b[0], b[1]);
         } else {
+            self.caps |= Caps::GRADIENT;
             self.bind(
                 op::GRADIENT,
                 node,
