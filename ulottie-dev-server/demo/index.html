@@ -35,13 +35,25 @@
 
     /* Grid items are block-level, so `text-align` cannot centre them. */
     .controls { display: grid; gap: 6px; justify-items: center; }
-    .controls select, .controls input[type=file] { font-size: 13px; padding: 3px 6px; }
+    .controls select, .controls input[type=file], .controls input[type=url] {
+      font-size: 13px; padding: 3px 6px;
+    }
     /* `min()`, not `max-width: 100%`: the control is a grid item in an
        auto-sized track, where a percentage resolves against an indefinite
        containing block and is ignored. It overflowed a narrow viewport by 20px.
        Unrelated to the viewer — found while checking it. */
     .controls input[type=range] { width: min(420px, 100%); vertical-align: middle; }
     .controls label { font-size: 13px; }
+    .sources { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; justify-content: center; }
+    .sources input[type=url] { width: min(240px, 100%); }
+
+    /* Radio-toggled custom source: only the selected input is visible. */
+    .src-toggle { display: inline-flex; align-items: center; gap: 10px; font-size: 13px; }
+    .src-toggle input[type=radio] { margin: 0; }
+    .src-bodies { display: inline-grid; align-items: center; }
+    .src-bodies > .src-body { grid-area: 1 / 1; display: inline-flex; align-items: center; gap: 6px; visibility: hidden; }
+    #src-file:checked ~ .src-bodies > .src-body-file,
+    #src-url:checked ~ .src-bodies > .src-body-url { visibility: visible; }
 
     .card {
       background: var(--card);
@@ -185,21 +197,41 @@
     <h1>µlottie - AOT compiler for Lottie animations</h1>
 
     <div class="controls">
-      <div>
-        <select id="anim-select">
-          <option value="boucing-ball">Bouncing Ball</option>
-          <option value="bouncy_ball">Bouncy Ball (lottie-docs)</option>
-          <option value="ellipse">Ellipse</option>
-          <option value="rectangle">Rectangle</option>
-          <option value="fill">Fill (paths)</option>
-          <option value="trim_path">Trim Path</option>
-          <option value="lottie-logo">Lottie Logo</option>
-          <option value="lights">Lights</option>
-          <option value="ripple">Ripple</option>
-          <option value="starfish">Starfish</option>
-          <option value="precomp_star_circle">Precomp Star Circle</option>
-        </select>
-        <label>or load file: <input type="file" id="file-input" accept=".json,application/json"></label>
+      <div class="sources">
+        <div>
+          Load from demo:
+          <select id="anim-select">
+            <option value="boucing-ball">Bouncing Ball</option>
+            <option value="bouncy_ball">Bouncy Ball (lottie-docs)</option>
+            <option value="ellipse">Ellipse</option>
+            <option value="rectangle">Rectangle</option>
+            <option value="fill">Fill (paths)</option>
+            <option value="trim_path">Trim Path</option>
+            <option value="lottie-logo">Lottie Logo</option>
+            <option value="lights">Lights</option>
+            <option value="ripple">Ripple</option>
+            <option value="starfish">Starfish</option>
+            <option value="precomp_star_circle">Precomp Star Circle</option>
+          </select>
+        </div>
+        <div>
+          Or load your own:
+          <div class="src-toggle">
+            <input type="radio" name="src" id="src-file" checked>
+            <label for="src-file">File</label>
+            <input type="radio" name="src" id="src-url">
+            <label for="src-url">URL</label>
+            <span class="src-bodies">
+              <span class="src-body src-body-file">
+                <input type="file" id="file-input" accept=".json,application/json">
+              </span>
+              <span class="src-body src-body-url">
+                <input type="url" id="url-input" placeholder="https://…/anim.json">
+                <button id="url-load" type="button">Load</button>
+              </span>
+            </span>
+          </div>
+        </div>
       </div>
       <label>Frame <span id="frame-display">0</span> / <span id="total-frames">0</span></label>
       <input type="range" id="scrubber" min="0" max="100" step="1" value="0">

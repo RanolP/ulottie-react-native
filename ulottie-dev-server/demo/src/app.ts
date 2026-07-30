@@ -25,6 +25,8 @@ const scrubber = $<HTMLInputElement>('scrubber');
 const frameDisplay = $('frame-display');
 const totalFramesEl = $('total-frames');
 const fileInput = $<HTMLInputElement>('file-input');
+const urlInput = $<HTMLInputElement>('url-input');
+const urlLoadBtn = $<HTMLButtonElement>('url-load');
 const dropHint = $('drop-hint');
 const uploadStatus = $('upload-status');
 
@@ -742,15 +744,51 @@ measureBtn.addEventListener('click', () => {
   );
 });
 
-select.addEventListener('change', () => loadFixture(select.value));
+select.addEventListener('change', () => {
+  // Going back to a demo clears any custom source, so the two views do not
+  // disagree about what is loaded.
+  fileInput.value = '';
+  urlInput.value = '';
+  void loadFixture(select.value);
+});
+
 fileInput.addEventListener('change', () => {
   const file = fileInput.files?.[0];
-  if (file) void loadUploaded(file);
+  if (file) {
+    // Loading a file resets the URL — only one custom source at a time.
+    urlInput.value = '';
+    void loadUploaded(file);
+  }
+});
+
+urlLoadBtn.addEventListener('click', () => void loadFromUrl(urlInput.value));
+// Enter in the URL field submits explicitly, matching the button.
+urlInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    void loadFromUrl(urlInput.value);
+  }
 });
 
 async function loadUploaded(file: File) {
   uploadStatus.textContent = 'Compiling ' + file.name + '…';
   await loadFromSource(await file.text(), file.name);
+}
+
+async function loadFromUrl(url: string) {
+  url = url.trim();
+  if (!url) return;
+  // Loading a URL resets the file — only one custom source at a time.
+  fileInput.value = '';
+  uploadStatus.textContent = 'Fetching ' + url + '…';
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    await loadFromSource(await res.text(), url);
+  } catch (e) {
+    uploadStatus.textContent = 'Fetch failed: ' + ((e as Error).message ?? e) +
+      ' — the host must allow cross-origin reads (CORS).';
+  }
 }
 
 document.addEventListener('dragover', (e) => {
