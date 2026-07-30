@@ -770,6 +770,16 @@ unreachable — `kf.js` names `EASE` on a branch the planner only takes when the
 easing capability is set. Those edges are declared in `shake::GATED` and cut when
 the capability is absent.
 
+**The module registry and the op table are two halves of one contract**, and
+they have to agree. `emit::OPS` names each op's `(code, bind, apply, module)`,
+`scene::program_ops` fixes the order the encoder writes batches in, and `MODS`
+is the list of runtime modules concatenated into the embedded bundle. An op in
+`OPS` whose module is missing from `MODS` produces a program that calls a name
+the shaker never saw: `bRamp`/`oRamp` shipped that way for `ops/ramp.js`, so
+every animation with a keyframed gradient ramp threw `ReferenceError` at mount.
+The module has to be listed in `MODS` in dependency order — `ramp.js` imports
+from `pv.js`, `kf.js`, `num.js`, `set.js` and `batch.js`, so it goes after them.
+
 **Extern** imports exactly the entry points it binds:
 
 ```js
@@ -1220,6 +1230,19 @@ starting any of them.
   expression engine. That is what makes it safe to leave those declarations out
   of a bundle — do not add an unguarded reference, and if you add a guarded one,
   add it to `shake::GATED` too.
+- **A gated declaration must have no unconditional reader.** The `GATED` table
+  cuts a *declaration* when its capability is absent; it does not cut the text
+  that *read* it. A guarded call (`x.expr ? xcol(…) : null`) is safe because the
+  guard skips the call. An unconditional assignment (`ctx.createPath =
+  createPath` in `attachHelpers`) is not: the right-hand side is evaluated at
+  mount regardless of the guard, so it reads a name the shaker has dropped and
+  throws `ReferenceError`. This is how `createPath` broke for every animation
+  whose expressions did not reach the path API. The fix is structural — the path
+  constructors are now exported top-level functions called by bare name, not
+  `ctx` properties, so nothing reads them unless a body does. The same applies
+  to the arithmetic helpers (`sum`, `sub`, `mul`, `div`, `clamp`,
+  `radiansToDegrees`, `degreesToRadians`): `attachHelpers` is gone entirely, and
+  each is a plain export retained as a shake root only when a body calls it.
 - An op's arguments are one column each, so **every binding of an op must have
   the same argument count**. A `debug_assert` in `batch_section` pins it; an
   argument that is an enumeration rather than a measurement must be `Arg::Tag`,
@@ -1583,7 +1606,10 @@ property surface (`$bm_rt = value * 2;` is enough) therefore ships a module
 where every expression throws a `ReferenceError` into `evalExpr`'s own catch and
 silently falls back to the base value. Confirmed: at `Caps::EXPRESSIONS` alone,
 `evalExpr` is retained and `thisPropertyFor` is not. No fixture reaches it —
-all three set the cap — which is exactly why it has not been noticed.
+all three set the cap — which is exactly why it has not been noticed. The same
+class of bug was fixed for the path/arithmetic helpers (see *The `ctx` helpers
+are gone too* below); this one survives because `evalExpr` is in the runtime,
+not the emitted body, and the call is not guarded by data the compiler controls.
 
 ##### Tables of names
 
@@ -1738,6 +1764,41 @@ seventeen one-liners of which only the used ones are retained, and retention is
 exact — `Plan::helpers` reports what a body calls rather than inferring it from
 a word scan, which is why `ripple` drops `fromCompToSurface` and the others do
 not.
+
+##### The `ctx` helpers are gone too
+
+`attachHelpers` used to wire the full expression vocabulary onto `ctx` at
+mount — `ctx.sum`, `ctx.clamp`, `ctx.createPath`, … — and each body
+destructured the names it used out of `ctx` in its preamble. That had two
+problems, both silent, and both the same shape as the proxy: the runtime
+plumbed names through a context object the compiler could not see into, so the
+shaker had no way to cut what a body did not reach.
+
+The path constructors were the first to break. `createPath`, `pointOnPath` and
+`tangentOnPath` are gated under `EXPR_PATH`, so the shaker correctly dropped
+their declarations when no body reached the path API — but `attachHelpers` read
+them unconditionally (`ctx.createPath = createPath`), and an unconditional read
+of an undeclared name is a `ReferenceError` at mount. Every animation with
+expressions but without path calls threw into `evalExpr`'s catch and silently
+fell back. No fixture hit it; a URL-tested animation did.
+
+The fix removed the plumbing rather than patching the guard. Every helper —
+`sum`, `sub`, `mul`, `div`, `clamp`, `radiansToDegrees`, `degreesToRadians`,
+`createPath`, `pointOnPath`, `tangentOnPath` — is now a plain `export` at the
+top of `expr.js`, called by bare name. `attachHelpers` is gone; the only thing
+left on `ctx` is `frameRate`, set once in `initExpr`.
+
+Retention is static and exact: `emit_expressions::bare_helpers` scans the
+shipped bodies for free identifiers against the helper vocabulary, and the
+result feeds `Exprs::helpers` alongside the names the rewrite pass reports via
+`need()`. Those helpers enter `roots()` and are retained (embedded) or imported
+(extern) only when a body calls them. `CTX_NAMES` is gone — bodies no longer
+destructure anything from `ctx` except `frameRate`, and that read is emitted
+directly where `time` or `frameDuration` needs it.
+
+The rule this pins, alongside the one about guarded calls: **a declaration the
+shaker can drop must not have an unconditional reader.** A guarded call is safe
+because the guard skips it; an unconditional assignment never is.
 
 ##### Two bugs the new geometry sweep caught, both silent
 

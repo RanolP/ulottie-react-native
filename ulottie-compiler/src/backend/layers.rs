@@ -869,6 +869,14 @@ pub fn table(data: &SceneData, exprs: &[ir::Expression]) -> Result<Exprs> {
     }
     src.push_str("];\n");
 
+    // Path helpers called by bare name in the shipped bodies. These are exported
+    // from `expr.js`, not `ctx` properties, so they have to be roots to be
+    // retained (embedded) or imported (extern). The rewrite reports
+    // `pointOnPath`/`tangentOnPath` via `need()` when it converts member calls,
+    // but `createPath` is a bare call it does not touch — scanning the finished
+    // bodies catches all three.
+    helpers.extend(super::emit_expressions::bare_helpers(&bodies));
+
     Ok(Exprs {
         src,
         helpers,

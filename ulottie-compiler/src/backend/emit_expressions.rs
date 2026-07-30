@@ -14,23 +14,6 @@ use crate::scene::Caps;
 
 use super::layers::{Plan, Surface};
 
-/// Names destructured from `ctx`.
-///
-/// `thisComp` is not among them any more: what bodies asked it for was a layer
-/// lookup and a frame duration, and both are resolved into the preamble now.
-pub const CTX_NAMES: &[&str] = &[
-    "sum",
-    "sub",
-    "mul",
-    "div",
-    "clamp",
-    "radiansToDegrees",
-    "degreesToRadians",
-    "createPath",
-    "pointOnPath",
-    "tangentOnPath",
-];
-
 /// Which parts of the expression vocabulary a module's bodies actually reach.
 ///
 /// The same scan that trims each body's preamble, applied across the module and
@@ -104,6 +87,38 @@ fn mentions(body: &str) -> Vec<String> {
     out
 }
 
+/// Helper names bodies call by bare reference, to add as shake roots.
+///
+/// The rewrite reports the names it introduces via `need()`, but bodies also
+/// call utility functions that pass through untouched — `clamp`, `sum`,
+/// `createPath`, …. Scanning the shipped bodies for the full vocabulary catches
+/// both, uniformly and exactly.
+pub fn bare_helpers(bodies: &[String]) -> Vec<&'static str> {
+    const HELPERS: &[&str] = &[
+        "sum",
+        "sub",
+        "mul",
+        "div",
+        "clamp",
+        "radiansToDegrees",
+        "degreesToRadians",
+        "createPath",
+        "pointOnPath",
+        "tangentOnPath",
+    ];
+    let mut found: Vec<&'static str> = Vec::new();
+    for body in bodies {
+        for name in free_identifiers(body) {
+            if let Some(h) = HELPERS.iter().find(|s| **s == name.as_str()) {
+                if !found.contains(h) {
+                    found.push(h);
+                }
+            }
+        }
+    }
+    found
+}
+
 /// Emit one body, with the preamble its (already rewritten) text needs.
 ///
 /// `thisLayer` is the layer *record*. A body the layer pass resolved reads it
@@ -115,10 +130,6 @@ pub fn emit_one(out: &mut String, body: &str, plan: &Plan) {
 
     out.push_str("  function(value, thisLayer, thisProperty, frame, ctx) {\n");
 
-    let ctx_used: Vec<&str> = CTX_NAMES.iter().copied().filter(|n| uses(n)).collect();
-    if !ctx_used.is_empty() {
-        out.push_str(&format!("    const {{ {} }} = ctx;\n", ctx_used.join(", ")));
-    }
     if uses("time") {
         out.push_str("    const time = frame / ctx.frameRate;\n");
     }
@@ -342,12 +353,13 @@ mod tests {
     }
 
     #[test]
-    fn only_the_names_a_body_uses_are_bound() {
+    fn a_body_calls_utils_by_bare_name_not_via_ctx() {
         let out = emit("$bm_rt = clamp(value, 0, 100);");
-        assert!(out.contains("const { clamp } = ctx;"), "{out}");
-        assert!(!out.contains("thisComp"), "{out}");
-        assert!(!out.contains("valueAtTime"), "{out}");
-        assert!(!out.contains("const time"), "{out}");
+        assert!(out.contains("clamp(value, 0, 100)"), "{out}");
+        assert!(
+            !out.contains("ctx."),
+            "clamp is a bare top-level call, not a ctx property: {out}"
+        );
     }
 
     #[test]

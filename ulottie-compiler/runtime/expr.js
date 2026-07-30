@@ -70,7 +70,7 @@ export function initExpr(E, ctx) {
   ctx.memo = new Map();
   ctx.tp = new Map();
   ctx.logged = new Set();
-  attachHelpers(ctx);
+  ctx.frameRate = ctx.fr;
   return ctx.expr;
 }
 
@@ -410,31 +410,31 @@ export function fromCompToSurface(point, rec, f) {
 }
 
 // ---------------------------------------------------------------------------
-// ctx helpers the expression bodies destructure
+// Plain utility functions the expression bodies call by bare name
 // ---------------------------------------------------------------------------
 
-function attachHelpers(ctx) {
-  ctx.frameRate = ctx.fr;
-  const zip = (op, unit) => (a, b) => {
+function zip(op, unit) {
+  return (a, b) => {
     if (Array.isArray(a) && Array.isArray(b)) return a.map((v, i) => op(v, b[i] ?? unit));
     if (Array.isArray(a)) return a.map((v) => op(v, b));
     if (Array.isArray(b)) return b.map((v) => op(a, v));
     return op(a, b);
   };
-  ctx.sum = zip((a, b) => a + b, 0);
-  ctx.sub = zip((a, b) => a - b, 0);
-  ctx.mul = zip((a, b) => a * b, 1);
-  ctx.div = zip((a, b) => a / b, 1);
-  ctx.clamp = (v, lo, hi) =>
-    Array.isArray(v) ? v.map((x) => Math.max(lo, Math.min(hi, x))) : Math.max(lo, Math.min(hi, v));
-  ctx.radiansToDegrees = (r) => r * 180 / Math.PI;
-  ctx.degreesToRadians = (d) => d * Math.PI / 180;
-  ctx.createPath = createPath;
-  ctx.pointOnPath = pointOnPath;
-  ctx.tangentOnPath = tangentOnPath;
 }
 
-function createPath(verts, inTan, outTan, closed) {
+export const sum = zip((a, b) => a + b, 0);
+export const sub = zip((a, b) => a - b, 0);
+export const mul = zip((a, b) => a * b, 1);
+export const div = zip((a, b) => a / b, 1);
+export function clamp(v, lo, hi) {
+  return Array.isArray(v)
+    ? v.map((x) => Math.max(lo, Math.min(hi, x)))
+    : Math.max(lo, Math.min(hi, v));
+}
+export const radiansToDegrees = (r) => (r * 180) / Math.PI;
+export const degreesToRadians = (d) => (d * Math.PI) / 180;
+
+export function createPath(verts, inTan, outTan, closed) {
   const flat = (src) => {
     const out = [];
     for (const p of src || []) out.push(p[0], p[1]);
@@ -514,7 +514,7 @@ function locate(path, u) {
   return null;
 }
 
-function pointOnPath(path, u) {
+export function pointOnPath(path, u) {
   // A layer with no path shape reads as null. The proxy used to guard this at
   // the call site; now the sampler owns it, so both paths answer the same.
   if (!path) return [0, 0];
@@ -528,7 +528,7 @@ function pointOnPath(path, u) {
   ];
 }
 
-function tangentOnPath(path, u) {
+export function tangentOnPath(path, u) {
   if (!path) return [1, 0];
   const at = locate(path, u);
   if (!at) return [1, 0];

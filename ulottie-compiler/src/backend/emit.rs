@@ -68,6 +68,7 @@ const MODS: &[Mod] = modules![
     "ops/fill.js"     => "../../runtime/ops/fill.js",
     "ops/stroke.js"   => "../../runtime/ops/stroke.js",
     "ops/grad.js"     => "../../runtime/ops/grad.js",
+    "ops/ramp.js"     => "../../runtime/ops/ramp.js",
     "ops/layer.js"    => "../../runtime/ops/layer.js",
     "core.js"    => "../../runtime/core.js",
 ];
@@ -302,6 +303,16 @@ const EXPR_HELPERS: &[&str] = &[
     "lyEffect",
     "toComp",
     "fromCompToSurface",
+    "createPath",
+    "pointOnPath",
+    "tangentOnPath",
+    "sum",
+    "sub",
+    "mul",
+    "div",
+    "clamp",
+    "radiansToDegrees",
+    "degreesToRadians",
 ];
 
 /// Minified counterpart of [`driver_source`], for size reporting.
@@ -859,17 +870,8 @@ fn extern_imports(caps: Caps, base: &str, helpers: &[&'static str]) -> String {
         ));
     }
     if caps.contains(Caps::EXPRESSIONS) {
-        // The bodies call the layer helpers by bare name, so an extern build has
-        // to import each one it uses alongside the engine itself. Not the ones
-        // a body destructures out of `ctx` — those reach it through the engine
-        // and are not module bindings at the call site.
         let mut names = vec!["makeExpr"];
-        names.extend(
-            helpers
-                .iter()
-                .copied()
-                .filter(|h| !super::emit_expressions::CTX_NAMES.contains(h)),
-        );
+        names.extend(helpers.iter().copied());
         out.push_str(&format!(
             "import {{ {} }} from '{base}/expr.js';\n",
             names.join(", ")
