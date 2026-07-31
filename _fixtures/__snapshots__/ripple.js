@@ -4,7 +4,7 @@
 // caps: SHAPE | GRADIENT | KEYFRAMES | EASING | PATH_D | TRIM | TIMELINE | EXPRESSIONS | LAYER_TX | TEMPLATES | INSTANCES | EXPR_PROPERTY | EXPR_COMP | EXPR_PATH
 
 import { mount } from './runtime/core.js';
-import { makeExpr, div, lyAt, lyEffect, lyPath, lyPoints, lyPos, pointOnPath, toComp } from './runtime/expr.js';
+import { makeExpr, div, lyAt, lyEffect, lyPath, lyPoints, lyPos, pointOnPath, thisPropertyFor, toComp } from './runtime/expr.js';
 import { expand } from './runtime/tpl.js';
 import { bShape, oShape } from './runtime/ops/shape.js';
 import { bGradient, oGradient } from './runtime/ops/grad.js';
@@ -38,7 +38,7 @@ const TPL = [
 ];
 
 const E = [
-  function(value, thisLayer, thisProperty, frame, ctx) {
+  function(value, thisLayer, $p, frame, ctx) {
     var $bm_rt;
     var pathLayer = lyAt(thisLayer, 3);
     var progress = div(lyEffect(thisLayer, 0, 0, frame), 100);
@@ -46,12 +46,13 @@ const E = [
     $bm_rt = toComp(pathLayer, pointOnPath(lyPath(pathToTrace, frame), progress), frame);
     return $bm_rt;
   },
-  function(value, thisLayer, thisProperty, frame, ctx) {
+  function(value, thisLayer, $p, frame, ctx) {
+    const thisProperty = thisPropertyFor(ctx, $p);
     var $bm_rt;
     $bm_rt = thisProperty.loopOut('cycle');
     return $bm_rt;
   },
-  function(value, thisLayer, thisProperty, frame, ctx) {
+  function(value, thisLayer, $p, frame, ctx) {
     var $bm_rt;
     var barLayer, barPath;
     barLayer = lyAt(thisLayer, 3);
@@ -59,17 +60,18 @@ const E = [
     $bm_rt = toComp(barLayer, barPath[1], frame);
     return $bm_rt;
   },
-  function(value, thisLayer, thisProperty, frame, ctx) {
+  function(value, thisLayer, $p, frame, ctx) {
     var $bm_rt;
     $bm_rt = lyPos(lyAt(thisLayer, 0), frame);
     return $bm_rt;
   },
-  function(value, thisLayer, thisProperty, frame, ctx) {
+  function(value, thisLayer, $p, frame, ctx) {
     var $bm_rt;
     $bm_rt = lyEffect(lyAt(thisLayer, 0), 0, 0, frame);
     return $bm_rt;
   },
-  function(value, thisLayer, thisProperty, frame, ctx) {
+  function(value, thisLayer, $p, frame, ctx) {
+    const thisProperty = thisPropertyFor(ctx, $p);
     const loopOut = thisProperty.loopOut;
     var $bm_rt;
     $bm_rt = loopOut('cycle');

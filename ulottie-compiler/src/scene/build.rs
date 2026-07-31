@@ -1601,29 +1601,46 @@ impl Planner<'_> {
         // attribute the *first* matching style wins. Picking the first fill-ish
         // and first stroke-ish style reproduces that without the redundant
         // writes.
-        let mut fill: Option<Style> = None;
-        let mut stroke: Option<Style> = None;
-        for id in ids {
+        let mut fill: Option<(usize, Style)> = None;
+        let mut stroke: Option<(usize, Style)> = None;
+        for (i, id) in ids.iter().enumerate() {
             let Some(st) = self.payload.y.get(*id as usize) else {
                 continue;
             };
             match st {
                 Style::Fill { .. } | Style::GradientFill { .. } if fill.is_none() => {
-                    fill = Some(st.clone());
+                    fill = Some((i, st.clone()));
                 }
                 Style::Stroke { .. } | Style::GradientStroke { .. } if stroke.is_none() => {
-                    stroke = Some(st.clone());
+                    stroke = Some((i, st.clone()));
                 }
                 _ => {}
             }
         }
+        // **Which of the two is on top is Lottie's decision, not SVG's.** A
+        // style's element is appended where the backwards walk meets it, so a
+        // style earlier in `it` — earlier in this list — paints later, on top.
+        // SVG has one order and it is fill-then-stroke, so a stroke Lottie put
+        // *under* its fill would be drawn over it, eating half its own width
+        // out of the fill: three avatars in `krrt-7ab2a6d4` are a green disc
+        // ringed in white, `it` order `el fl st tr`, and the ring ate 15 units
+        // into the disc.
+        //
+        // `paint-order="stroke"` is that ordering in one attribute. Measured
+        // against lottie-web's two elements in Chrome: 120 px of fill across
+        // the middle either way, against 90 px for the SVG default.
+        if let (Some((f, _)), Some((s, _))) = (&fill, &stroke)
+            && f < s
+        {
+            self.set(el, "paint-order", "stroke");
+        }
         if fill.is_none() && stroke.is_some() {
             self.set(el, "fill", "none");
         }
-        if let Some(f) = fill {
+        if let Some((_, f)) = fill {
             self.emit_fill(el, &f, slot);
         }
-        if let Some(s) = stroke {
+        if let Some((_, s)) = stroke {
             self.emit_stroke(el, &s, slot);
         }
     }

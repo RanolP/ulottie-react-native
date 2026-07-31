@@ -39,6 +39,13 @@ const FIXTURES: ReadonlyArray<{ name: string; tolerance?: number }> = [
   { name: 'image_layer' },
   { name: 'mask_subtract' },
   { name: 'matte_alpha' },
+  { name: 'stroke_under_fill' },
+  // Hand-made, for the one shape of expression the other three do not have: a
+  // body that reads another layer and nothing else. `ripple`, `starfish` and
+  // `lights` all touch `thisProperty`, which is what kept its runtime in their
+  // bundles — so a shaken-out expression helper rendered correctly in every
+  // fixture and silently returned the authored constant everywhere else.
+  { name: 'expression_layer_ref' },
 ];
 
 const SAMPLES = [0, 0.25, 0.5, 0.75, 0.99] as const;

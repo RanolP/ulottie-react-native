@@ -4,7 +4,7 @@
 // caps: SHAPE | KEYFRAMES | EASING | SPATIAL | PATH_KF | HOLD | PATH_D | TIMELINE | EXPRESSIONS | LAYER_TX | TEMPLATES | INSTANCES | TIME_REMAP | EXPR_PROPERTY | EXPR_COMP | EXPR_PATH
 
 import { mount } from './runtime/core.js';
-import { makeExpr, createPath, div, fromCompToSurface, lyAnchor, lyAt, lyEffect, mul, sub, sum, toComp } from './runtime/expr.js';
+import { makeExpr, createPath, div, fromCompToSurface, lyAnchor, lyAt, lyEffect, mul, sub, sum, thisPropertyFor, toComp } from './runtime/expr.js';
 import { resolve } from './runtime/kf.js';
 import { expand } from './runtime/tpl.js';
 import { bShape, oShape } from './runtime/ops/shape.js';
@@ -47,13 +47,15 @@ const TPL = [
 ];
 
 const E = [
-  function(value, thisLayer, thisProperty, frame, ctx) {
+  function(value, thisLayer, $p, frame, ctx) {
+    const thisProperty = thisPropertyFor(ctx, $p);
     const loopOut = thisProperty.loopOut;
     var $bm_rt;
     $bm_rt = loopOut('cycle');
     return $bm_rt;
   },
-  function(value, thisLayer, thisProperty, frame, ctx) {
+  function(value, thisLayer, $p, frame, ctx) {
+    const thisProperty = thisPropertyFor(ctx, $p);
     const time = frame / ctx.frameRate;
     const frameDuration = 1 / ctx.frameRate;
     const nearestKey = thisProperty.nearestKey;
@@ -69,7 +71,8 @@ const E = [
     }
     return $bm_rt;
   },
-  function(value, thisLayer, thisProperty, frame, ctx) {
+  function(value, thisLayer, $p, frame, ctx) {
+    const thisProperty = thisPropertyFor(ctx, $p);
     var $bm_rt;
     var nullLayerNames = [lyAt(thisLayer, 13), lyAt(thisLayer, 12), lyAt(thisLayer, 11), lyAt(thisLayer, 10), lyAt(thisLayer, 9), lyAt(thisLayer, 8), lyAt(thisLayer, 7), lyAt(thisLayer, 6), lyAt(thisLayer, 5), lyAt(thisLayer, 4)];
     var origPath = thisProperty;

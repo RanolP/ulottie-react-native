@@ -67,6 +67,7 @@ export const FEATURES = {
   'shape:offset-path': 'an offset-path modifier',
   'shape:zig-zag': 'a zig-zag modifier',
   'shape:no-op': 'a no-op style',
+  'shape:stroke-under-fill': 'a stroke Lottie paints *under* its fill, which SVG will not do without `paint-order`',
 
   'gradient:linear': 'a linear gradient',
   'gradient:radial': 'a radial gradient',
@@ -124,6 +125,13 @@ const hit = (tally, key, where) => {
 const animated = (p) => !!(p && typeof p === 'object' && p.a === 1);
 
 function walkShapes(items, tally, at) {
+  // Which of a fill and a stroke paints on top is Lottie's decision: a style
+  // earlier in `it` paints later. SVG's order is fixed, so a stroke authored
+  // *under* its fill needs `paint-order` and is worth counting on its own.
+  const fi = (items ?? []).findIndex((s) => s && (s.ty === 'fl' || s.ty === 'gf'));
+  const si = (items ?? []).findIndex((s) => s && (s.ty === 'st' || s.ty === 'gs'));
+  if (fi >= 0 && si >= 0 && fi < si) hit(tally, 'shape:stroke-under-fill', at);
+
   for (const s of items ?? []) {
     if (!s || typeof s !== 'object') continue;
     hit(tally, `shape:${SHAPE_TY[s.ty] ?? s.ty}`, at);

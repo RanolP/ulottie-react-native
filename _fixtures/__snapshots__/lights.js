@@ -4,7 +4,7 @@
 // caps: SHAPE | KEYFRAMES | EASING | PATH_KF | PATH_D | EXPRESSIONS | LAYER_TX | EXPR_PROPERTY | EXPR_COMP | EXPR_PATH
 
 import { mount } from './runtime/core.js';
-import { makeExpr, createPath, div, fromCompToSurface, lyAnchor, lyAt, lyEffect, lyPath, mul, pointOnPath, radiansToDegrees, sub, sum, tangentOnPath, toComp } from './runtime/expr.js';
+import { makeExpr, createPath, div, fromCompToSurface, lyAnchor, lyAt, lyEffect, lyPath, mul, pointOnPath, radiansToDegrees, sub, sum, tangentOnPath, thisPropertyFor, toComp } from './runtime/expr.js';
 import { bShape, oShape } from './runtime/ops/shape.js';
 import { bLayerTx, oLayerTx } from './runtime/ops/layer.js';
 const P0=(x,B,e,l,q,a)=>[bShape(x,B[0],e,l,q,a),bLayerTx(x,B[1],e,l,q,a)];
@@ -62,7 +62,7 @@ const M =
 const D = "0gskt10gsni90q100m8sg3000600gt7gt7gj70io6io6ki40io6io6k86tl2v25v2gp2v200jm100000km100086k3i120m3s50a02aaaa0e1114k6u62004000ikv1000eiqf06002000iooj10002000ighn20002000ighn202004000iqru5000eiqf02004000ikko4000eiqf02004000iguu2000eiqf02004000ignn1000eiqf0600200k1i1000200k1e000200k1a02004000ioqh60000202004000igiu40000202004000iosi30000202004000imku100002026gi3ol2080su120082uv1226gr5oi20mgi980o7om1sn1qh3oi20qh3qh30qh3qh30qh3oi2020484kh2626icoi2080su1a82uv1a80su1c82uv1c80su1e82uv1e80su1g182uv1g1i36luj1uvp20i36lkru6uruv10kdavnh1gq5tuh1qq5vmi1qk6lsh1ir7tvg1in6g50000j6v4t19s3v40000k6g5u1ar3i36usk2upp30i36ofuqp30i36hh9upp30i36vgk2quv20s1qi3c8a8ccccaeeeeos22mv1ig2uv1s8o84qg2uv1oo26uj2uv1oao88mk2uv1os2agl2ol2uv1qdos2cgm2om2uv1mfos2egn2on2uv1ih1os2g1go2oo2uv1ui1og3i1su1s5qk1sh3k18gp2qp2kq2sn1sh3m1aku2qp2kq2op1sh3o1cuu2qp2kq2kr1sh3q1eov2qp2kq2gt1sh1s10ig3qp2kq2";
 
 const E = [
-  function(value, thisLayer, thisProperty, frame, ctx) {
+  function(value, thisLayer, $p, frame, ctx) {
     var $bm_rt;
     var pathLayer = lyAt(thisLayer, 8);
     var progress = div(lyEffect(thisLayer, 0, 0, frame), 100);
@@ -70,7 +70,7 @@ const E = [
     $bm_rt = toComp(pathLayer, pointOnPath(lyPath(pathToTrace, frame), progress), frame);
     return $bm_rt;
   },
-  function(value, thisLayer, thisProperty, frame, ctx) {
+  function(value, thisLayer, $p, frame, ctx) {
     var $bm_rt;
     var pathToTrace = lyAt(thisLayer, 8);
     var progress = div(lyEffect(thisLayer, 0, 0, frame), 100);
@@ -78,7 +78,8 @@ const E = [
     $bm_rt = radiansToDegrees(Math.atan2(pathTan[1], pathTan[0]));
     return $bm_rt;
   },
-  function(value, thisLayer, thisProperty, frame, ctx) {
+  function(value, thisLayer, $p, frame, ctx) {
+    const thisProperty = thisPropertyFor(ctx, $p);
     const time = frame / ctx.frameRate;
     const frameDuration = 1 / ctx.frameRate;
     const nearestKey = thisProperty.nearestKey;
@@ -94,7 +95,8 @@ const E = [
     }
     return $bm_rt;
   },
-  function(value, thisLayer, thisProperty, frame, ctx) {
+  function(value, thisLayer, $p, frame, ctx) {
+    const thisProperty = thisPropertyFor(ctx, $p);
     var $bm_rt;
     var nullLayerNames = [lyAt(thisLayer, 3), lyAt(thisLayer, 2), lyAt(thisLayer, 1)];
     var origPath = thisProperty;

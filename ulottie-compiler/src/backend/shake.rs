@@ -78,7 +78,16 @@ const GATED: &[(&str, Caps)] = &[
     // branch it only takes for some animations. Without them an animation that
     // only calls `loopOut` still carries comp-space transforms and the
     // arc-length path sampler.
-    ("thisPropertyFor", Caps::EXPR_PROPERTY),
+    //
+    // `thisPropertyFor` was here too, and it is the reason this list is
+    // dangerous. `evalExpr` called it to build every body's third argument —
+    // not on a branch, on the only path — so cutting the edge shipped a module
+    // that named a declaration it did not carry. `evalExpr` catches what the
+    // body throws, so every expression in the animation quietly became its
+    // authored constant, and the pixel gates saw a `ReferenceError` per
+    // expression as "renders identically". It is a root now, reported by the
+    // body that builds the surface. An entry belongs here only if the call site
+    // is genuinely guarded, the way `xcol` is.
     ("toComp", Caps::EXPR_COMP),
     ("fromCompToSurface", Caps::EXPR_COMP),
     ("pointOnPath", Caps::EXPR_PATH),

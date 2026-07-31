@@ -185,7 +185,10 @@ fn expression_bodies_only_call_what_the_module_declares() {
             [
                 "value",
                 "thisLayer",
-                "thisProperty",
+                // The property handle. `thisProperty` is no longer a parameter:
+                // building the view is what pulls `thisPropertyFor` in, so the
+                // preamble does it — and a `const` line is already known.
+                "$p",
                 "frame",
                 "ctx",
                 "Math",

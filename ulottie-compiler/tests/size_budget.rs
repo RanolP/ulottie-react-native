@@ -80,6 +80,7 @@ const BUDGETS: &[(&str, usize)] = &[
     ("image_layer", 3_000),
     ("mask_subtract", 4_000),
     ("matte_alpha", 14_000),
+    ("stroke_under_fill", 12_000),
 ];
 
 #[test]

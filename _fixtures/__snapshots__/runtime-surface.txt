@@ -10,6 +10,10 @@ ellipse
   caps:    none
   runtime: none (fully static, or legacy runtime)
 
+expression_layer_ref
+  caps:    KEYFRAMES | EASING | EXPRESSIONS | LAYER_OP
+  runtime: 85 symbols: A_PROGRAM, A_RECORDS, A_STRIDE, EASE, F3, FIELDS, FULL, F_EASE, F_END, F_HOLD, F_SPATIAL, H_ASSETS, H_EASINGS, H_FLAGS, H_FR, H_GATES, H_IP, H_LAYERS, H_OP, H_PROGRAM, H_REMAPS, H_TIMELINES, H_USES, INV, KC, O3, OPAQUE, ORIGIN, P10, R_A, R_EFFECTS, R_H, R_NAME, R_O, R_P, R_PARENT, R_R, R_SC, T_ANIM, T_EXPR, T_KIND_PATH, T_PATH, T_SCALAR, T_VECTOR, U_EL_BASE, U_PARENT, U_SLOT_BASE, U_STRIDE, ZERO, animInfo, bLayerOpacity, baseValue, column, dec, effects, evalExpr, fmt, initExpr, keyframes, kzero, lyAt, lyFields, lyLink, lyOpacity, makeExpr, mkPath, mount, oLayerOpacity, open, pease, player, pseg, pslice, put, pv, pvp, pvv, r, readProp, record, records, resolve, runsum, seq, slowed
+
 fill
   caps:    none
   runtime: none (fully static, or legacy runtime)
@@ -53,6 +57,10 @@ ripple
 starfish
   caps:    SHAPE | KEYFRAMES | EASING | SPATIAL | PATH_KF | HOLD | PATH_D | TIMELINE | EXPRESSIONS | LAYER_TX | TEMPLATES | INSTANCES | TIME_REMAP | EXPR_PROPERTY | EXPR_COMP | EXPR_PATH
   runtime: 126 symbols: A_PROGRAM, A_RECORDS, A_STRIDE, EASE, F3, FIELDS, FULL, F_EASE, F_END, F_HOLD, F_SPATIAL, H_ASSETS, H_EASINGS, H_FLAGS, H_FR, H_GATES, H_IP, H_LAYERS, H_OP, H_PROGRAM, H_REMAPS, H_TIMELINES, H_USES, INV, KC, O3, OPAQUE, ORIGIN, P10, R_A, R_EFFECTS, R_H, R_NAME, R_O, R_P, R_PARENT, R_R, R_SC, SP_SEG, T_ANIM, T_EXPR, T_KIND_PATH, T_PATH, T_SCALAR, T_VECTOR, U_EL_BASE, U_PARENT, U_SLOT_BASE, U_STRIDE, ZERO, animInfo, bLayerTx, bShape, baseValue, clone, column, createPath, dec, div, effectParam, effectValue, effects, evalExpr, expand, fmt, fromCompToSurface, hasTrim, initExpr, keyValue, keyedProperty, keyframes, kzero, lerpPath, localTransform, lyAnchor, lyAt, lyEffect, lyFields, lyLink, lyParent, lyPos, lyRot, lyScale, makeExpr, mkPath, mount, mtx, mul, oLayerTx, oShape, open, pairs, pathD, pathProperty, pdPair, pdSep, pease, player, pseg, pslice, put, pv, pvp, pvv, r, r2, r5, readProp, record, records, resolve, runsum, scopeIds, seq, slowed, spBuild, spSample, spSeg, stubProperty, sub, suffixIds, sum, thisPropertyFor, toComp, xcol, zip
+
+stroke_under_fill
+  caps:    TRANSLATE | SHAPE | FILL | KEYFRAMES | EASING | SPATIAL | PATH_KF | PATH_D
+  runtime: 66 symbols: A_PROGRAM, A_STRIDE, EASE, F_EASE, F_END, F_HOLD, F_SPATIAL, H_ASSETS, H_EASINGS, H_FLAGS, H_FR, H_GATES, H_IP, H_LAYERS, H_OP, H_PROGRAM, H_REMAPS, H_TIMELINES, H_USES, INV, P10, SP_SEG, T_EXPR, T_PATH, T_SCALAR, T_VECTOR, U_EL_BASE, U_PARENT, U_SLOT_BASE, U_STRIDE, bFill, bShape, bTranslate, css, dec, fmt, hasTrim, lerpPath, mkPath, mount, oFill, oShape, oTranslate, open, pathD, pdPair, pdSep, pdim, pease, player, pseg, pslice, put, pv, pvp, pvv, r, r2, seq, slowed, spBuild, spSample, spSeg, vscratch, xv, xvv
 
 trim_path
   caps:    none

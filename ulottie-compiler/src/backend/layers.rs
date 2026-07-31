@@ -860,7 +860,9 @@ pub fn table(data: &SceneData, exprs: &[ir::Expression]) -> Result<Exprs> {
     let mut bodies = Vec::with_capacity(plans.len());
 
     for plan in &plans {
-        super::emit_expressions::emit_one(&mut src, &plan.body, plan);
+        if super::emit_expressions::emit_one(&mut src, &plan.body, plan) {
+            helpers.insert("thisPropertyFor");
+        }
         helpers.extend(plan.helpers.iter().copied());
         // What ships, not what the IR held: the analyses that decide whether a
         // name can leave the payload run on this, and a lookup the rewrite

@@ -1044,6 +1044,37 @@ Run `yarn workspace ulottie-dev-server vitest run tests/perf.spec.ts` to reprodu
 
 ## Correctness fixes landed
 
+- **Every expression in a self-contained build silently returned its authored
+  constant — unless the animation happened to use `thisProperty`.** `evalExpr`
+  built each body's third argument with `thisPropertyFor(ctx, p)`, on the only
+  path there is, while `shake::GATED` listed `thisPropertyFor` as an edge to cut
+  when `Caps::EXPR_PROPERTY` is off. So an animation whose expressions never name
+  `thisProperty` shipped a bundle that called a declaration it did not carry;
+  `evalExpr` catches whatever the body throws and hands back `baseValue`, so the
+  animation rendered as if the expressions were not there. Extern builds import
+  `expr.js` whole and were never affected, which is why one variant was right and
+  the other wrong from the same wire stream.
+
+  The fix is static, not a runtime flag: `evalExpr` passes the property *handle*,
+  and `emit_one` writes `const thisProperty = thisPropertyFor(ctx, $p);` into the
+  preamble of the bodies that ask for the surface, reporting the helper as a
+  shake root the way `pointOnPath` and `createPath` already do. The name is in
+  the emitted text exactly when the declaration is retained.
+
+  **Three things hid it.** The three expression fixtures all name `thisProperty`,
+  so all three retained the helper — the untested shake was "expressions on, that
+  surface off", which `__snapshots__/runtime-surface.txt` now records for
+  `expression_layer_ref`. `tools/compare.mjs` defaults to `--variant extern`, and
+  the corpus had only ever been run that way, while the demo page loads
+  `.embedded.js`. And the pixel gate is not a reliable detector even on the right
+  variant: for one fixture the minifier bound the dangling identifier onto an
+  unrelated declaration, so the module did not throw and rendered correctly by
+  luck — the *unminified* embedded bundle is what fails deterministically.
+
+  An entry belongs in `GATED` only if the call site is genuinely guarded, the way
+  `xcol` is with `x.expr ? xcol(…) : null`. Found from the demo page, at frame
+  100, by looking at it.
+
 - **`starfish` stopped winking, and every gate watched it happen.** Its eye is a
   precomp whose clock is a time remap; the eyelid is an animated mask inside it.
   The remap ramps 0 → 2.333 s and is written in Lottie's *older* keyframe form:
@@ -1144,7 +1175,7 @@ two SVG trees at the worst frame. Making that readable is most of the tool.
   eighty characters are the PNG header makes every frame of a sequence look
   like the same one.
 
-### The fixture set is 28 of 59, and the gate says so
+### The fixture set is 29 of 60, and the gate says so
 
 Eleven fixtures were the whole standing gate for a long time. An external corpus
 of forty-two animations then found **nine** compiler bugs they could not — two
@@ -1169,7 +1200,7 @@ able to trust the number.
 node ulottie-dev-server/tools/census.mjs --coverage
 ```
 
-prints where it stands, split by what the gap actually means. **28 of 59**, and
+prints where it stands, split by what the gap actually means. **29 of 60**, and
 the 31 uncovered are 8 implemented, 5 dropped silently and 18 rejected. The
 interesting column is the first one — implemented code with no fixture is
 exactly where this session's expensive bugs lived.
@@ -1400,6 +1431,27 @@ would mean emitting a dangling `url(#…)` on purpose and dropping a visual the
 author put in the file; this renders what After Effects means instead. It is the
 one place in this corpus where matching lottie-web and rendering the animation
 are not the same thing.
+
+#### Which of a fill and a stroke is on top is Lottie's decision
+
+A style's element is appended where the backwards walk meets it, so a style
+*earlier* in `it` paints *later* — on top. SVG has one order and it is
+fill-then-stroke, whatever the source said. So a stroke Lottie put under its
+fill was drawn over it, eating half its own width out of the fill.
+
+`krrt-7ab2a6d4` is three avatars, each a coloured disc ringed in white, `it`
+order `el fl st tr`. The 30-unit ring ate 15 units into the disc — the ring
+looked thin and the disc looked small, at 0.55%. It is also the whole of the
+0.56% on `krrt-9272cb41` that two earlier passes could not explain: the clip was
+never the problem, and neither was `<clipPath>` versus `<mask>`.
+
+`paint-order="stroke"` is that ordering in one attribute, and measures identical
+to lottie-web's two elements in Chrome — 120 px of fill across the middle either
+way, against 90 px for the SVG default. It is emitted only when the fill is
+ahead of the stroke in the style list, which is where the two disagree.
+
+Nothing in twelve fixtures had the construct. `stroke_under_fill` does now, and
+`census` names it so the gate can see it.
 
 #### Shapes that share a style are one path
 

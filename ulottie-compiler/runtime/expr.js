@@ -111,7 +111,12 @@ function evalExpr(p, frame, ctx, at) {
   // Reading another layer re-enters here, which is why it is saved.
   ctx.frame = frame;
   try {
-    const v = fn(baseValue(ctx, p, frame), rec, thisPropertyFor(ctx, p), frame, ctx);
+    // The handle, not the `thisProperty` view built from it: materializing it
+    // here named `thisPropertyFor` on a branch every expression takes, while
+    // the shaker cut the declaration out of any module whose bodies never ask
+    // for the surface. The body's preamble builds it, so the name is in the
+    // emitted text exactly when the declaration is retained.
+    const v = fn(baseValue(ctx, p, frame), rec, p, frame, ctx);
     memo.set(p, { f: frame, v });
     return v;
   } catch (err) {
@@ -140,7 +145,7 @@ function baseValue(ctx, p, frame) {
 // thisProperty
 // ---------------------------------------------------------------------------
 
-function thisPropertyFor(ctx, p) {
+export function thisPropertyFor(ctx, p) {
   // Keyed by offset rather than hung off the property: the property is an
   // integer now, and there is nothing to hang anything on.
   const cache = ctx.tp;

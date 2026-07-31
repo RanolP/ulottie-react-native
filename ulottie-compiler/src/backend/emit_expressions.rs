@@ -124,11 +124,21 @@ pub fn bare_helpers(bodies: &[String]) -> Vec<&'static str> {
 /// `thisLayer` is the layer *record*. A body the layer pass resolved reads it
 /// through free functions; one it cannot resolve fails the compile, which is
 /// the old proxy and delegates to those same functions.
-pub fn emit_one(out: &mut String, body: &str, plan: &Plan) {
+///
+/// Returns whether the body ended up naming `thisPropertyFor`, so the caller
+/// can add it to the shake roots. That is the whole gate: `evalExpr` hands the
+/// body the property *handle*, and the surface is built here or not at all, so
+/// "the emitted text calls it" and "the declaration ships" are the same fact
+/// rather than two lists that have to agree.
+pub fn emit_one(dst: &mut String, body: &str, plan: &Plan) -> bool {
     let used = free_identifiers(body);
     let uses = |n: &str| used.iter().any(|u| u == n);
 
-    out.push_str("  function(value, thisLayer, thisProperty, frame, ctx) {\n");
+    // Built before it is written, because whether any of it reads
+    // `thisProperty` is what decides if the view is materialized — and the
+    // binding for that has to come out ahead of the reads.
+    let mut pre = String::new();
+    let out = &mut pre;
 
     if uses("time") {
         out.push_str("    const time = frame / ctx.frameRate;\n");
@@ -179,21 +189,33 @@ pub fn emit_one(out: &mut String, body: &str, plan: &Plan) {
         });
     }
 
+    // The third parameter is the property handle. A body that wants the
+    // `thisProperty` surface — its own reads, or an accessor the preamble
+    // folded off it — binds it here; one that does not never names the builder,
+    // and the shaker drops it along with the three views it constructs.
+    let surface = uses("thisProperty") || pre.contains("thisProperty");
+    dst.push_str("  function(value, thisLayer, $p, frame, ctx) {\n");
+    if surface {
+        dst.push_str("    const thisProperty = thisPropertyFor(ctx, $p);\n");
+    }
+    dst.push_str(&pre);
+
     // Bodymovin bodies usually declare `$bm_rt` themselves; only add one when
     // the body does not, rather than emitting a redundant redeclaration.
     if !declares_bm_rt(body) {
-        out.push_str("    var $bm_rt;\n");
+        dst.push_str("    var $bm_rt;\n");
     }
 
     for line in body.lines() {
-        out.push_str("    ");
-        out.push_str(line);
-        out.push('\n');
+        dst.push_str("    ");
+        dst.push_str(line);
+        dst.push('\n');
     }
     // Some bodies already `return $bm_rt;`; a duplicate is harmless because the
     // inner one wins.
-    out.push_str("    return $bm_rt;\n");
-    out.push_str("  },\n");
+    dst.push_str("    return $bm_rt;\n");
+    dst.push_str("  },\n");
+    surface
 }
 
 fn declares_bm_rt(body: &str) -> bool {
