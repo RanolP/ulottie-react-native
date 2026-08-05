@@ -338,6 +338,20 @@ fn scan_shapes(shapes: &[Value], where_: &str, out: &mut Vec<Finding>) {
         if ty == "fl" && s.get("r").and_then(Value::as_u64) == Some(2) {
             push(out, Feature::EvenOddFill, where_);
         }
+        // A group transform skews too, and the layer-transform check above
+        // cannot see it. `Tests_Skew` and `Tests_StarSkew` both put the skew
+        // here, compiled without a word, and rendered 18% and 6% wrong — which
+        // is the whole thing this scan exists to prevent.
+        if ty == "tr" {
+            for key in ["sk", "sa"] {
+                if let Some(v) = s.get(key)
+                    && property_is_nonzero(v)
+                {
+                    push(out, Feature::Skew, &format!("{where_} group transform"));
+                    break;
+                }
+            }
+        }
         // A keyframed colour ramp is planned as one binding per `<stop>`.
         // What that cannot represent is a ramp that also carries alpha stops:
         // those sit at positions of their own, so one set of stop elements

@@ -205,6 +205,14 @@ struct Builder {
     init: String,
     /// Next handle name.
     handles: usize,
+    /// A handle was emitted that reaches the expression engine.
+    ///
+    /// Not "any handle exists": `handle` builds one for every property a
+    /// *record* or a *time remap* needs, and most of those are plain keyframe
+    /// evaluators. Counting handles instead installed the engine for an
+    /// animation whose only expression had already been folded away, and the
+    /// module then called `initExpr(E, ctx)` with no `E` to hand it.
+    uses_expr: bool,
     /// Next keyframe-column table.
     tables: usize,
     /// Emitted handle text → its name, so identical properties share one.
@@ -821,7 +829,6 @@ pub fn try_emit(scene: &Scene) -> Option<Generated> {
             rows.push(format!("{{{}}}", fields.join(",")));
         }
         writeln!(g.init, "ctx.recs=[{}];", rows.join(",")).ok()?;
-        g.need("initExpr");
         // An emitted table never went through `records`, so the back-pointers
         // `lyAt`/`lyRel`/`lyParent` index through are stamped here instead.
         writeln!(g.init, "lyLink(ctx.recs);").ok()?;
@@ -871,7 +878,10 @@ pub fn try_emit(scene: &Scene) -> Option<Generated> {
     Some(Generated {
         body: g.body,
         init: g.init,
-        exprs: !scene.data.layers.is_empty() || g.handles > 0,
+        // Records *or* a surviving expression: a time remap driven by one needs
+        // the engine installed without contributing a single layer record, and
+        // a scene whose expressions all folded away needs it for neither.
+        exprs: !scene.data.layers.is_empty() || g.uses_expr,
         paths: g.paths,
         pre: g.pre,
         decls: g.decls,

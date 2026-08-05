@@ -1376,6 +1376,20 @@ impl Rw<'_> {
         }
         // A layer-typed expression is rewritten to whatever produces its record.
         if self.is_layer(e) {
+            // …except a chain that *ends* at `.path`, which is not a layer but
+            // that layer's geometry. [`Self::is_layer`] calls it one on purpose:
+            // that is what lets `X.content('a').content('b').path.points()`
+            // resolve the record through the chain. In value position the
+            // record is not the value, and emitting it produced a body that
+            // returned a *layer object* — which `pathD` then read a `.v.length`
+            // off and threw, taking the whole animation down at mount.
+            if let ast::Expression::StaticMemberExpression(m) = e
+                && m.property.name == "path"
+            {
+                let obj = self.layer_text(e)?;
+                self.need("lyPath");
+                return Some(format!("lyPath({obj}, frame)"));
+            }
             let t = self.layer_text(e)?;
             return (t != self.text(e.span())).then_some(t);
         }

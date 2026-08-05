@@ -1044,6 +1044,38 @@ Run `yarn workspace ulottie-dev-server vitest run tests/perf.spec.ts` to reprodu
 
 ## Correctness fixes landed
 
+- **Three found by sweeping the lottie-flutter corpus** (432 files from
+  `xvrh/lottie-flutter/example/assets`, dropped in `_fixtures/animations/tmp/`).
+  226 compile without an allowance; `tools/compare.mjs` puts **171 of those
+  pixel-identical to lottie-web**, and the first pass turned up two crashes and
+  a silent drop.
+
+  * **`initExpr(E, ctx)` with neither declared.** `Generated::exprs` was
+    `g.handles > 0`, but `handle()` builds one for every property a *record* or
+    a *time remap* needs — most of them plain keyframe evaluators. An animation
+    whose only expression had already been folded away still installed the
+    engine, and `initExpr` was rooted from a different branch than the one that
+    emitted the call. Now the flag is set exactly where `ctx.expr(…)` is
+    written, the root comes from the same flag as the call, and a scene with
+    records but no surviving bodies gets `const E=[]` — `evalExpr` already
+    answers with the property's own value for an id it cannot find. A
+    `debug_assert` in `generated()` pins the two together. (`Tests_Remap`)
+  * **A `.path` chain in value position rewrote to a layer record.**
+    `is_layer` calls `X.content('a').content('b').path` a layer on purpose —
+    that is what lets the record resolve *through* the chain for
+    `.path.points()`. But when the chain is the body's result, the record is
+    not the value: the body returned a layer object, `pathD` read `.v.length`
+    off it, and the animation died at mount. `render` now emits
+    `lyPath(record, frame)` for a trailing `.path`. (`lottiefiles_frog`,
+    `lottiefiles_progress_bar` — both went from crashing to pixel-exact.)
+  * **A skew on a *group* transform was invisible to `support::scan`.** The
+    scan checked `l.ks` and never the `tr` inside a shape group, so
+    `Tests_Skew` and `Tests_StarSkew` compiled without a word and rendered 18%
+    and 6% wrong. They are honest `--allow skew` refusals now. Skew is still
+    unimplemented; what changed is that it says so.
+
+
+
 - **Every expression in a self-contained build silently returned its authored
   constant — unless the animation happened to use `thisProperty`.** `evalExpr`
   built each body's third argument with `thisPropertyFor(ctx, p)`, on the only

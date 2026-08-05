@@ -499,7 +499,16 @@ fn generated(
     let mut src = String::with_capacity(4096);
 
     // Only the helpers the generated body actually calls, plus the player.
+    //
+    // `initExpr` is rooted from the same flag that decides whether to *call* it,
+    // below. Rooting it from `codegen` instead left the two able to disagree,
+    // and they did: an animation whose only expression drives a time remap has
+    // handles but no layer records, so the call was emitted and the declaration
+    // was shaken away — `Tests_Remap` mounted to `initExpr is not defined`.
     let mut roots = vec!["player"];
+    if code.exprs {
+        roots.push("initExpr");
+    }
     if !scene.data.tpl.is_empty() {
         roots.push("expand");
     }
@@ -529,8 +538,14 @@ fn generated(
     // Arc-length and trim tables, built once when the module loads.
     src.push_str(&code.pre);
 
-    if let Some(e) = exprs {
-        src.push_str(&e.src);
+    match exprs {
+        Some(e) => src.push_str(&e.src),
+        // The engine is installed for the record table, and every body folded
+        // away. `evalExpr` answers with the property's own value for an id it
+        // cannot find, so an empty table is the right thing to hand it — and
+        // `initExpr(E, ctx)` has to be handed *something*.
+        None if code.exprs => src.push_str("const E=[];\n"),
+        None => {}
     }
     // Factored-out subtrees ship as markup strings and are expanded before any
     // element is indexed — the planner numbered the *expanded* tree.
@@ -596,6 +611,14 @@ fn generated(
         crate::scene::svg::n(scene.data.op)
     ));
 
+    // The engine and its table are decided in two places — `code.exprs` here and
+    // `Exprs` upstream — so the one thing that must not drift is pinned where
+    // both are in hand. `Tests_Remap` shipped calling `initExpr(E, ctx)` with
+    // neither `initExpr` declared nor `E` emitted, and only mounting it said so.
+    debug_assert!(
+        !code.exprs || src.contains("const E"),
+        "a generated module that installs the expression engine must carry a table for it"
+    );
     minify(&src).unwrap_or(src)
 }
 
