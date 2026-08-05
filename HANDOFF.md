@@ -1068,11 +1068,33 @@ Run `yarn workspace ulottie-dev-server vitest run tests/perf.spec.ts` to reprodu
     off it, and the animation died at mount. `render` now emits
     `lyPath(record, frame)` for a trailing `.path`. (`lottiefiles_frog`,
     `lottiefiles_progress_bar` — both went from crashing to pixel-exact.)
-  * **A skew on a *group* transform was invisible to `support::scan`.** The
-    scan checked `l.ks` and never the `tr` inside a shape group, so
-    `Tests_Skew` and `Tests_StarSkew` compiled without a word and rendered 18%
-    and 6% wrong. They are honest `--allow skew` refusals now. Skew is still
-    unimplemented; what changed is that it says so.
+  * **Four holes in `support::scan`, found by asking *which feature* each
+    divergence correlates with** rather than filing them as unexplained. With a
+    verdict per file and a census per file, a feature that is wrong whenever it
+    appears is a one-line query — and four came out at a 100% divergence rate:
+
+    | hole | files | what it did |
+    |---|---|---|
+    | skew on a *group* transform | 5 | scan checked `l.ks`, never the `tr` inside a shape group |
+    | `stroke:dash` | 10 | not modelled *anywhere* in the compiler; drew solid |
+    | mask mode `n` (None) | 7 | `ir::MaskMode::Other` lowers to Add, so a no-op mask was drawn |
+    | mask `inv` | — | approximated by painting black; wrong in combination, 3 files of 3 |
+
+    All four are refusals now, not renders. `truthy()` was part of it: it read
+    `as_f64`, and `inv` is a JSON *boolean*, so every boolean flag in the scan
+    read as unset. Nothing else in the scan used a boolean field, which is why
+    it had never shown.
+
+    Skew and dash are unimplemented; both are a rejection waiting to become an
+    implementation — SVG spells dashes `stroke-dasharray`, and the corpus's ten
+    files are the reason to.
+
+  * **What was reverted.** Mode `n` and `inv` also looked like *render* bugs
+    with obvious fixes — skip the mask; use `subtract XOR inverted` rather than
+    `||`. Measured, the first was inert (the mode is already `"a"` by the time
+    the planner sees it) and the second took `Tests_Masks` from 6.8% to 10.6%.
+    Both reverted. `Tests_MaskInv`, despite the name, has no inverted mask at
+    all and its 71.6% is still an unexplained Add+Subtract combination bug.
 
 
 

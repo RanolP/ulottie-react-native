@@ -28,6 +28,7 @@ pub enum Feature {
     ThreeD,
     Skew,
     MaskMode,
+    MaskInverted,
     MaskOpacity,
     Repeater,
     MergePaths,
@@ -38,6 +39,7 @@ pub enum Feature {
     UnknownShape,
     ReversedDirection,
     EvenOddFill,
+    StrokeDash,
     AnimatedGradient,
     ImageAsset,
     LayerEffect,
@@ -58,6 +60,7 @@ impl Feature {
             ThreeD => "3d",
             Skew => "skew",
             MaskMode => "mask-mode",
+            MaskInverted => "mask-inverted",
             MaskOpacity => "mask-opacity",
             Repeater => "repeater",
             MergePaths => "merge-paths",
@@ -68,6 +71,7 @@ impl Feature {
             UnknownShape => "unknown-shape",
             ReversedDirection => "reversed-direction",
             EvenOddFill => "even-odd-fill",
+            StrokeDash => "stroke-dash",
             AnimatedGradient => "animated-gradient",
             ImageAsset => "image-asset",
             LayerEffect => "layer-effect",
@@ -88,6 +92,7 @@ impl Feature {
             ThreeD => "the layer is drawn flat",
             Skew => "the skew is not applied",
             MaskMode => "the mask is treated as Add",
+            MaskInverted => "the inversion is approximated by subtracting",
             MaskOpacity => "the mask is fully opaque",
             Repeater => "only the original copy is drawn",
             MergePaths => "the paths are drawn separately",
@@ -96,6 +101,7 @@ impl Feature {
             PuckerBloat => "the distortion is not applied",
             ZigZag => "the path is not zig-zagged",
             UnknownShape => "the shape is not drawn",
+            StrokeDash => "the stroke is drawn solid",
             ReversedDirection => "winding is unchanged, which can alter holes",
             EvenOddFill => "the fill uses the non-zero rule",
             AnimatedGradient => "the gradient ramp is read as static and may render as NaN",
@@ -117,10 +123,12 @@ impl Feature {
             ThreeD,
             Skew,
             MaskMode,
+            MaskInverted,
             MaskOpacity,
             Repeater,
             MergePaths,
             RoundedCorners,
+            StrokeDash,
             OffsetPath,
             PuckerBloat,
             ZigZag,
@@ -208,8 +216,16 @@ fn push(out: &mut Vec<Finding>, feature: Feature, location: &str) {
     });
 }
 
+/// Whether a Lottie flag is set.
+///
+/// Lottie is inconsistent about how it spells one: `ddd` and `bm` are numbers,
+/// `inv` is a JSON boolean. Reading only `as_f64` meant every boolean flag read
+/// as unset, which is why the mask-inversion check below silently never fired.
 fn truthy(v: Option<&Value>) -> bool {
-    v.and_then(Value::as_f64).map(|n| n != 0.0).unwrap_or(false)
+    match v {
+        Some(Value::Bool(b)) => *b,
+        other => other.and_then(Value::as_f64).map(|n| n != 0.0).unwrap_or(false),
+    }
 }
 
 fn scan_layers(layers: &[Value], where_: &str, out: &mut Vec<Finding>) {
@@ -279,9 +295,19 @@ fn scan_layers(layers: &[Value], where_: &str, out: &mut Vec<Finding>) {
             .map(Vec::as_slice)
             .unwrap_or(&[])
         {
+            // Add and Subtract are implemented. `n` (None) is *not*: the IR
+            // lowers every unrecognised mode to Add, so a mask that should have
+            // no effect gets drawn as one — `Tests_MaskNone` is 25% wrong and
+            // said nothing. Inversion is not implemented either: it is
+            // approximated by painting the mask black, which is right for a
+            // lone inverted Add and wrong in combination — every inverted mask
+            // in the lottie-flutter corpus renders wrong, 3 files out of 3.
             match m.get("mode").and_then(Value::as_str) {
-                Some("a") | Some("s") | Some("n") | None => {}
+                Some("a") | Some("s") | None => {}
                 Some(_) => push(out, Feature::MaskMode, &at),
+            }
+            if truthy(m.get("inv")) {
+                push(out, Feature::MaskInverted, &at);
             }
             if let Some(o) = m.get("o") {
                 if property_differs_from(o, 100.0) {
@@ -337,6 +363,16 @@ fn scan_shapes(shapes: &[Value], where_: &str, out: &mut Vec<Finding>) {
         }
         if ty == "fl" && s.get("r").and_then(Value::as_u64) == Some(2) {
             push(out, Feature::EvenOddFill, where_);
+        }
+        // A dashed stroke carries `d`: a list of `{n: "d"|"g"|"o"}` lengths.
+        // Nothing in the compiler modelled it, so eight files in the
+        // lottie-flutter corpus drew a solid line and said nothing. SVG spells
+        // it `stroke-dasharray`, so this is a rejection waiting to become an
+        // implementation rather than a limit of the format.
+        if (ty == "st" || ty == "gs")
+            && s.get("d").and_then(Value::as_array).is_some_and(|d| !d.is_empty())
+        {
+            push(out, Feature::StrokeDash, where_);
         }
         // A group transform skews too, and the layer-transform check above
         // cannot see it. `Tests_Skew` and `Tests_StarSkew` both put the skew
