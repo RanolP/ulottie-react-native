@@ -15,10 +15,10 @@
   ],
 
   "uncovered": {
-    "mask:i": "implemented: falls to the same subtract branch. Lottie's intersect is not a mask mode this compiler distinguishes; a fixture would say whether that is right.",
-    "mask:n": "implemented: mode `n` is lowered as Add. Untested.",
-    "mask:a-inv": "implemented: `inv` routes an additive mask through the subtract branch. Untested.",
-    "mask:s-inv": "implemented: as above, doubly. Untested.",
+    "mask:i": "rejected: `MaskMode` — only Add and Subtract are implemented; any other mode fails the compile.",
+    "mask:n": "rejected: `MaskMode`. Mode `n` used to be lowered as Add and drawn a mask that should have no effect; the scan refuses it now.",
+    "mask:a-inv": "rejected: `MaskInverted`. The paint-it-black approximation rendered wrong on every corpus file that combined masks.",
+    "mask:s-inv": "rejected: `MaskInverted`, as above.",
 
     "matte:mode-3": "implemented: luma matte, `mask-type=\"luminance\"`. Untested.",
     "matte:mode-4": "implemented: luma inverted, which goes through `invert_filter`. Untested.",
@@ -28,7 +28,7 @@
 
     "asset:image-embedded": "implemented: a data URI carried straight into the markup.",
 
-    "stroke:dash": "not implemented: `d` on a stroke is read and dropped, silently. No finding either.",
+    "stroke:dash": "rejected: `StrokeDash`. It used to draw solid with no finding; SVG spells it `stroke-dasharray`, so this is a refusal waiting to become an implementation.",
     "trim:individually": "not implemented: `m=2` is ignored, so a multi-shape group trims as one. Listed in *What is left*.",
     "shape:no-op": "not implemented: the `no` style is dropped.",
 
@@ -40,7 +40,7 @@
     "shape:offset-path": "rejected: `OffsetPath`. The path is drawn at its authored position, not offset.",
     "shape:zig-zag": "rejected: `ZigZag`. The path is read and the modifier dropped, so the shape draws smooth.",
 
-    "transform:skew": "rejected: `Skew`. `sk`/`sa` are read and dropped, so the layer draws unskewed.",
+    "transform:skew": "rejected: `Skew` — on the layer transform and on a shape group's `tr` both; the group half went unscanned until the flutter corpus rendered it 18% wrong.",
     "transform:3d-rotation": "rejected: `ThreeD`. Separate `rx`/`ry`/`rz` are dropped and the layer draws flat.",
     "3d-layer": "rejected: `ThreeD`, from `ddd` rather than from the rotation.",
     "auto-orient": "rejected: `AutoOrient`.",

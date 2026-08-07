@@ -4,29 +4,38 @@
 ES module out that renders via SVG. The goal is to be dramatically smaller *and*
 faster than lottie-web (~75 KB gzipped) while matching it pixel for pixel.
 
+This file describes the **current state** — architecture, invariants, measured
+results, and what is open. It is kept current: when a change lands, the section
+it touches is rewritten, not appended to. The how-we-got-here narrative lives in
+this file's git history.
+
 ## Repo layout
 
 - `ulottie-compiler/` — Rust compiler (serde → IR → payload → **scene** → JS)
 - `ulottie-compiler/runtime/` — the runtime, as ES modules
-- `ulottie-dev-server/` — compile server, visual + perf harness
+- `ulottie-dev-server/` — compile server, browser test harness
 - `ulottie-dev-server/demo/` — the comparison page (Vite app)
-- `_fixtures/animations/` — 11 Lottie fixtures
+- `ulottie-dev-server/tools/` — `compare.mjs`, `census.mjs`, `probe.mjs`
+- `_fixtures/animations/` — 17 Lottie fixtures (`PROVENANCE.md` says where each
+  came from and why); `__snapshots__/` the review artifacts;
+  `allowances.json` (empty) and `coverage.json` the two feature ledgers
+- `_fixtures/animations/tmp/` — external corpora, gitignored:
+  `jlottie/` (34), `rlottie/` (93), `krrt/` (4), `flutter/` (432)
 
 ## Gates
 
 ```
-cargo nextest run --features eval                    # 165 unit / frame-snapshot / size-budget / hygiene tests
-cd ulottie-dev-server && yarn test                   # 255 tests: 37 output snapshots, 3 coverage, 90 pixel-diff, 12 perf
+cargo nextest run --features eval                     # 165 tests: unit, frame snapshots, size budgets, output hygiene
+cd ulottie-dev-server && yarn test                    # 285 tests: output snapshots, coverage gate, pixel+geometry diff, perf
 node ulottie-dev-server/tools/census.mjs --coverage   # what the fixtures do not exercise
-cargo run --release --bin ulottie-compiler -- <fixture> --document   # standalone SVG
-cargo run --release --bin ulottie-dev-server -- sizes
-node ulottie-dev-server/tools/compare.mjs <any.json> --dom            # any file, vs lottie-web
+cargo run --release --bin ulottie-dev-server -- sizes # size report over the fixtures
+node ulottie-dev-server/tools/compare.mjs <any.json> --dom   # any file, vs lottie-web
 ```
 
 All green as of this writing, with **no per-fixture tolerance overrides** — every
 fixture matches lottie-web within the default 0.5% pixel budget. The fixtures
 are the gate; `compare.mjs` is how you find out what an unfamiliar file does,
-and it is what the last six correctness fixes came out of.
+and it is where most of the correctness fixes have come from.
 
 ### Reviewing what a compiler change did
 
@@ -37,2611 +46,819 @@ per fixture. Shipped output is one minified line, so without these a compiler
 change is invisible in review; with them a diff points at the attribute,
 keyframe or binding that moved.
 
-**One `.js` and one `.svg` per fixture, and the `.js` is real JavaScript.**
-`lottie-logo` is the worked example of extracted markup, so *its* module is the
-extracted one — the header says `markup extracted` — rather than being
-snapshotted twice: extraction changes the module and nothing else, so the second
-copy diffed the same payload again. The sprite is not snapshotted beside it
-either. Its body is the document, which `lottie-logo.svg` already holds, and
-appending it after a comment marker is what left the one file most worth opening
-the one file an editor could not parse. `every module snapshot is valid
-JavaScript` now pins that.
-
 ```
 yarn workspace ulottie-dev-server vitest run --project snapshot     # check
 yarn workspace ulottie-dev-server vitest run --project snapshot -u  # accept, then read the diff
 ```
 
-The `.js` snapshots are compiled with `--instance-precomps`, which is *not* the
-shipping default — they exist to show the smallest thing the compiler can emit,
-and a precomp used forty-six times is where the interesting decisions are. Their
-header says `precomps instanced` when it applies. **Sizes in `sizes` reflect the
-default instead, so the two will not match.** (`lottie-logo` is the exception,
-since `--extract` forces instancing off; it has no precomps either way.) The
-`.svg` snapshots are the document either way.
+- **One `.js` and one `.svg` per fixture, and the `.js` is real JavaScript**
+  (`every module snapshot is valid JavaScript` pins it). `lottie-logo` is the
+  worked example of extracted markup, so *its* module is the extracted one —
+  extraction changes the module and nothing else, so a second copy would diff
+  the same payload twice. The sprite is not snapshotted: its body is the
+  document, which `lottie-logo.svg` already holds.
+- The `.js` snapshots are compiled with `--instance-precomps`, which is *not*
+  the shipping default — they show the smallest thing the compiler can emit.
+  **Sizes in `sizes` reflect the default instead, so the two will not match.**
+  The `.svg` snapshots are the document either way.
+- Generated by `ulottie-compiler <fixture> --pretty`. A review artifact, not a
+  second code path: only whitespace differs from what ships.
+- The sprite's contract is asserted rather than snapshotted, per fixture:
+  element counts agree with the document, and every index the module binds
+  exists in the sprite. The scan reads the payload through `runtime/vlq.js` and
+  `runtime/wire.js` — the same decoder and header the runtime uses — with a
+  companion assertion that fails if it ever finds no element index, because a
+  hand-rolled copy of the wire layout once went silently dead when the format
+  moved.
 
-Generated by `ulottie-compiler <fixture> --pretty`. They are a review artifact,
-not a second code path: only whitespace differs from what ships, and object keys
-are sorted for stable diffs so their order does not match the emitted payload.
-`runtime-surface.txt` has already caught two real bugs: geometry capabilities
-claimed for shapes that then got baked away, and the legacy embedded build
-emitting a call to a `run` the mangler had already renamed.
+### How rendering is verified, and where each check is blind
 
-The sprite's own contract is asserted rather than snapshotted, per fixture:
-element counts agree with the document, and every index the module binds exists
-in the sprite. That scan parsed the payload as JSON, so it silently began
-answering −1 — passing everything — the day the payload became an integer
-stream. It reads the stream through `runtime/vlq.js` and `runtime/wire.js` now,
-the same decoder and header the runtime uses, and a companion assertion fails if
-it ever finds no element index at all.
+Layered, because each layer has a known blind spot:
+
+1. **Pixel diff** (odiff, `antialiasing: true`, five sampled frames). Blind to
+   hairline geometry — the antialiasing pass discounts thin marks, and a 0.000%
+   score has been wrong three separate times (a missing `stroke-dasharray`, a
+   filled-in wordmark counter, a differently-shaped ripple all passed).
+   **Treat 0.000% as necessary, never sufficient.**
+2. **Geometry parity vs lottie-web**: the bounding box of all drawn geometry,
+   normalised to the viewport, across the sample frames and in the shipped
+   `--embedded` build specifically. Catches constant offsets the pixel gate
+   discounts. Blind to clipping — `getBoundingClientRect` does not see a mask.
+3. **Structural assertions** for what neither can see: `a mask is never applied
+   to a transformed element`, `an animated mask keeps animating` (a mask whose
+   `d` never changes is wrong on its own terms — added when `starfish`'s wink
+   froze inside the gap between two sample frames and every gate passed),
+   the sprite/document contracts, and hydration driven to mid-animation (an
+   element-index off-by-one still looks right at the baked frame).
+4. **The document template** snapshots, which do not depend on how the module
+   carries the markup — instancing a precomp must not change a byte of them.
+
+When a person reports a difference the gates missed, **render the frame and
+look at it** before building structural probes — three rounds of bounding-box
+and attribute diffs once reported "identical" on an animation that visibly was
+not, because every probe shared the gates' blind spot.
 
 ---
 
 ## The architecture
 
-The compiler splits every animation into the part that cannot change and the part
-that can.
+The compiler splits every animation into the part that cannot change and the
+part that can.
 
 ```
 Lottie JSON
   → lottie::Animation          (serde AST)
   → ir::Module                 (typed IR, expressions interned)
   → data::Payload              (analysis IR — also what eval::render consumes)
-  → scene::Scene               (markup + bindings)   ← the AOT stage
-  → backend::emit              (JS module)
+  → scene::Scene               (markup + programs + integer stream)   ← the AOT stage
+  → backend::emit | codegen    (JS module; both built, smaller wins)
 ```
 
-`data::Payload` deliberately stayed put as the analysis IR. `eval::render` still
-renders it directly as the Rust reference implementation, which is what keeps the
-frame-snapshot tests meaningful while the emitted format changes underneath.
+`data::Payload` deliberately stays the analysis IR. `eval::render` renders it
+directly as the Rust reference implementation, which keeps the frame-snapshot
+tests meaningful while the emitted format changes underneath. Change the wire
+format in `scene/`, never in `data::`.
 
-### What `scene::plan` produces
+### What a compiled module contains
 
-**`M` — one SVG markup string** with every frame-invariant value already resolved:
-geometry as a literal `d` (or `<rect>`/`<ellipse>` attributes), transforms folded to
-a single `matrix()` or elided when identity, paints as literal attributes with SVG
-defaults omitted, gradients as complete `<linearGradient>` markup. It is exported as
-`markup` so it can be server-rendered.
+**`M` — one SVG markup string**, baked at the composition's first frame:
+geometry as a literal `d` (or `<rect>`/`<ellipse>` attributes), transforms
+folded to `matrix()`/`translate()` or elided when identity, paints as literal
+attributes with SVG defaults omitted, gradients as complete markup. `Scene`
+carries two forms: `markup` (fully baked, standalone — what `--document` and
+the sprite serve) and `inline` (unbaked — the runtime writes those attributes
+on mount, so baked values there would be dead bytes).
 
-**`D` — a table of only what varies.** Static values are bare (`100`, `[256,256]`);
-keyframes are columnar with stride `dim`; easing handles are interned as
-`[ox,oy,ix,iy]` with linear folded to index 0; paths are flat `[x,y,x,y,…]` arrays
-that drop their tangents entirely when polygonal.
+The bake mirrors `runtime/ops/*.js` op by op, under two rules that make
+hydration sound: *write exactly what the op writes* (the op writes one combined
+`fill="rgba(…)"`, so the bake must not leave a `fill-opacity` the runtime never
+overwrites), and *write nothing the op would not have written* (a binding gated
+off at frame 0 is skipped in the bake too). Only attributes are added, never
+elements — bindings address elements by document-order index.
 
-**`b` — bindings, grouped by op into struct-of-arrays batches.** The element
-index is its position in document order, so one `querySelectorAll('*')` at mount
-resolves every target: no ids, no data attributes, no per-element lookup. Which
-op a binding is never reaches the wire — it is the batch it is in, and the
-module names the op function directly. See [the op programs](#ops-are-loops-not-callbacks).
+**`D` — the payload, one VLQ base36 string** decoding to a single `Int32Array`.
+No nested arrays, no polymorphic cells, no objects: a property, a batch, a
+layer record, a clock, a gate are each a run of integers at an offset, and
+every reference is that offset. Offset 0 is the header, so 0 doubles as the
+"absent" marker everywhere.
 
-A frame is then one loop per op over columns. No tree walk, no dispatch on a
-property's shape, and — for an animation with nothing animated — no loop at all and
-no `requestAnimationFrame` scheduled.
+**`P` / `A` — the program**: two flat functions the compiler wrote, one that
+binds each op batch and one that runs them, calling the op functions by name.
+There is no binder table and no op code on the wire — which op a binding is
+was only ever a compile-time fact:
+
+```js
+const P0=(x,B,e,l,q,a)=>[bTranslate(x,B[0],e,l,q,a),bDisplay(x,B[1],e,l,q,a),bShape(x,B[2],e,l,q,a)];
+const A0=(x,S)=>{oTranslate(x,S[0]);oDisplay(x,S[1]);oShape(x,S[2])};
+export const init=(c,o)=>mount(M,D,P0,A0,c,o);
+```
+
+### Ops are loops, not callbacks
+
+Every runtime primitive is a direct call over plain data; no op returns a
+callback, and neither emitted program closes over anything. The only closure a
+mounted animation holds is `apply`, handed to the shared player
+(`runtime/play.js`, used by both backends).
+
+- **Bindings are grouped by op** into struct-of-arrays batches
+  (`scene::flat::batch_section`). Each op is a pair: `bXxx(x, base, …)` opens
+  the batch once at mount and returns a plain state record; `oXxx(x, s)` is the
+  per-frame loop. `scene::program_ops` fixes the order (ascending op code) and
+  is the whole contract between encoder and emitter.
+- **Property evaluation is three functions, not closure shapes**
+  (`runtime/pv.js`): `pv` for a scalar, `pvv` into the caller's scratch, `pvp`
+  for geometry — each reads the stream at the frame it is asked for. The only
+  per-property state is a segment cursor in an `Int32Array` the op indexes by
+  binding. `kf::resolve` wraps the same three for the two consumers that need
+  a property as a *function* — the expression engine and a precomp's time
+  remap — and constant-folds `T_SCALAR`/`T_VECTOR` to a captured value. One
+  interpolator, not two.
+- **The geometry kind is the op.** `oShape` / `oShapeRect` / `oShapeEllipse` /
+  `oShapeStar` are separate ops sharing `Caps::GEOM_*` with the generator each
+  calls, so an animation that only draws bezier paths ships neither the
+  polystar generator nor a branch past it. The trim modifier stays a shared
+  column rather than doubling the op count.
+- **Gate and clock reads have no branches.** Gate 0 is pinned on and slot 0 is
+  the composition clock, so a loop reads `ON[G[i]]` and `T[L[i]]`
+  unconditionally.
+- Layer transform/opacity bindings (`oLayerTx`/`oLayerOpacity`) reference the
+  expression record table instead of carrying a second copy of the keyframes;
+  `mtx` is the one matrix implementation for every consumer.
+
+Two rules keep this form at parity with the closures it replaced — both are the
+capture list of a closure written out, and each cost ~5–9% of `ripple` when
+missed:
+
+- **Hoist an op's state fields into locals before the loop.** The loop body
+  must read locals, or every iteration pays a property load per column.
+- **Resolve per-binding lookups at bind time**, never in the loop —
+  `bLayerTx` resolves each record's four fields (with defaults) once, via
+  `lyFields`; generated code does the same in `init`.
+
+Two closures remain, both the expression engine's: `kf::resolve`'s handle
+(the engine hangs `thisProperty` off it) and `ctx.expr`. Removing them is not a
+runtime change — compile the bodies and there is nothing left to hand a handle
+to. That is the top open item.
 
 ### Why it is fast
 
 Three mechanisms, in order of measured impact:
 
 1. **Static hoisting.** ~73% of the per-frame work in this corpus is provably
-   frame-invariant. It is now evaluated once, by the compiler.
-2. **Subtree gating** (`D.k` / `D.g`). A binding inside a layer that is off at the
-   current frame is skipped outright. Without it, a scene of staggered layers pays
-   for all of them every frame.
-3. **Change detection** (`set::put`). A DOM attribute write invalidates
-   style and layout even when the value is identical; comparing first is strictly
-   cheaper.
+   frame-invariant. It is evaluated once, by the compiler.
+2. **Visibility gating.** A binding inside a layer that is off at the current
+   frame is skipped outright (the gate table plus a per-binding gate column).
+   Without it, a scene of staggered layers pays for all of them every frame.
+3. **Change detection** (`set::put`). A DOM attribute write invalidates style
+   and layout even when the value is identical; comparing first is strictly
+   cheaper. The compiler already removed every write that can never change;
+   this catches plateaus and values that round to the same string.
+
+Where frame time actually goes (Chrome sampling profile): layout/native ~40%,
+`setAttribute` ~6–16%, path-string assembly up to 15% on shape-heavy files, the
+expression engine ~14% on `ripple`. Keyframe interpolation is ~2%. Optimise
+accordingly — the number formatter and the interpolator are **not** where the
+time is (see *Measured and rejected*).
+
+### The wire format
+
+`scene/flat.rs` is the single source of truth; `runtime/wire.js` mirrors its
+header slots and strides as individual exported constants (so the minifier
+folds them and the shaker drops unread ones — an object of constants shipped
+whole in every module).
+
+Header slots: `FR IP OP FLAGS EASINGS TIMELINES GATES PROGRAM LAYERS ASSETS
+USES REMAPS`. An asset row is `[template, program, timelines, records]`
+(`A_*`), a use row `[asset, elementBase, slotBase, parentSlot]` (`U_*`).
+A program is `[count, batchOffset × count]`; a batch is:
+
+```text
+[count, flags,
+ el…     count, first differences
+ gate…   count, when flags & 1
+ slot…   count, when flags & 2
+ arg0…   count
+ …
+ argK…   count]
+```
+
+Rules that keep it small and correct:
+
+- **Values are quantized before encoding** (`svg::q`, 3 decimals), so scaling
+  by a power of ten is exact; each column picks the *smallest* exact power
+  (`INV`/`P10` in `runtime/scale.js`), so whole-frame time columns stay short.
+- **Properties are hash-consed** — identical encodings collapse to one offset
+  (28% of property bytes across the corpus).
+- **Repetition beats magnitude.** Absolute values repeat and their differences
+  do not, so delta-encoding almost always *loses* after gzip. The exceptions —
+  the only columns encoded as first differences — are the ones that ascend and
+  never repeat: element indices, the record-offset table, and the record index
+  column of the two layer ops (`arg0_is_record`).
+- **Every binding of one op has the same argument count** (a `debug_assert` in
+  `batch_section` pins it), because arguments are one column each. An argument
+  that is an enumeration must be `Arg::Tag` (stored as-is); `Arg::Num` is a
+  measurement and is scaled by ×1000. Inside `Arg::List` everything is stored
+  raw, so promoting a value out of a list changes its tag — and every reader
+  (`bake_geometry` included) has to accept the new one.
 
 ### Expressions
 
-Expressions run on the scene runtime like everything else — there is no second
-backend. A `Prop::Expr` carries its expression id, its value source and the
-index of the layer it belongs to; the planner emits a layer table (`D.y`) shaped
-exactly the way `runtime/expr.js` reads it, so `thisLayer`, `thisComp.layer()`
-and `effect()` need no translation between wire and runtime. Layer transform and
-opacity bindings reference that table rather than carrying a second copy of the
-same keyframes.
+Expressions compile; they do not fall back. The pipeline, in order:
 
-What gets emitted for the expression bodies is shaken the same way as the
-runtime:
+1. **Parse with oxc** (`src/expr/`) — a real parser, because an identifier scan
+   cannot tell an effect name from a string literal.
+2. **Fold** against what the compiler knows (static effect parameters, keyframe
+   counts, value ranges): per *property*, since bodies are deduplicated and one
+   body folds differently per site. Verdicts are Identity (expression deleted,
+   property is its keyframes), Constant, or Open (ships). One-directional by
+   construction — anything not exactly resolvable is Open, because a missed
+   fold costs bytes and a wrong one is a silent render change. Bodymovin's
+   boilerplate guards (`loopOut` toggles, `clamp(value, 0, 100)`) mostly fold
+   away; `fold_branches` decides compile-time-constant `if` tests and splices
+   the taken arm.
+3. **Sweep** dead bodies and renumber — tracking `seen` alongside `live`, so a
+   property site the walk does not know about keeps its body rather than losing
+   it (an incomplete walk must cost bytes, not correctness).
+4. **Resolve references** (`backend::layers`, per candidate scene): every layer
+   reference becomes a slot in the owning record's table and every access a
+   free call —
 
-* **Deduplicated.** After Effects copies an expression onto every layer it is
-  applied to. `ExprTable::insert` now returns the existing id for an identical
-  body, which is all the deduplication needs since properties store that id —
-  lights 20 → 6 expressions, starfish 25 → 3.
-* **Minimal preamble.** Each body used to be preceded by all eleven `ctx`
-  helpers plus the six `thisProperty` accessors. The minifier cannot drop those:
-  `thisProperty?.key` is a property read, which it must assume has side effects.
-  They are now emitted from what the body actually references — string literals
-  and member accesses excluded, so `path.pointOnPath(t)` introduces no binding.
+   ```text
+   thisComp.layer('wire').toComp(p)   →  toComp(lyAt(thisLayer, 8), p, frame)
+   barLayer.content('Path 1').path.points()
+                                      →  lyPoints(lyRel(thisLayer, 2), frame)
+   layer.effect('Trace Path')('Progress')
+                                      →  lyEffect(lyRel(thisLayer, -3), 0, 0, frame)
+   ```
 
-Together: the `E[]` section of `lights` fell from 27.7 KB to 4.0 KB, `starfish`
-from 33.0 KB to 3.1 KB, `ripple` from 7.4 KB to 1.7 KB.
+   Two spellings, because bodies are shared across sites: `lyAt` when every use
+   agrees on the absolute slot, `lyRel` when only the offset from the owner
+   agrees (`agree()` folds or refuses). A chain *ending* at `.path` in value
+   position emits `lyPath(record, frame)` — the record resolves *through*
+   `.path` for accessor chains but is not itself the value. Effect and
+   parameter names resolve to indices (including the `nullLayerNames`
+   table-of-names pattern AE generates), and `prune_effect_names` then drops
+   every name no surviving body text mentions — lexically, whole-literal
+   matching, so a gap in the rewrite costs bytes rather than shipping a module
+   that throws.
+5. **Refuse loudly.** A reference the pass cannot resolve fails the compile
+   (`ULOTTIE_WHY=1` names the construct). There is no proxy and no legacy
+   fallback evaluator. A reference that resolves to *nothing* also refuses —
+   the free helpers are null-safe, so emitting `null` would compute on a
+   fabricated point instead of aborting into the property's own value the way
+   the old proxy did.
+6. **`verify()` has the last word**: a text scan of the finished body, sharing
+   no code with the walk, sends any surviving layer member or free
+   `effect`/`thisComp` to refusal. Fail-open is the one thing this pass may
+   not be. `sites()` is fail-safe by construction — `SceneData`, `AssetPlan`
+   and `LayerRecord` are destructured exhaustively, so a new `Prop`-carrying
+   field stops compiling until it is walked or explicitly waved past.
 
-### Unsupported features are rejected, not dropped (by the CLI)
+**Emission.** Each body gets a preamble derived from what it references —
+nothing probed at run time. `Site` carries a `Surface` (keyed / path / stub,
+decided by the value source), and each `thisProperty` accessor is a plain read,
+a stub, or a `||` only where deduplicated uses disagree; `numKeys` folds to `0`
+off non-keyed surfaces. `thisProperty` itself is materialized in the preamble
+(`thisPropertyFor`) only for bodies that use the surface, which is also what
+makes its shake gate sound. The arithmetic and path helpers are top-level
+exports called by bare name — there is no `ctx` plumbing — and retention is
+exact: `Plan::helpers` (what the rewrite emitted) plus `bare_helpers` (a scan
+of the shipped text) feed the shake roots and extern imports.
 
-Compilation fails when the source uses something the backend does not
-implement, listing every occurrence with its layer and what ignoring it would
-do. `--allow track-matte,blend-mode` accepts named degradations deliberately.
-`_fixtures/allowances.json` records them for the corpus and **is now empty** —
-every feature the fixtures use is implemented.
+**Cost, and the open item.** From `tests/expression_cost.rs`
+(`cargo test --release --features eval --test expression_cost -- --nocapture`),
+minified bytes:
 
-The scan reads the raw JSON, not the typed AST, because the AST is lossy by
-construction: an unknown shape lowers to `Unknown` and a field nobody reads
-simply is not read, so a check on the AST cannot see what was dropped.
+```
+fixture                module   engine   bodies   overhead
+expression_layer_ref      960     5389       41       5430
+lights                   4399     9023      888       9911
+starfish                 4630     5190      810       6000
+ripple                  33245     6678      349       7027
+```
 
-Four features landed rather than being tolerated:
+No expression fixture ships any string table. But the engine an expression
+animation drags in is **larger than the animation itself** on three of the
+four. The surviving bodies still run as JavaScript through `evalExpr`;
+compiling them — turning `loopOut('cycle')` into `f → ip + (f-ip) % span`,
+`pointOnPath` into a kernel over resolved inputs — is where those modules go,
+and it would also make the baked document exact for expression-driven
+properties (today they bake to the no-engine fallback, which lottie-web also
+disagrees with only there).
 
-- **Image layers and image assets** (`ty: 2`). One `<image>` at the asset's
-  natural size, with `preserveAspectRatio="xMidYMid slice"` — lottie-web's
-  default for images, not SVG's, and the two differ the moment a layer's scale
-  is not uniform. Nothing about it can vary, so it is pure markup with no
-  binding at all; the layer's transform moves it, exactly as for a shape. An
-  embedded asset (`e: 1`) carries its data URI straight into the markup, which
-  means the module is as large as the pictures in it — the honest size for an
-  animation that *is* a sequence of PNGs. Only an asset with no `p` at all is
-  still reported, because then there is no source to point at.
-- **Keyframed gradient ramps.** A ramp whose stops move is one binding per
-  `<stop>`, each carrying `[offset, r, g, b]` — a four-component property,
-  which is exactly the width the wire's dimension field allows. The element
-  count is fixed because Lottie's stop count is. What this does *not* cover is
-  a ramp that also carries alpha stops: those sit at positions of their own, so
-  one set of stop elements cannot follow both once either set moves.
-  lottie-web answers that with a second gradient used as a mask; here it stays
-  reported rather than silently resampled.
+### Two backends, both built, smaller wins
 
-- **Time remap** (`tm` on a precomp layer). Lottie stores the composition's own
-  time, in seconds, as a function of the outer time; it replaces the usual
-  `outer − start_time` clock. The planner gives such a precomp a timeline slot
-  of its own (`SceneData::remaps`, wire key `rm`, parallel to `t`), and the
-  runtime takes that branch instead of applying the offset or the loop, scaling
-  by the frame rate. Starfish's remap is expression-driven, which falls out for
-  free: `resolve` already routes `p.x` through the expression engine. It is
-  still reported as unsupported anywhere Lottie does not define it — on a
-  non-precomp layer it would be read and dropped, which is what the scan is for.
-- **Track mattes** (`td` on the matte source, `tt` on the layer it mattes; all
-  four AE modes). The matte layer is not drawn: it becomes a `<mask>` in defs
-  and the layer it mattes gets `mask="url(#…)"`. Which layer that is comes from
-  `tp`, naming it by `ind`; only when `tp` is absent is it the layer
-  immediately above. One matte can serve several layers, and the mask is
-  referenced by id, so the second to ask reuses the first's rather than needing
-  its own copy of a subtree that can only be in one place. A `td` layer is out
-  of the picture whether or not anything ended up masked by it. Alpha modes use
-  `mask-type="alpha"` — `lottie-logo`'s matte is a stroked, trimmed path with no
-  luminance to speak of, only coverage. Inversion goes through a filter
-  (`feComponentTransfer`, `tableValues="1 0"`) rather than the usual white-rect
-  trick, because subtracting alpha is not something a mask can express and
-  forcing the matte's paint would mean overriding fills already baked into it.
-  The filter needs an explicit `userSpaceOnUse` region: the default is the
-  source's bbox plus 10%, and outside it the inverted alpha reads as 0 and hides
-  everything. Verified in Chrome before it was written.
+`backend/codegen.rs` writes an animation as straight-line JavaScript — no
+payload, no interpreter, constant folding the runtime structurally cannot do
+(a compile-time zero rotation emits a diagonal matrix with no trig). `emit`
+builds both forms and keeps the smaller; `ULOTTIE_WHY=1` prints both sizes and
+which binding made codegen decline. Self-contained + inline markup only: an
+extern module shares the interpreter with the page, and extracted markup is
+gated to the interpreter.
 
-  **The mask goes on an untransformed wrapper, never on the layer's own group.**
-  A mask is resolved in the user space that element's `transform` establishes,
-  so hanging it on the layer put the matte through that transform a second time
-  — `lottie-logo`'s masked layer sits under a ~50° rotation, and the matte was
-  rotated with it and clipped the wrong part of the wordmark. Neither gate saw
-  it: the bounding box does not move, and the difference is hairline
-  antialiasing that odiff discounts. `a mask is never applied to a transformed
-  element` in `output.spec.ts` is the structural check that does.
+Currently 12 of the 13 non-static fixtures are code-generated; `ripple` is the
+counter-example that keeps both paths honest — 230 bindings unrolled to 151 KB
+against the interpreter's ~50 KB, because codegen trades data for code and
+loses when the animation dominates the runtime.
 
-  Measured on `lottie-logo` at the midpoint, against a canvas raster: the matte
-  changes **12 px**, all of it the antialiased seam where the two `O` strokes
-  overlap. Before the wrapper fix it changed 272 px, in the wrong place.
+Bounds that keep generated output small, each measured: above `UNROLL_MAX` (12)
+segments a property ships as columns sampled by `kfEval` (columns carry spatial
+tangents too — dropping them once bent a motion path silently); expression
+handles carry columns, never an unrolled body (the engine needs the data
+anyway); layer bindings are `lyFields` + `mtx` calls, not inlined arithmetic
+(nothing folds — every input is a runtime handle); handles are hash-consed on
+their emitted text. `Generated::exprs` is set exactly where a `ctx.expr(…)`
+handle is emitted, the engine root comes from the same flag as the call, and a
+scene with records but no surviving bodies gets `const E=[]` — a
+`debug_assert` keeps the engine and its table coupled.
 
-**The dev server does not reject.** It is a viewer: it compiles whatever it is
-handed, allowances or not, and returns every finding in the response so the
-degradation shows next to the render rather than in place of it. The strict gate
-lives in the CLI and in `allowances.json`, which the snapshot suite still
-enforces.
+Generated and interpreted output are byte-identical on every sampled frame of
+every fixture except a ~2e-6 relative difference where the interpreter
+interpolates in scaled-integer space and codegen in real units. Both correct.
 
 ### The document template
 
 `compile_document()` (CLI `--document`) emits the animation as one standalone
-SVG holding every value the compiler could resolve ahead of time. It is
-deterministic, needs no script, and is a valid document in its own right — so it
-works for SSR, `<noscript>`, static thumbnails, or as the DOM a client hydrates
-onto with `init(el, { hydrate: true })`.
-
-For an animation that compiles to nothing dynamic, the template *is* the
-finished render — `trim_path`'s is the complete picture, trim evaluated at
-compile time. For an animated one it is the static skeleton: attributes that
-vary are written by the player at mount, so `lottie-logo`'s trim-drawn strokes
-carry no `d` yet. A true frame-0 snapshot would additionally need every binding
-evaluated in Rust, which means reimplementing the binders — not done.
-
-`_fixtures/__snapshots__/*.svg` snapshot these, separately from the JS modules.
-The document is what the animation *is*; how a module chooses to carry it is a
-separate decision, and a test asserts the two stay independent — instancing a
-precomp must not change a single byte of the document.
+SVG — every binding evaluated at the first frame, renders with no script. For
+SSR, `<noscript>`, thumbnails, or the DOM a client hydrates onto with
+`init(el, { hydrate: true })`. Snapshotted per fixture as
+`_fixtures/__snapshots__/*.svg`; a test asserts the document does not depend on
+how the module carries its markup. The cost of the bake is attributes on
+animated elements (+10–18% document bytes typically); it buys a correct first
+paint.
 
 ### Extracted markup
 
-`CompileOptions::markup = MarkupMode::Extracted(id)` (CLI `--extract <file>`)
-moves the document out of the module and into an external SVG sprite, as
-`<symbol id="…">`. The module then carries only the `<svg>` shell — viewBox and
-the presentation attributes, ~110 bytes — and clones the symbol's children into
-it at mount.
-
-Compiling several animations into the same path accumulates them into one
-sprite; recompiling one replaces its symbol, so a build can just loop.
-
-**Why cloning, and not `<use>`.** Measured in Chrome: for `<use href="#sym">`
-the root's `querySelectorAll('*')` returns exactly `["use"]` — `children` is
-empty, `shadowRoot` is `null`, and `elementFromPoint` over the painted instance
-returns the `<use>`. The instance tree is unreachable from script, so nothing
-could bind to it. An external `<use href="sprite.svg#sym">` is no different, and
-additionally fails *silently* cross-origin even with permissive CORS. Cloning
-the symbol's **children** into a fresh `<svg>` reproduces the identical
-document-order element sequence, which is the whole binding contract.
-
-Two things that would break that contract, both guarded by tests: retaining the
-`<symbol>` (or a nested `<svg>`) as a wrapper shifts every index by exactly one,
-and whitespace does not — `querySelectorAll` is element-only, so a
-pretty-printed sprite indexes the same as a minified one.
-
-**The markers had to change.** Generated ids carry a placeholder the runtime
-substitutes per mount. It used to be `U+0001`; a sprite is a real `.svg` parsed
-by the *XML* parser, which rejects that outright (`DOMParser` → "invalid
-character in attribute value", `<img>` fires `onerror`). Inline mode only worked
-because `innerHTML` uses the lenient HTML parser. `ID_MARK`/`CLONE_MARK` are now
-ASCII `--u`/`--c`, and a test asserts the sprite carries no character XML 1.0
-forbids.
-
-Extracted mode also has no string to substitute, so it rewrites ids on the built
-DOM instead (`runtime/ids.js`). That walks *every* attribute rather than a
-list of the id-bearing ones — which is shorter than the list and also the only
-version that catches `xlink:href`, the one id-referencing attribute that lives
-in a namespace and that `getAttribute('href')` misses.
-
-**`init()` stays synchronous**, so the sprite has to be in the document before
-it runs: inline it into the HTML server-side, or fetch and inject it once. A
-missing symbol throws by name rather than rendering an empty box. To preload it,
-`as="fetch"` **with** `crossorigin` is the only form that primes a later
-`fetch()` — `as="image"` issues a second request instead.
-
-The module exports `spriteSymbol` so a consumer can tell which sprite entry it
-needs without parsing it. Note that `markup` is only the shell in this mode —
-`compile_document()` is what returns the assembled document for SSR.
-
-**It is not a size win.** All eleven fixtures, gzipped: 12.67 KB inlined vs
-13.37 KB extracted (10.98 KB of JS + 2.39 KB of sprite), so +5.5% — two payloads
-compress worse than one. What it buys is delivery shape: the picture gets its
-own URL and cache lifetime, revalidated independently of the JS, shared across
-animations and preloadable ahead of the module graph. For a tiny fully-static
-animation it is a straight loss (`rectangle`: 412 B → 439 B + 215 B), because
-the clone loop costs more than the markup it removes.
-
-### Wire-format compaction
-
-Measured end to end as minified+gzipped bytes of the real shipped module.
-Corpus of 7 payload-bearing fixtures: **13397 → 11418 B, −14.8%**; `ripple`
-−30.7%, `lights` −5.5%, `starfish` −4.4%. Zero per-frame cost — every decode
-happens once, at mount.
-
-| change | saving | where |
-|---|---|---|
-| delta-encode the index columns | −1109 | `Deltas`/`Prefix` in `scene/mod.rs`, decode in `core.js` |
-| hoist the scope field out of the record | −658 | `SceneData::scopes`, emitted as `gy` |
-| prune the layer-name table | −217 | `reachable_names` in `backend/mod.rs`, `Scene::prune_names` |
-| elide record fields equal to the runtime's fallback | −120 | `impl Serialize for LayerRecord` |
-
-Precomp instancing would harvest the same duplication again — `ripple` 3825 →
-2416 — but it costs frame time, so `Instancing::Auto` currently declines it.
-See below.
-
-**Delta-encoding is the whole story.** The element column, `D.l`
-(timeline slots), the record index in the two layer ops, and `D.n[u][1]` are
-all absolute positions into ascending sequences. Stored absolutely, `ripple`'s
-46 precomp copies bind the same five patterns at 46 different indices and every
-row is unique; stored as differences they become 46 identical rows and LZ77
-collapses them. The runtime keeps running sums — the payload is module-scoped
-and must not be decoded in place, or a second `mount()` would decode twice.
-
-`op::LAYER_TX`/`LAYER_OP` are the only ops whose first argument is an index.
-`mount` spells that `b[0] > 9` to save bytes, and `record_ops_are_the_highest`
-pins the invariant, because a new higher op code would misdecode silently.
-
-Name pruning: the planner interns every layer's name because it cannot see the
-expressions; once the bodies are known, `starfish` needs **none** of its 16,
-`lights` 1 of 14, `ripple` 2 of 6. The scan bails out to keeping everything on
-a computed `layer()` argument or any `.name` read — a wrongly-dropped name
-returns `undefined` and renders wrong rather than erroring, so the guard is
-deliberately wide.
-
-Field elision has the correct defaults wired to the read sites: `o` defaults to
-**100**, not 0, so eliding an explicit `o: 0` would turn a hidden layer opaque.
-
-**The scope column.** `LayerRecord::g` measured as dead — nothing read it — and
-deleting it was worth −658 B. It is not dead code though: it is the composition
-scope, and both `byName` and `byIndex` are keyed by it. With it hardcoded to 0,
-two inlined precomps each holding a `Shape Layer 1` (or simply two layers both
-at index 1 — After Effects numbers from 1 per comp) collapse onto one key and
-the last one silently wins. That is the common case, not an exotic one, so the
-field is now **hoisted into a parallel delta-encoded column `D.gy` and actually
-read** — same bytes recovered, minus 125, and the collision is fixed. A runtime
-test pins it; it fails with `expected 1 to be 2` if the wire-up is removed.
-
-#### Fully-flat integer SOA — measured properly
-
-An earlier pass here rejected "SOA" on measurement. That measurement was of the
-wrong thing: it transposed array-of-structs into struct-of-arrays while leaving
-the polymorphic `Prop` objects, nested keyframe records and strings inside, so
-neither the entropy nor the pointer-chasing changed. The real proposal is a
-*fully* flat form — no nested or polymorphic cells, everything a 32-bit int
-(SMI-friendly), with the hot loop reading integers instead of rebuilding
-structs at mount. Measured with a complete encoder (`/tmp/flat.mjs` pattern:
-tagged int stream + string pool, verified to preserve every string value and
-every number exactly — the corpus is already ≤3 decimals everywhere, so ×10^d
-per run is lossless; max |value| is 1229, so ×1000 stays well inside SMI).
-
-**Payload alone** (all six payload-bearing fixtures, bytes):
-
-| encoding | raw | gzip | brotli |
-|---|---|---|---|
-| JSON, today | 55622 | 6217 | 4999 |
-| VLQ base36 | 30166 −45.8% | 5435 −12.6% | 4584 −8.3% |
-| VLQ base64 | 27502 −50.6% | 5374 −13.6% | 4500 −10.0% |
-
-**Whole module**, decoder amortised into the shared runtime: **−4.3% gzip**
-(base36 VLQ) — base36 beats base64 here, the smaller alphabet costs raw density
-but compresses better. Charge the decoder per module instead, as `--embedded`
-would, and it turns into a *loss* on small fixtures. Brotli barely moves, and
-plain comma-separated decimals beat every VLQ under brotli (−3.6%).
-
-**Where the frame time actually goes** (Chrome sampling profile, extern build so
-the runtime is unminified, layout forced inside the measured region):
-
-| | ripple | lottie-logo |
-|---|---|---|
-| layout / native | 39.7% | 37.5% |
-| `setAttribute` | 15.6% | 6.0% |
-| number → string (`fmt`) | 2.0% | 3.0% |
-| path assembly (`pathD`, `pdPair`, `pdSep`) | — | **15.0%** |
-| expression engine | **13.8%** | — |
-| frame loop + change detection | 8.2% | 11.4% |
-| **keyframe interpolation (`kf.js`)** | **not in the top 14** | **1.8%** |
-
-So the conclusion is not the intuitive one. A flat integer loop makes
-interpolation **1.7× faster** (measured head-to-head on the corpus's 143 real
-keyframed properties, rising with scale; mount 1.7× too) — but interpolation is
-~2% of a frame, so that is ~1% overall.
-
-Nothing here touches layout (~40%) or `setAttribute` (~16%), which together are
-over half of every frame and belong to the browser. What is left that is ours
-is **path-string assembly** on shape-heavy files and the **expression engine**
-on `ripple` — the latter is already the top item in the remaining work.
-
-> An earlier revision of this table put `fmt` at 15.6% on `lottie-logo` — the
-> same figure as the `setAttribute`/ripple cell beside it, and a transcription
-> slip. Every other row re-measured within a point; that one was off by 5×. It
-> is corrected above, and the section below is what came of believing it.
-
-#### The fully-flat integer payload, built and measured
-
-This is the design in full: the payload is **one `Int32Array`**, decoded from a
-single VLQ base36 string, plus a string pool for the handful of things that
-cannot be an integer (layer names, the baked `matrix(` prefix, template markup,
-effect names). There are no nested arrays, no polymorphic cells and no objects
-anywhere in it. A property, a binding row, a layer record, a clock, a gate — each
-is a run of integers at an offset, and every reference to one is that offset.
-
-Three things make it lossless and compact at once: values are already quantized
-to 3 decimals by `svg::q`, so scaling by a power of ten is exact; each column
-picks the *smallest* exact power of ten, so a time column of `[0,25,40]` stays
-three characters instead of becoming `[0,25000,40000]`; and properties are
-hash-consed, which collapsed 28% of prop bytes across the corpus.
-
-It works — 158 browser tests and 94 cargo tests — and it is **smaller raw and
-bigger compressed**, at both the halfway point and the end:
-
-| | payload raw | module raw | gzip | brotli |
-|---|---|---|---|---|
-| JSON (before) | 48 613 | — | — | — |
-| props flattened only | 34 497 (−29%) | 68 130 | 12 447 | 10 091 |
-| everything flattened | — | 54 981 (−19%) | **12 937 (+3.9%)** | **10 560 (+4.6%)** |
-
-Against the original JSON the embedded modules end up **+13% to +26% gzipped**
-(`lottie-logo` 5257→6022, `starfish` 8856→10011, `ripple` 10759→13550) while
-their raw bytes fall by up to 23%. Frame time is unchanged at every stage —
-`lottie-logo` ~10 µs, `ripple` ~260 µs, mount ~1.5 ms for `ripple` — which the
-profile above already predicted, since interpolation is ~2% of a frame.
-
-**Why it loses.** gzip's LZ77 was already deduplicating the repeated JSON, and
-doing it for free. A dense integer encoding destroys exactly the redundancy the
-compressor fed on. The alphabet is not the lever — vlq base36, vlq base64, plain
-decimals and plain base36 all land within 1% of each other on gzip.
-
-##### What the stream is actually made of
-
-Auditing it by marking every slot with the role the layout gives it (0.2%
-unclassified, so the split is sound) says the intuitive answer is wrong twice
-over. Coordinates are a *sixth* of the stream; the rest is structure:
-
-| role | chars | share |
-|---|---|---|
-| property values | 2805 | 15.2% |
-| property offsets in records | 2528 | 13.7% |
-| property metadata | 2352 | 12.8% |
-| clock table | 1921 | 10.4% |
-| property offsets in bindings | 1767 | 9.6% |
-| effect parameters | 1280 | 6.9% |
-| record offset table | 1018 | 5.5% |
-
-##### The rule that came out of it
-
-**Repetition beats magnitude.** Every attempt to make numbers *smaller* by
-delta-encoding made the payload *bigger* after compression, because absolute
-values repeat and their differences do not:
-
-| column | absolute | delta |
-|---|---|---|
-| record offset table | 1018 ch / 526 gz | **270 ch / 62 gz** |
-| property offsets in records | 2528 / 786 | 2434 / 1057 |
-| property offsets in bindings | 1767 / 649 | 1832 / 886 |
-| property metadata | 2352 / 834 | 3138 / 1470 |
-| clock table | 3172 / 426 | 1880 / 523 |
-
-Only the record offset table wins, and it wins hugely — it is the one column
-that ascends and never repeats a value. Everything else repeats, so it is left
-absolute. Note the clock table: delta cuts it 41% in characters and still costs
-23% in gzip.
-
-What did pay, in order: **delta the record offset table** (−4.7% module gzip);
-**give the clock and gate tables a per-column shift** instead of a fixed ×1000,
-since frame numbers are usually whole (−0.5%); and **make the wire layout
-individual constants rather than an object**, so the minifier folds `H_PROGRAM`
-to `11` and the shaker drops the slots an animation never reads — worth ~3
-points on self-contained modules, which inline the decoder. Packing `kind` and
-`dim` into the spare header bits saved 0.1%: they were single characters and
-highly repetitive, so gzip already had them for nothing.
-
-That leaves self-contained modules at **+11% to +19% gzipped against the JSON**
-they replaced, with raw bytes −26% on `ripple`. Extern modules land at −1.5%
-gzip against the halfway state and about level with the JSON.
-
-Two simulations of this were run before building it, and both were wrong in
-opposite directions — one appended a run of identical characters (which gzip
-crushes) and read −26%, the other costed every array index at ×1000 (four VLQ
-characters where one was needed) and read +1.7%. Neither is a substitute for
-compiling the thing.
-
-#### The next thing, and it is much bigger than the wire format
-
-All of the above optimises the payload. The payload is not where the bytes are.
-
-| fixture | markup | runtime | module | runtime share |
-|---|---|---|---|---|
-| bouncy_ball | 495 | 6165 | 6660 | **92.6%** |
-| boucing-ball | 825 | 6837 | 7662 | 89.2% |
-| precomp_star_circle | 2193 | 7854 | 10047 | 78.2% |
-| lottie-logo | 4365 | 9521 | 13886 | 68.6% |
-| starfish | 5763 | 16299 | 22062 | 73.9% |
-| ripple | 33508 | 18264 | 51772 | 35.3% |
-
-`bouncy_ball` animates **one transform** and ships forty runtime symbols to do
-it — `dec`, `column`, `mkPath`, `vector`, `spatial`, `fallbackOf`, `H_ASSETS`,
-`H_USES`, `H_REMAPS`. None of them are reachable for that animation in any
-meaningful sense; they survive because `mount` is one declaration that touches
-every capability, and the shaker works at declaration granularity.
-
-Hand-writing what the compiler *should* emit for it — straight-line code, no
-payload, no dispatch, no closure per property — and checking it against the real
-build frame by frame:
-
-| | today | generated | |
-|---|---|---|---|
-| raw | 6660 B | **2190 B** | 3.0× |
-| gzip | 3391 B | **1193 B** | 2.8× |
-| mount | 10 µs | under the timer | no decode, no `resolve`, no closures |
-| frame | 2.63 µs | 2.33 µs | 1.13× |
-
-Byte-identical `transform` on all 241 sampled frames, same player API. The
-prototype is in the job scratch dir; the numbers above are reproducible from it.
-
-It also does something the interpreter structurally cannot: `bouncy_ball`'s
-rotation is a compile-time zero, so the emitted matrix is diagonal — no `cos`,
-no `sin`, no four-term multiply. A data-driven runtime cannot fold that, because
-it does not know the value until it runs.
-
-**The shape this points at.** A module becomes `markup + generated apply() +
-whatever helpers that animation genuinely needs` (the bezier solver, the number
-formatter, `pathD`, the player scaffolding — which stays shared and takes
-`apply` as its one indirection). The payload and the binder dispatch disappear
-entirely. Capability helpers keep being shaken exactly as they are now.
-
-##### Status: the generator exists, and covers one fixture
-
-`backend/codegen.rs` writes a scene out as straight-line JavaScript;
-`runtime/play.js` is the frame clock and public API it hands `apply` to.
-`try_emit` returns `None` for anything it cannot express and the caller falls
-back to the interpreter, so a module is only ever built one way and never pays
-for the path it did not take — the same shape as `Instancing::Auto`. It applies
-to self-contained modules only: an extern module shares the interpreter with
-every other animation on the page, so the trade runs the other way there.
-
-Six of the seven non-static fixtures are code-generated, and the seventh is the
-reason the compiler builds both ways and keeps the smaller:
-
-| fixture | before | after | | frame |
-|---|---|---|---|---|
-| `bouncy_ball` | 6660 B | **2628 B** | −61% | 1.16× |
-| `boucing-ball` | 7662 B | **4107 B** | −46% | 1.23× |
-| `precomp_star_circle` | 10056 B | **8449 B** | −16% | 1.13× |
-| `lights` | 21470 B | **19237 B** | −10% | 1.07× |
-| `starfish` | 22162 B | **21397 B** | −3% | 1.05× |
-| `lottie-logo` | 13894 B | **13630 B** | −2% | 1.05× |
-| `ripple` | 51781 B | 52271 B | interpreter | — |
-
-Covered: transform, translate, opacity, display, fill, stroke, shape (path,
-rect, ellipse, polystar), trim, gradient, visibility gates, precomp clocks,
-time remap, layer records and expressions. Not covered: precomp **instancing**,
-which nothing reaches by default — `Instancing::Auto` inlines a precomp whose
-instances carry their own clocks — but `--instance-precomps` does, and that
-build still compiles, just the other way.
-
-##### Which delivery mode is smallest
-
-For **one** animation, self-contained is smallest everywhere in the corpus, and
-code generation widens the gap — there is no interpreter and no payload left to
-inline:
-
-| fixture | shared runtime (module + slice) | self-contained | backend |
-|---|---|---|---|
-| bouncy_ball | 3.6K | **1.4K** | code |
-| boucing-ball | 4.0K | **1.9K** | code |
-| precomp_star_circle | 4.6K | **2.4K** | code |
-| lottie-logo | 6.1K | **4.7K** | code |
-| lights | 9.1K | **6.6K** | code |
-| starfish | 10.0K | **7.4K** | code |
-| ripple | 12.7K | 12.7K | interpreter |
-
-All gzipped. It does **not** follow that self-contained is always right:
-
-* It is one copy per animation. A second animation on the page is cheaper on
-  the shared runtime, which amortises — the crossover is immediate.
-* `ripple` is a tie, and does not use the generator at all.
-* **Extracted markup cannot use the generator**, because codegen is gated to
-  `MarkupMode::Inline`. That mode therefore still ships an interpreter and a
-  payload, and now compares worse against self-contained than it used to. Worth
-  lifting — the generated `init` would need to source its elements from the
-  sprite the way `mount` does.
-
-The demo says which backend won, as a badge on the plan panel and in the
-self-contained row's label, with the amortisation caveat in the note.
-`ulottie-dev-server sizes` prints the same in its `+slice` and `How` columns.
-
-##### Why `ripple` is not generated, and why that is the right answer
-
-Generated, it is **151 KB against the interpreter's 52**. It has 230 bindings,
-and code generation trades data for code: brilliant when the runtime dominates
-(`bouncy_ball` is 93% runtime and loses 61% of its bytes) and terrible when the
-*animation* dominates. So `emit` builds both and keeps the smaller, the same way
-`Instancing::Auto` picks. Which is better is a measurement, not a rule.
-
-Three things had to be bounded to get there, each found by measuring:
-
-* **Unrolling.** Above `UNROLL_MAX` (12) segments a property ships as columns
-  and a `kfEval` call instead of an if-chain. Measured across the corpus, 6
-  costs `boucing-ball` 687 bytes and buys nothing; everything from 12 up is
-  identical.
-* **Handles carry columns, never an unrolled body.** A handle has to hold its
-  keyframes as data anyway — `thisProperty.key(n)` reads them — so emitting an
-  unrolled evaluator too wrote every value into the module twice.
-* **`layerTx`/`layerOp` are calls, not inlined.** Every input is a runtime
-  handle, so nothing folds; `ripple` has 140 of them and inlining cost 84 KB
-  against roughly one kilobyte of calls. The generator should only inline what
-  actually *differs*.
-
-Handles are also hash-consed on their emitted text, because an inlined precomp
-repeats its properties once per copy.
-
-##### Bugs the generator produced, all silent
-
-* The element list was named `E` — and so is the expression table. The minifier
-  merged them and `initExpr(E, ctx)` received the DOM node list.
-* `proxyFor` read a layer's name as `ctx.str[rec.n]`, a pool a generated module
-  does not have. A record now carries the **name**, not an index into a table
-  only one backend owns.
-* Hash-consing rewound the emit buffer on a hit, which deleted a *nested*
-  handle — an expression's value source — that the pool still pointed at. Each
-  handle now builds its own declaration aside while nested ones append normally.
-* `seq`, the id-uniquing counter, lives in `core.js`; a generated module has to
-  declare its own.
-
-##### A difference that is not a bug
-
-Generated output is byte-identical to the interpreter on every sampled frame of
-every fixture except `starfish`, which differs by ~2e-6 relative. The
-interpreter interpolates in *scaled integer* space and descales at the end
-(`(a + (b-a)*u) * iv`); generated code interpolates in real units. Both are
-equally correct and the pixel and geometry gates do not distinguish them.
-
-#### Shaking the expression runtime — and why it barely paid
-
-The per-expression preamble has been emitted from what each body references for
-a while. The runtime side was not: `makeExpr` and `proxyFor` wire the whole
-vocabulary onto every proxy, so an animation whose expressions only call
-`loopOut` still shipped comp-space transforms and the arc-length path sampler.
-
-`emit_expressions::vocabulary` now scans the bodies for that vocabulary and
-turns it into `EXPR_PROPERTY` / `EXPR_COMP` / `EXPR_PATH`, which [`GATED`] cuts
-the way it already cuts easing and motion paths. Result: **−126 B** on `lights`
-and `ripple`, **0** on `starfish`.
-
-The first version of the scan reported −1600 B on `ripple` and **broke it**: it
-reused `free_identifiers`, which deliberately ignores member accesses because
-`path.pointOnPath(t)` needs no binding in the preamble. The runtime still has to
-*provide* that method. The scan for capabilities has to count every mention, not
-every free name — over-retaining costs bytes, under-retaining ships a module
-that throws only once the expression runs. The browser suite caught it; no unit
-test would have.
-
-So the corpus's expressions are broad, not narrow, and shaking has little left
-to remove. **Getting the expression engine out of these modules means compiling
-the bodies, not trimming around them** — turning `loopOut('cycle')` into the
-arithmetic it denotes, rather than shipping a proxy that can answer it. That is
-a real compiler for a small language, and it is where `starfish` (74% runtime)
-and `lights` (73%) actually go.
-
-#### What was measured and rejected
-
-These all looked promising and are settled negatives — recorded so they are not
-re-proposed:
-
-- **An integer number formatter.** Written, tested, and reverted. `fmt` is
-  `'' + Math.round(x*scale)/scale`, which hands a float to V8's dtoa; when the
-  value is already an integer at a known scale the same string can be assembled
-  with an integer division and a manual decimal point. That version measured
-  **2.36× faster in isolation and byte-identical on all 7434 real values in the
-  corpus** — and it is still a loss:
-
-  | | lottie-logo | ripple | starfish | trim_path |
-  |---|---|---|---|---|
-  | `fmt` self-time | 3.0% | outside top 12 | — | — |
-  | frame time, before → after | 10.5 → 10.6 µs | 263 → 255 µs | 24.3 → 24.3 µs | no change |
-  | module size, gzip | **+118 B (+2.2%)** | +125 B | +122 B | 0 |
-
-  A 2.36× win on 3% of a frame caps out at 1.7%, which is under the noise floor
-  of four alternating runs — while the extra branch and the out-of-range
-  fallback make *every* animation 2.2% bigger. The lesson is the profile, not
-  the arithmetic: verify the share before optimising the rate. `num.js` carries
-  a comment saying so, and `visual.spec.ts` pins the spelling contract that
-  rewrite had to satisfy.
-- **Struct-of-arrays**, of the *row-major* binding table as it stood: −1.7%
-  before the deltas and *beaten outright* by them after. For `D.y` it measures
-  −95 gz marginal on top of this stack against +231 raw bytes of reader —
-  break-even in extern mode, a net loss per module in embedded mode. gzip
-  already exploits the repetition that transposition exposes; what pays is
-  reducing entropy, not reorganising it. **Bindings are transposed now anyway**,
-  and it is roughly free there rather than a win: the rows became homogeneous
-  when they were grouped by op, so a column is one kind of number all the way
-  down. It was done for the loop, not for the bytes.
-- **Interning the effect `nm`/`mn` strings** into the shared string table:
-  **−21 B**. The ~11 KB of `"ADBE Slider Control-0001"`-style strings costs
-  about 350 gzipped bytes in total, and interning recovers 6% of that. Resolving
-  them to indices at compile time is worth more (~−345 upper bound) but needs a
-  reachability analysis, and the naive version breaks all three affected
-  fixtures silently. Deferred, and worth doing for the per-frame linear scan in
-  `proxy.effect()` rather than for bytes.
-- **Typed arrays / base64 / varints for `D`**: +22% to +26%. Base64's overhead
-  is not the problem — gzip recovers most of it. IEEE-754 mantissas of "nice"
-  decimals are near-incompressible where the decimal text compresses well. Also
-  lossy.
-- **Transposing keyframe values**: +28 B. Lottie vector keyframes repeat as
-  whole tuples, and interleaving keeps each repeat one contiguous LZ77 match.
-- **Delta-encoding keyframe times**: −25 B payload, net positive after the
-  decoder. 99.6% of times are already small integers.
-
-The honest summary: the bytes are not in the encoding, they are in
-**duplication**, and the largest single lever is precomp instancing (below),
-not the codec.
+`--extract <file>` (`MarkupMode::Extracted(id)`) moves the document into an
+external SVG sprite as `<symbol id="…">`; the module keeps only the `<svg>`
+shell (~110 B) and **clones the symbol's children** into it at mount.
+Compiling several animations into one path accumulates symbols; recompiling one
+replaces its symbol.
+
+- Cloning, not `<use>`: a `<use>` instance tree is unreachable from script
+  (empty `children`, null `shadowRoot`), so nothing could bind to it; external
+  `<use>` also fails silently cross-origin. Cloning reproduces the exact
+  document-order element sequence, which is the binding contract. Tests pin
+  that no wrapper is retained (off-by-one) and that whitespace does not matter.
+- Id markers are ASCII (`--u` per mount, `--c` per clone) because a sprite is
+  parsed by the strict XML parser. Extracted mode rewrites ids on the built DOM
+  (`runtime/ids.js`), walking *every* attribute — the only version that catches
+  `xlink:href`.
+- `init()` stays synchronous, so the sprite must be in the document first; a
+  missing symbol throws by name. Preload with `as="fetch"` + `crossorigin`.
+  The module exports `spriteSymbol`; `markup` is only the shell in this mode.
+- **It is not a size win** (two payloads compress worse than one; measured
+  ~+5% gzipped over the corpus). What it buys is delivery shape: the picture
+  gets its own URL, cache lifetime, and preloadability, shared across
+  animations.
 
 ### Inline budget
 
-The module normally carries the document template literally: one string, no
-construction code. That is the right trade until a precomp gets instanced
-forty-six times and the same subtree is written out forty-six times.
-
-So it is a budget, not a rule. `CompileOptions::inline_limit` (CLI
-`--inline-limit`, default 24 KB) is the byte ceiling; above it, repeated
-subtrees are factored into `D.m` and each occurrence becomes a placeholder the
-runtime expands *before* indexing elements — which is what keeps the
-compiler-assigned document-order indices correct.
-
-Measured on `ripple`: 78.8 KB → 62.5 KB raw (−21%), gzip flat at ~5.5 KB.
-**gzip already deduplicates the repetition**, so this buys parse and
-DOM-construction cost, not transfer bytes. Worth having as a knob; not worth
-turning on by default for documents that fit.
+The module normally carries the document literally. Above
+`CompileOptions::inline_limit` (`--inline-limit`, default 24 KB), repeated
+subtrees are factored into a template table (`const TPL=[…]` in the module) and
+expanded at mount *before* element indexing. gzip already deduplicates the
+repetition, so this buys parse/DOM-construction cost, not transfer bytes.
 
 ### Runtime delivery
 
-Two assemblies of the same scene, both driven by what the scene actually binds.
-
-**Embedded** inlines the runtime, shaken to the transitive closure of the
-reachable *declarations* — not modules. `backend/shake.rs` resolves reachability
-from `mount` plus the ops in use, so `bouncy_ball` (one animated transform)
-carries a few dozen small declarations and does not ship the path interpolator, the trim
-tables, the coordinate formatter it never calls, or any geometry generator.
-
-Two properties of `runtime/**` make that cheap: top-level names are globally
-unique (asserted by a test), and references are found by scanning identifiers,
-which over-approximates and so can only ever retain too much. The one thing
-scanning cannot see is a reference that is statically present but dynamically
-unreachable — `kf.js` names `EASE` on a branch the planner only takes when the
-easing capability is set. Those edges are declared in `shake::GATED` and cut when
-the capability is absent.
-
-**The module registry and the op table are two halves of one contract**, and
-they have to agree. `emit::OPS` names each op's `(code, bind, apply, module)`,
-`scene::program_ops` fixes the order the encoder writes batches in, and `MODS`
-is the list of runtime modules concatenated into the embedded bundle. An op in
-`OPS` whose module is missing from `MODS` produces a program that calls a name
-the shaker never saw: `bRamp`/`oRamp` shipped that way for `ops/ramp.js`, so
-every animation with a keyframed gradient ramp threw `ReferenceError` at mount.
-The module has to be listed in `MODS` in dependency order — `ramp.js` imports
-from `pv.js`, `kf.js`, `num.js`, `set.js` and `batch.js`, so it goes after them.
-
-**Extern** imports exactly the entry points it binds:
-
-```js
-import { mount } from './runtime/core.js';
-import { oTranslate } from './runtime/ops/txt.js';
-```
-
-so a bundler sees a normal ES module graph and shakes it the same way. **No
-compiled output imports an aggregate driver.** The dev server serves the tree at
-`/.output/runtime/**`; `runtime_modules()` exposes it for publishing.
-`minified_driver()` survives only as the ceiling the size panel reports — what a
-page would load if one animation used every capability at once (11.7K gz), not
-what anything imports. It rose when `SHAPE` became four loops; no animation
-reaches more than one of them.
-
-`tests/output_hygiene.rs` asserts the result: no emitted module may contain a
-top-level declaration unreachable from its exports.
-
----
-
-## Results
-
-### Size (gzipped, self-contained "embedded" build)
-
-| Fixture | before | after | |
-|---|---|---|---|
-| rectangle | 5.6K | **401B** | 14× |
-| ellipse | 5.6K | **406B** | 14× |
-| fill | 5.7K | **421B** | 14× |
-| trim_path | 7.0K | **516B** | 14× |
-| bouncy_ball | 5.7K | **1.4K** | 4.1× |
-| boucing-ball | 5.9K | **1.9K** | 3.1× |
-| precomp_star_circle | 6.0K | **2.4K** | 2.5× |
-| lottie-logo | 8.3K | **4.7K** | 1.8× |
-| starfish | 11.0K | **6.4K** | 1.7× |
-| lights | 10.3K | **6.0K** | 1.7× |
-| ripple | 11.6K | 11.7K → **12.3K** | — (see below) |
-
-#### What the clipping costs
-
-Clipping every composition and every precomp to its own frame is new output for
-new correctness, so it is worth knowing the price rather than assuming it.
-Against the same compiler without it, over the eleven fixtures:
-
-| | document raw | module gzip |
-|---|---|---|
-| clipping | **+2135** | **+137** |
-
-Most fixtures pay one `<svg width="…" height="…">` — 36 raw, 10–14 gzipped.
-`precomp_star_circle` pays eleven (+396 raw, +25 gz) and `ripple` forty-seven
-(+1718 raw, +25 gz), because a precomp gets one each. `trim_path` is 282 bytes
-*smaller* than before, which is `merge_paths` folding its four separately
-stroked contours into one path.
-
-Three ways to bring it down were built and reverted, at the cost of markup
-nobody could read. Recorded so the next attempt starts further along:
-
-* **Dropping `width`/`height`.** A nested `<svg>` defaults both to `100%` of
-  the current viewport, and the root's `viewBox` has already made that the
-  composition rect — verified in Chrome, where a bare nested `<svg>` clips a
-  667×508 composition to exactly 304 of 400 panel pixels and an unclipped one
-  bleeds to all 400. Correct, and −25 raw per clip. But `<svg>` with nothing on
-  it reads as a mistake, and the doubled `<svg><svg>` a same-sized precomp
-  produces reads as a bug.
-* **Dropping a clip that reproduces the viewport it sits in**, which genuinely
-  clips nothing — `precomp_star_circle` went from eleven to eight. Sound: the
-  flag has to be cleared by anything that *moves*, so what survives is the
-  precomps under a rotation, where a 512×512 frame really is a different 512
-  square. Worth having, but it only pays once the bare form above does.
-* **Folding a transform-only `<g>` into its only child.** 231 of the corpus's
-  971 document elements are single-child groups, 186 of them in `ripple`; it
-  took the tree to 809 and `trim_path` to 307 bytes below where it started.
-  Four things it must refuse, each a bug otherwise: two transforms on one
-  element (`writes_transform` has to name `LAYER_TX` as well as `TRANSFORM` and
-  `TRANSLATE`, and `lights` came apart at the geometry gate when it did not);
-  any compositing attribute on the group; a child carrying `mask`, whose
-  wrapper is untransformed *on purpose*; and a nested `<svg>`, since a transform
-  on one is SVG 2.
-
-`clip-path: view-box` on the root was tried first and does not work — for the
-root `<svg>` the reference box is its CSS border box, so it clips to the mount
-box the way `overflow` already does. The nested `<svg>` is not avoidable.
-
-#### Precomp instancing: automatic, and currently declining
-
-`Instancing::Auto` (the default) compiles the animation **both ways** and keeps
-the instanced build only when it is both smaller *and* free of per-instance
-clocks. Only animations with a precomp asset pay for the second build.
-
-Size alone is the wrong test twice over. First, it has to be measured
-*compressed*: `precomp_star_circle` is 34% smaller raw when instanced and 19%
-**larger** gzipped, because gzip already deduplicates copies inside its 32 KiB
-window. Second, and decisively, a size win can buy a frame-time loss — so the
-clock guard. On the corpus that means **nothing currently instances**, and
-`ripple`'s −56% is not bankable yet.
-
-Three bugs came out of turning this on, all invisible to the suite as it stood:
-
-- **A fully-instanced animation never played.** `play()` and autoplay gated on
-  the document's own binding count, which is 0 when every binding belongs to an
-  asset. A single-frame pixel diff cannot see "frozen", so `visual.spec.ts`
-  asserts playback starts. (`mount` is only reached for a non-static scene at
-  all now, so the guard itself has gone.)
-- **Instanced builds lost their per-instance clocks.** `D.l` is omitted when the
-  document's own bindings all run on the composition clock — but an instance
-  contributes a slot regardless, so `slots` came out `null` and every precomp
-  ran on the raw frame. `ripple` rendered 67% too wide. `mount` now seeds the
-  slot array with a zero per document binding whenever there are instances.
-- **`evalExpr`'s `catch` never wrote the memo**, so a throwing expression re-ran
-  — inside a try/catch — on every read instead of once per frame. Worth fixing
-  on its own (instanced `ripple` 0.638 → 0.072 ms at the time), but see below:
-  that measurement was taken while the clocks were broken.
-
-**The frame-time regression is real and still open.** It was recorded here as
-"unexplained", and for a while it looked resolved by the memo fix. It was not:
-the instanced build was fast because it was running 46 precomps on one clock.
-With the clocks correct, instanced `ripple` is **0.73 ms/frame against 0.14 ms
-inlined**, and lottie-web at 0.31 ms — i.e. instancing turns a 2.2× win into a
-0.4× loss. That is what the guard is for. Both builds now render identically
-(`geometry parity vs lottie-web` covers it), so this is purely a cost question:
-find why replaying an asset across per-instance clocks costs 5× and the −56%
-becomes available.
-
-**Extraction and instancing do not compose**, and the compiler says so rather
-than mis-rendering: an instanced module binds against a tree expanded at mount
-(`ripple` addresses 869 element indices) while a sprite holds the fully-expanded
-document (786 elements). `--extract` forces instancing off, and combining it
-with an explicit `--instance-precomps` is an error.
-
-#### The demo page
-
-`ulottie-dev-server/demo/` is a **Vite app**, and `vite.config.ts` is the only
-build file — it carries the demo app, the static build and both test suites, so
-`vite`, `vite build` and `vitest` all read one config. A plugin generates the
-two things Vite cannot make: the wasm build of the compiler, and a copy of the
-fixtures. Both land in `demo/public/`, so ordinary static handling serves them
-in dev and copies them on build. `vite dev` skips wasm-pack when the output is
-already there; a build always runs it, because that artifact is what ships.
-
-`yarn workspace ulottie-dev-server dev` is the whole thing: it builds and starts the
-Rust compile server, proxies `/compile` and `/.output` to it, and stops it on
-exit. `global-setup.ts` holds that logic once and has three callers — the Vite
-plugin, vitest's `globalSetup`, and `node global-setup.ts` for a standalone
-server (`import.meta.main`). A server already listening is adopted rather than
-replaced, so `cargo run` in another terminal still works.
-
-Vitest evaluates the same config, so `root: 'demo'` and the demo plugins apply
-only when `VITEST` is unset — otherwise the suites would be looked for inside
-the demo app.
-
-The harness is TypeScript — Vite transpiles it, `yarn workspace
-ulottie-dev-server typecheck` is the gate, and `demo/src/types.ts` writes down
-the compile contract both backends return (mirroring `CompileResponse` in
-`src/main.rs`). It earned its keep immediately: swapping the vendored tinybench
-2.9.0 for the npm 6.x dependency changed the result shape from `result.mean` to
-`result.latency.mean`, which `tsc` caught and which would otherwise have shown
-`NaN ms` in the panel.
-
-`demo/src/compiler.ts` picks the backend at runtime — the dev server when one
-is proxied (`import.meta.env.DEV`), the in-browser wasm build otherwise, with
-`?compiler=api|wasm` to override. That replaced a trick where the Rust server
-shadowed `public/compiler.js` with a fetch shim, which a bundler cannot express.
-`lottie-web` and `tinybench` are ordinary dependencies rather than vendored
-files, and the Rust server measures `lottie.min.js` from `node_modules` so
-bumping the dependency moves the baseline instead of leaving a stale copy.
-
-The page reports four things: the render side by side with
-lottie-web, **what the compiler decided** (static / instanced / templated,
-element–binding–record counts, capabilities, the modules an extern build
-imports, and any unimplemented feature with its visible effect), **first load**
-across all four delivery modes against the lottie-web baseline, and **runtime
-measured live in the browser** — frame time and DOM writes per frame.
-
-The runtime panel uses **tinybench**. Three things were wrong with the
-measurement it replaced:
-
-- **It did not measure rendering.** Style and layout are lazy, so timing the
-  attribute writes alone stopped before the browser did any work. Forcing a
-  flush inside the timed region adds 38% of ulottie's per-frame cost on
-  `lottie-logo`, 41% on `lights` and 48% on `ripple` — roughly half the work was
-  missing. It was missing asymmetrically: ulottie's script is the cheaper half,
-  so omitting layout flattered it (`boucing-ball` 6.0× → 1.8×, `ripple` 2.1× →
-  1.4× once included). The panel had been advertising a JS-only ratio as a
-  rendering ratio. Paint and raster are still outside what any synchronous
-  measurement sees, and the note says so.
-- **It was quantization-bound.** The page is now served cross-origin isolated
-  (`Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy:
-  require-corp`, in `vite.config.ts` for dev/preview/vitest and `_headers` for
-  the static host), which takes `performance.now()` from Chrome's default 100 µs
-  clamp to **5 µs** — verified, along with `crossOriginIsolated === true`. The
-  gain is modest where tinybench already batches, and clear on the shortest
-  tasks: `bouncy_ball`'s ulottie frame went from ±3.1% to ±0.9% relative margin
-  of error, and the static fixtures resolve at 0.0003 ms where they used to read
-  0.0000. Everything the page loads is same-origin, so `require-corp` costs
-  nothing. Before that, `performance.now()` was clamped to 100 µs, and
-  a best-of-5 sweep over 61 frames is ~6 ticks long — every value it could
-  produce was a multiple of 0.1/frames ms. Twelve identical runs spread 1.7×–2.8×
-  on `lottie-logo`, and on `boucing-ball` it reported ulottie as exactly zero,
-  printing "no work at all" for an animation doing ~1 write per frame.
-- **It measured the wrong thing.** Per-frame cost never binds — 48 simultaneous
-  instances hold 120 fps on *both* players. Mount is where an AOT compiler wins,
-  and it is now the first row: 6–8× per instance on this corpus. (JSON parsing
-  is only ~10% of lottie-web's mount; the rest is scene-graph construction.)
-
-Both compile backends report all of it, and the wasm feature implies
-`auto-instancing` so the in-browser compiler makes the same instancing decision
-as the CLI rather than falling back to a heuristic.
-
-Three reporting bugs were fixed getting there, all of which made the compiler
-look better or worse than it is:
-
-- **Every per-feature cost read `0 B`.** `runtime_size()` measured a bundle
-  whose `export` keywords the shaker had already stripped, so the minifier
-  correctly deleted the whole module as dead. Anchoring the exports first gives
-  the real figures.
-- **The "all capabilities" runtime understated itself by ~40%** (11.9 KB vs
-  20.5 KB). `build_driver()` exported only `{ mount, B }`, and the optional
-  capabilities reach the runtime through the `ext` argument rather than an
-  import — so the expression engine, template expansion and sprite sourcing
-  were dead-code-eliminated out of the ceiling. Its binder table was also a
-  hardcoded const missing the two layer binders.
-- **The headline row was the wrong number.** It showed that ceiling, which no
-  page loads. It now shows the slice the animation imports, with the ceiling as
-  a footnote.
-
-#### The pixel gate has a blind spot
-
-`odiff` runs with `antialiasing: true`, which discounts pixels it judges to be
-antialiasing artifacts. For an animation drawn entirely in hairlines that is
-nearly every pixel it looks at: `ripple` rendered a visibly different picture —
-a staggered diagonal of bars versus four flat rows of dots — and the pixel test
-passed. The saved screenshots in `tests/__screenshots__/` show it plainly.
-
-`geometry parity vs lottie-web` in `visual.spec.ts` is the backstop: it compares
-the bounding box of all drawn geometry, normalised to the viewport, against
-lottie-web at the midpoint. It ignores colour, thickness and edge softness and
-only asks where the drawing is. It has no allow-list: a fixture either matches
-lottie-web or the suite fails.
-
-
-### Runtime (Chrome, 120-frame sweep, best of 5)
-
-| Fixture | lottie-web | ulottie | speedup | writes/frame (lw → ul) |
-|---|---|---|---|---|
-| rectangle / ellipse / fill / trim_path | 0.000 ms | 0.000 ms | — | 0 → 0 |
-| bouncy_ball | 0.0022 | 0.0012 | 1.8× | 1.0 → 1.0 |
-| boucing-ball | 0.0030 | 0.0011 | **2.7×** | 1.0 → 1.0 |
-| lottie-logo | 0.0059 | 0.0066 | 0.9× | 3.4 → **0.9** |
-| precomp_star_circle | 0.0355 | 0.0080 | **4.5×** | 19.5 → 11.5 |
-| ripple | 0.2978 | 0.1150 | **2.6×** | 181.7 → 181.7 |
-| starfish | 0.0445 | 0.0135 | **3.3×** | 4.1 → 6.8 |
-| lights | 0.0220 | 0.0138 | **1.6×** | 6.0 → 7.0 |
-| **total** | **0.410** | **0.159** | **2.6×** | 216.7 → 209.9 |
-
-Both columns are from one run — the absolutes drift with the machine, the ratios
-do not. See [ops are loops](#ops-are-loops-not-callbacks) for what moved.
-
-Run `yarn workspace ulottie-dev-server vitest run tests/perf.spec.ts` to reproduce.
-
----
-
-## Correctness fixes landed
-
-- **Three found by sweeping the lottie-flutter corpus** (432 files from
-  `xvrh/lottie-flutter/example/assets`, dropped in `_fixtures/animations/tmp/`).
-  226 compile without an allowance; `tools/compare.mjs` puts **171 of those
-  pixel-identical to lottie-web**, and the first pass turned up two crashes and
-  a silent drop.
-
-  * **`initExpr(E, ctx)` with neither declared.** `Generated::exprs` was
-    `g.handles > 0`, but `handle()` builds one for every property a *record* or
-    a *time remap* needs — most of them plain keyframe evaluators. An animation
-    whose only expression had already been folded away still installed the
-    engine, and `initExpr` was rooted from a different branch than the one that
-    emitted the call. Now the flag is set exactly where `ctx.expr(…)` is
-    written, the root comes from the same flag as the call, and a scene with
-    records but no surviving bodies gets `const E=[]` — `evalExpr` already
-    answers with the property's own value for an id it cannot find. A
-    `debug_assert` in `generated()` pins the two together. (`Tests_Remap`)
-  * **A `.path` chain in value position rewrote to a layer record.**
-    `is_layer` calls `X.content('a').content('b').path` a layer on purpose —
-    that is what lets the record resolve *through* the chain for
-    `.path.points()`. But when the chain is the body's result, the record is
-    not the value: the body returned a layer object, `pathD` read `.v.length`
-    off it, and the animation died at mount. `render` now emits
-    `lyPath(record, frame)` for a trailing `.path`. (`lottiefiles_frog`,
-    `lottiefiles_progress_bar` — both went from crashing to pixel-exact.)
-  * **Four holes in `support::scan`, found by asking *which feature* each
-    divergence correlates with** rather than filing them as unexplained. With a
-    verdict per file and a census per file, a feature that is wrong whenever it
-    appears is a one-line query — and four came out at a 100% divergence rate:
-
-    | hole | files | what it did |
-    |---|---|---|
-    | skew on a *group* transform | 5 | scan checked `l.ks`, never the `tr` inside a shape group |
-    | `stroke:dash` | 10 | not modelled *anywhere* in the compiler; drew solid |
-    | mask mode `n` (None) | 7 | `ir::MaskMode::Other` lowers to Add, so a no-op mask was drawn |
-    | mask `inv` | — | approximated by painting black; wrong in combination, 3 files of 3 |
-
-    All four are refusals now, not renders. `truthy()` was part of it: it read
-    `as_f64`, and `inv` is a JSON *boolean*, so every boolean flag in the scan
-    read as unset. Nothing else in the scan used a boolean field, which is why
-    it had never shown.
-
-    Skew and dash are unimplemented; both are a rejection waiting to become an
-    implementation — SVG spells dashes `stroke-dasharray`, and the corpus's ten
-    files are the reason to.
-
-  * **What was reverted.** Mode `n` and `inv` also looked like *render* bugs
-    with obvious fixes — skip the mask; use `subtract XOR inverted` rather than
-    `||`. Measured, the first was inert (the mode is already `"a"` by the time
-    the planner sees it) and the second took `Tests_Masks` from 6.8% to 10.6%.
-    Both reverted. `Tests_MaskInv`, despite the name, has no inverted mask at
-    all and its 71.6% is still an unexplained Add+Subtract combination bug.
-
-
-
-- **Every expression in a self-contained build silently returned its authored
-  constant — unless the animation happened to use `thisProperty`.** `evalExpr`
-  built each body's third argument with `thisPropertyFor(ctx, p)`, on the only
-  path there is, while `shake::GATED` listed `thisPropertyFor` as an edge to cut
-  when `Caps::EXPR_PROPERTY` is off. So an animation whose expressions never name
-  `thisProperty` shipped a bundle that called a declaration it did not carry;
-  `evalExpr` catches whatever the body throws and hands back `baseValue`, so the
-  animation rendered as if the expressions were not there. Extern builds import
-  `expr.js` whole and were never affected, which is why one variant was right and
-  the other wrong from the same wire stream.
-
-  The fix is static, not a runtime flag: `evalExpr` passes the property *handle*,
-  and `emit_one` writes `const thisProperty = thisPropertyFor(ctx, $p);` into the
-  preamble of the bodies that ask for the surface, reporting the helper as a
-  shake root the way `pointOnPath` and `createPath` already do. The name is in
-  the emitted text exactly when the declaration is retained.
-
-  **Three things hid it.** The three expression fixtures all name `thisProperty`,
-  so all three retained the helper — the untested shake was "expressions on, that
-  surface off", which `__snapshots__/runtime-surface.txt` now records for
-  `expression_layer_ref`. `tools/compare.mjs` defaults to `--variant extern`, and
-  the corpus had only ever been run that way, while the demo page loads
-  `.embedded.js`. And the pixel gate is not a reliable detector even on the right
-  variant: for one fixture the minifier bound the dangling identifier onto an
-  unrelated declaration, so the module did not throw and rendered correctly by
-  luck — the *unminified* embedded bundle is what fails deterministically.
-
-  An entry belongs in `GATED` only if the call site is genuinely guarded, the way
-  `xcol` is with `x.expr ? xcol(…) : null`. Found from the demo page, at frame
-  100, by looking at it.
-
-- **`starfish` stopped winking, and every gate watched it happen.** Its eye is a
-  precomp whose clock is a time remap; the eyelid is an animated mask inside it.
-  The remap ramps 0 → 2.333 s and is written in Lottie's *older* keyframe form:
-  the destination lives in `e` on the first keyframe and the last keyframe is a
-  bare terminator with no `s`. Both readers resolve that by looking back at
-  `e[i-1]` — but only if they can tell "absent" from "zero", and
-  `encode_keyframes_scalar` wrote `frame.value.unwrap_or(0.0)`. So the ramp read
-  as two zeros, `classify_keyframes` folded it to a static 0, `loopOut('cycle')`
-  got a stubbed `thisProperty` and answered 0 forever, and the eyelid sat on its
-  first keyframe for the whole animation. The vector encoder beside it had
-  always written the empty marker; only the scalar one could not.
-
-  **Nothing caught it, and the reasons are worth keeping.** The wink lasts ~18
-  frames around t≈0.09 and t≈0.57 and `SAMPLES` steps over both; `geometry
-  parity` reads `getBoundingClientRect`, which is blind to clipping; the pixel
-  diff never looked at those frames. `an animated mask keeps animating` in
-  `visual.spec.ts` now asks the one question the others cannot — does the mask's
-  `d` take more than one value over the animation — and
-  `a_keyframe_with_no_start_value_encodes_as_absent_not_zero` pins the encoder.
-
-  Found by rendering frame 170 and *looking at it*. Three rounds of structural
-  probes — bounding boxes, element counts, attribute diffs against lottie-web —
-  all reported "identical", because every one of them was blind in the same way
-  the gates were.
-
-- **Expressions with keyframed value sources were silently discarded.** Both
-  `resolveProp` and `evalProp` tested `prop.kf` before `prop.e`; since an
-  expression whose value source is animated carries *both*, the expression never
-  ran. This was the real cause of the starfish/lights pixel gap (12–52 px), not
-  "float reordering in minified expression evaluation" as previously recorded. The
-  1.5% / 1.0% tolerance overrides are gone.
-- **Animated gradients were frozen.** `ensureGradient` cached on first call and
-  never rewrote the handles, pinning ripple's gradient axis 403 user units (50% of
-  the composition width) from where it belonged for half of every cycle.
-- **The oxc mangler ran and its output was thrown away.** `Minifier::minify`
-  computes the mangled scoping but does not rewrite the AST; without
-  `.with_scoping(ret.scoping)` every identifier shipped at full length. ~13% off
-  every bundle.
-- **Element ids collided across instances.** Two mounts of the same module both
-  emitted `grad-0`, and `url(#…)` resolves document-wide, so the second animation
-  painted with the first one's gradient. Ids now carry a per-instance suffix.
-- **`destroy()` left the SVG in the DOM.**
-- Per-frame resampling: spatial-bezier arc tables (200 samples) and expression
-  results are now memoized instead of rebuilt on every evaluation.
-
-## Player API
-
-`init(container, options)` returns a player with `play/pause/stop/seek/goToFrame/
-goToAndStop/goToAndPlay`, `loop/speed/direction/currentFrame/isPlaying/duration/
-totalFrames/frameRate`, `on/off` for `frame`/`loop`/`complete`, and `destroy()`.
+Two assemblies of the same scene, both driven by what it binds.
+
+**Embedded** inlines the runtime, shaken per *declaration* — reachability from
+`mount` plus the ops in use plus the expression helpers the bodies actually
+call. Two properties of `runtime/**` make that safe: top-level names are
+globally unique (tested), and reference scanning over-approximates, so it can
+only retain too much. Statically-present but dynamically-unreachable edges are
+declared in `shake::GATED` and cut by capability. Two rules govern that table:
+
+- **An entry belongs in `GATED` only if every call site is genuinely guarded**
+  the way `x.expr ? xcol(…) : null` is — the guard is what keeps a module that
+  dropped the declaration from calling it.
+- **A gated declaration must have no unconditional reader.** An unconditional
+  assignment (`ctx.f = f`) evaluates its right-hand side at mount regardless of
+  any downstream guard and throws `ReferenceError` on the name the shaker
+  dropped. This class of bug shipped twice (the path constructors, then
+  `thisPropertyFor`) before the plumbing was removed in favour of bare-name
+  calls emitted only where used.
+
+**`emit::OPS`, `scene::program_ops` and `emit::MODS` are one contract.** `OPS`
+names each op's `(code, bind, apply, module)`; `caps_for_op` in `scene/` is the
+one op→capability mapping (the planner sets the same bits when it binds); and
+the op's module must be listed in `MODS` in dependency order — `bRamp`/`oRamp`
+once shipped calling names the shaker never saw because `ops/ramp.js` was
+missing from `MODS`, and every ramp animation threw at mount.
+
+**Extern** imports exactly the entry points it binds
+(`import { bTranslate, oTranslate } from './runtime/ops/txt.js';`), so a
+bundler sees a normal module graph. No compiled output imports an aggregate
+driver; `minified_driver()` survives only as the ceiling the size panel reports
+(11.3K gz — what a page would load if one animation used *every* capability;
+nothing does). `tests/output_hygiene.rs` asserts no emitted module contains a
+declaration unreachable from its exports.
+
+### Precomp instancing: automatic, and currently declining
+
+`Instancing::Auto` (default) compiles animations with precomp assets **both
+ways** and keeps the instanced build only when it is smaller *compressed* and
+free of per-instance clocks. Both conditions bind: gzip already deduplicates
+inlined copies (`precomp_star_circle` is 34% smaller raw instanced and 19%
+*larger* gzipped), and replaying an asset across per-instance clocks currently
+costs ~5× frame time (`ripple` 0.73 ms instanced vs 0.14 ms inlined, lottie-web
+0.31 ms). Both builds render identically — the guard is purely a cost question,
+and explaining that 5× is what would unlock `ripple`'s −56% payload.
+
+Extraction and instancing do not compose (a sprite holds the expanded document,
+an instanced module binds a tree expanded at mount); `--extract` forces
+instancing off and combining it with `--instance-precomps` is an error.
+
+### The demo page
+
+`ulottie-dev-server/demo/` is a Vite app; `vite.config.ts` is the only build
+file (demo, static build, both test suites). `yarn workspace ulottie-dev-server
+dev` builds and proxies the Rust compile server; the demo picks its compiler at
+runtime (dev server when proxied, in-browser wasm build otherwise,
+`?compiler=api|wasm` to override), and the wasm feature implies
+`auto-instancing` so both backends make the same decisions.
+
+The page shows the render beside lottie-web, what the compiler decided
+(backend, caps, counts, findings), first load across delivery modes, and live
+runtime measured with tinybench — with a forced layout flush inside the timed
+region (attribute writes alone are roughly half the real cost) and
+cross-origin-isolated timers (5 µs resolution). Every artifact is served both
+minified and `--pretty` (the compiler formats; the page only colours, via
+lazily-loaded shiki).
+
+### Player API
+
+`init(container, options)` returns a player with `play/pause/stop/seek/
+goToFrame/goToAndStop/goToAndPlay`, `loop/speed/direction/currentFrame/
+isPlaying/duration/totalFrames/frameRate`, `on/off` for
+`frame`/`loop`/`complete`, and `destroy()`.
 
 **Frames are 0-based within `[ip, op)`, the way lottie-web counts them** —
-`goToFrame(n)` is its `goToAndStop(n, true)`, and `totalFrames` is `op - ip` for
-both. Only an animation whose `ip` is not 0 can tell the difference.
-`options` takes `autoplay` (`'auto'` by default — plays unless the OS asks for
-reduced motion), `loop`, and `hydrate` for attaching to server-rendered markup.
+`goToFrame(n)` is its `goToAndStop(n, true)`; only an animation whose `ip` is
+not 0 can tell. `options`: `autoplay` (`'auto'` — plays unless the OS asks for
+reduced motion), `loop`, `hydrate`.
 
 ---
 
-## Comparing against lottie-web, for any file
+## Feature support
 
-`_fixtures/` is a gate: it answers whether the eleven fixtures still pass.
-`ulottie-dev-server/tools/compare.mjs` answers the other question — *where* an
-arbitrary file diverges — and takes input from anywhere, needs no fixture
-registration, and reports rather than throws.
+### The mechanism: rejected, not dropped
 
-```
-node ulottie-dev-server/tools/compare.mjs <input.json|dir> [...] [--frames n]
-    [--at 0,0.5,120] [--size px] [--variant extern|embedded|extracted|instanced]
-    [--out dir] [--tolerance r] [--dom] [--headed] [--json] [--quiet]
-```
+Compilation **fails** when the source uses something the backend does not
+implement, listing every occurrence and what ignoring it would do.
+`--allow <features>` accepts named degradations deliberately.
+`support::scan` reads the **raw JSON**, not the typed AST — the AST is lossy by
+construction, so a check on it cannot see what was dropped. `support::Feature`
+is the closed list of findings, each with its visible effect
+(`"the stroke is drawn solid"`, `"the mask is treated as Add"`, …).
 
-It compiles each input (retrying with `--allow` for whatever the compiler
-refuses, so a degradation shows up next to the render rather than in place of
-it), renders it beside lottie-web in headless Chromium, screenshots both at
-sampled frames, and diffs them with odiff. `<out>/index.html` shows every
-frame's reference, candidate and diff mask side by side.
+- `_fixtures/allowances.json` is **empty**: every feature the fixtures use is
+  implemented.
+- **The dev server does not reject** — it is a viewer. It compiles whatever it
+  is handed and returns every finding in the response, so the degradation shows
+  next to the render. The strict gate is the CLI.
+- Scan lessons that are now invariants: a skew can live on a shape group's
+  `tr`, not just `l.ks`; Lottie spells flags inconsistently (`inv` is a JSON
+  boolean where `ddd`/`bm` are numbers — `truthy()` accepts both); a mask mode
+  outside Add/Subtract, an inverted mask, and a dashed stroke are all refusals
+  because rendering them was measurably wrong wherever a corpus file used them.
 
-`--dom` adds the part that pixels cannot give you: a **structural diff** of the
-two SVG trees at the worst frame. Making that readable is most of the tool.
+### Where it stands
 
-- Only what draws is compared: `<defs>`, `<clipPath>` and `<mask>` subtrees are
-  skipped, and so is anything under `opacity="0"` or `display:none`. lottie-web
-  clips every layer to the composition, and counting those phantom rectangles
-  knocked the two sequences out of step from element zero.
-- Elements are matched by an **alignment**, not by position. One element the
-  compiler failed to emit shifts every element after it, and comparing index to
-  index turns one missing shape into a page of differences that are all the
-  same bug.
-- They are keyed on the **box the element occupies in composition space** —
-  its own coordinates through the accumulated transform chain. Comparing `d` as
-  text cannot work: lottie-web writes every segment as a cubic where the
-  compiler writes `L`, and emits `<path>` where the compiler emits
-  `<rect rx="18">`. Those are the same picture written three ways; the box is
-  the same number either way, and a real geometry bug moves it.
-- Colours are canonicalised (`rgb(255,111,15)` → `#ff6f0f`) and an embedded
-  image's `href` is digested, because a hundred kilobytes of base64 whose first
-  eighty characters are the PNG header makes every frame of a sequence look
-  like the same one.
-
-### The fixture set is 29 of 60, and the gate says so
-
-Eleven fixtures were the whole standing gate for a long time. An external corpus
-of forty-two animations then found **nine** compiler bugs they could not — two
-in code the fixtures ran on every commit, the rest in code nothing ran at all.
-That second kind is now visible rather than a matter of opinion.
-
-`census::FEATURES` is a closed vocabulary of every construct worth a fixture,
-and `_fixtures/coverage.json` is the gap, one line and one reason each.
-`tests/coverage.spec.ts` asserts the two are exactly complementary, in both
-directions:
-
-* a construct with no fixture and no entry **fails** — so adding a check to the
-  census, or a capability to the compiler, cannot quietly go untested;
-* an entry that is now covered **fails** — so the list only ever shrinks, and
-  writing the fixture is what deletes the line.
-
-It imports `census.mjs` rather than growing a second scanner, because two
-implementations of "what does this file use" would drift and the point is to be
-able to trust the number.
+`census.mjs` walks the raw document and counts *every* construct (it is what
+found `tp` and split-dimension positions before anyone knew to look);
+`census::FEATURES` is a closed vocabulary and `_fixtures/coverage.json` the
+gap, one line and one reason each. `tests/coverage.spec.ts` asserts the two are
+exactly complementary in both directions, so the list only ever shrinks and
+writing a fixture is what deletes a line.
 
 ```
 node ulottie-dev-server/tools/census.mjs --coverage
 ```
 
-prints where it stands, split by what the gap actually means. **29 of 60**, and
-the 31 uncovered are 8 implemented, 5 dropped silently and 18 rejected. The
-interesting column is the first one — implemented code with no fixture is
-exactly where this session's expensive bugs lived.
+**29 of 60 constructs are exercised by the fixtures.** The uncovered 31 split
+into: 4 implemented-but-untested (luma mattes both ways, animated gradient
+ramps, embedded images) — the priority, since implemented-without-fixture is
+where the expensive bugs have lived; 4 tracked-but-unimplemented
+(gradient highlight, `trim m=2`, `no`-op style, markers); and 23 refusals.
+`_fixtures/PROVENANCE.md` records how fixtures are chosen — candidates are
+diffed against lottie-web at fifteen frames *and* inspected to confirm the
+feature is live in **both** DOMs, because a candidate can score 0.000% while
+lottie-web renders a feature this compiler drops.
 
-Four fixtures came out of rlottie to close six of it — see
-`_fixtures/PROVENANCE.md` for how they were picked, which matters more than
-which they are. All 93 rlottie examples were diffed against lottie-web; 42
-render at exactly 0.000% with no `--allow`; those were set-covered against the
-gap, and each survivor re-checked at fifteen frames *and* inspected to confirm
-the feature is present in **both** DOMs.
+---
 
-That last step is the whole method. `worm.json` renders at 0.000% across twelve
-frames and covers `stroke:dash` — and lottie-web writes `stroke-dasharray=" 10"`
-where this compiler writes nothing. Adopting it would have recorded a missing
-feature as a passing test. It is the third time this session a perfect pixel
-score has been wrong, so treat 0.000% as a necessary condition and not a
-sufficient one.
+## Results
 
-`gradient_radial` earned its keep before it was committed: it failed
-`output_hygiene` on the first run, because `emit_gradient` set `Caps::GRADIENT`
-before knowing whether the handles move. A gradient that never moves bakes into
-the markup completely, so every animation with any gradient at all was shipping
-`bGradient` and `oGradient` unreachable. The capability is set by the binding
-now.
+Measured at 17 fixtures, this machine, current HEAD. `sizes` and
+`tests/perf.spec.ts` reproduce them; absolutes drift run to run, ratios do not.
 
-The 18 rejections want a different fixture: one that asserts the compile *fails*
-with the right finding. `shape:twist` is the one to look at first — it has no
-`support::Feature` at all, so a twist is not merely unimplemented, it is
-unreported.
-
-`tools/census.mjs` is the companion: it walks the raw document and counts
-*every* feature, so something nobody has thought about yet shows up as a row
-rather than as a rendering difference. `support::scan` only reports what it
-already knows to look for; this is what found `tp` and split-dimension
-positions.
+### Size (gzipped)
 
 ```
-node ulottie-dev-server/tools/census.mjs <input.json|dir> [...] [--per-file]
+ Fixt                       JSON   Extern   Embedded   How
+ boucing-ball               747B     499B      1.9K    code
+ bouncy_ball                348B     405B      1.4K    code
+ ellipse                    430B     406B      406B    interp (static)
+ expression_layer_ref       563B     533B      2.7K    code
+ fill                       542B     421B      421B    interp (static)
+ gradient_radial            1.4K     1.2K      2.3K    code
+ image_layer                336B     362B      1.2K    code
+ lights                     2.3K     1.6K      6.0K    code
+ lottie-logo                1.5K     1.4K      4.7K    code
+ mask_subtract              404B     465B      1.6K    code
+ matte_alpha                1.9K     1.4K      4.1K    code
+ precomp_star_circle        845B     701B      2.4K    code
+ rectangle                  434B     401B      401B    interp (static)
+ ripple                     1.6K     4.4K     12.3K    interp
+ starfish                   3.1K     2.2K      6.4K    code
+ stroke_under_fill          1.5K     1.0K      3.1K    code
+ trim_path                  630B     516B      516B    interp (static)
+
+ runtime ceiling (all capabilities)            11.3K   (nothing loads this)
+ lottie.min.js                                 74.6K
 ```
 
-### What a thirteen-file corpus outside the fixtures found
+Averages: lottie-web first load **75.7K** (runtime + average JSON); ulottie
+extern module **1.1K** (a bundler ships only what is reached); ulottie
+embedded **3.0K** (the single-animation first load). The four fully static
+fixtures ship markup plus an inert player — no runtime, no payload, no
+animation frame ever scheduled.
 
-Run against a set of unrelated Lottie exports, twelve of thirteen now match
-lottie-web pixel for pixel and the thirteenth is at 0.74%. Getting there was
-six bugs, and every one of them was invisible to the fixture suite:
+`ripple` is the one fixture on the interpreter, and its embedded build is the
+one place the batched-runtime rewrite cost bytes (11.7K → 12.6K when it
+landed, since pulled back to 12.3K); every other non-static fixture is
+code-generated and unaffected.
 
-- **Parenting was implemented as nesting**, which changes paint order.
-  Lottie's `parent` contributes a transform and nothing else. `lights` and
-  `starfish` were both mis-ordered and passed anyway, because their layers do
-  not overlap.
-- **A precomp's layers were never hidden outside their own `[ip, op)`**, so a
-  composition that stages four states drew all four at once, each frozen at the
-  first frame it was authored for.
-- **The clock looped a layer back into its span** past its out point. That was
-  standing in for the hiding that did not exist; with real hiding it showed
-  every frame of an image sequence at once.
-- **Split-dimension positions dropped their easing**, and the resampler that
-  merges the axes interpolated linearly — reading both handles off the segment's
-  *starting* keyframe is the pairing Lottie writes.
-- **Track mattes were paired by adjacency**, ignoring `tp`. A matte can name its
-  layer by `ind`, need not be next to it, and can matte several. (It also need
-  not be hidden — see the third corpus below for the other half of that.)
-- **A `td` layer was drawn when nothing matted it.** It is a matte; it is never
-  in the picture. The converse is not true, and cost a whole illustration — see
-  the third corpus.
-
-Image layers, image assets and keyframed gradient ramps were implemented rather
-than degraded; see above.
-
-`car-13` is the 0.74%: a luma matte inside a twice-instanced precomp that also
-carries a layer mask. Its labels sit a pixel or two off. Ruled out so far: it
-is not instancing (identical in all three build variants), and it is not the
-layer masks themselves (dropping them takes it to 8.4%). The untested lead was
-that **lottie-web clips every precomp layer to its own `w × h`**, which this
-compiler did not implement at all — it does now, see below.
-
-### And what a thirty-three-file corpus found after that
-
-The second sweep is jlottie's demo list: thirty-three animations off
-lottiefiles, none of them chosen to be easy — 1.8 MB of flipbook cartoon, a
-2 MB image sequence, a 2 682 × 1 509 illustration, a waving-flag mesh, a
-fourteen-layer effect stack. **Twenty-three of thirty-three diverged**, one of
-them by 34%. All thirty-three match now, twenty-five of them at exactly 0.000%,
-and the worst residual is 0.09% of antialiased edges and one-unit colour.
-
-The six URLs jlottie itself has commented out were fetched too, and are worth
-keeping: five of them now match, and the sixth is the one open correctness item
-below (`lf20_yoatyllj`).
-
-They came down to six bugs, and the first one is most of the story:
-
-- **Shape groups painted in the wrong order.** Lottie authors an `it` array
-  top-first; lottie-web's `searchShapes` walks it *backwards* and appends as it
-  goes, so `it[0]` is appended last and paints on top. The compiler read the
-  list forwards. Any group whose children overlap came out inside-out —
-  `lf20_hewaysm0` is a white heart and a red disc, and the disc covered the
-  heart. **This one fix took the corpus from 23 failures to 3.**
-
-  Eleven fixtures never caught it because their groups do not overlap: it is
-  the two-groups-in-one-group shape that fails, and every fixture is either one
-  geometry per group or laid out side by side. `group_items_paint_in_reverse_it_order`
-  is the unit test that would have.
-
-- **A fill reached every shape in its group.** The same backwards walk decides
-  which items a style covers: a fill applies to the paths *above* it and to
-  nothing below, because below is where the walk has already been. The encoder
-  collected every style in a first pass and handed all of them to every shape.
-  Same for a trim. And an inherited style outranked the group's own, which is
-  the wrong way round — an inner group's element is appended after the outer
-  style's, so the inner one paints on top.
-
-- **A group transform with only an animated component was elided.**
-  `transform_is_identity` read each component with `static_*(…).unwrap_or(default)`,
-  so an *animated* rotation read as 0, an animated scale as 100, an animated
-  position as the origin. `lf30_t0igqye8` rotates a banknote about its own
-  anchor: position equals anchor, scale is 100, opacity is 100, and the only
-  thing that moves is the rotation. Every static test passed, the group was
-  flattened, and the notes never turned.
-
-- **Nothing was clipped to the composition.** The root `<svg>` carries
-  `overflow:hidden`, which clips to the *viewport* — the box the module is
-  mounted in — while `viewBox` and `preserveAspectRatio` map the composition
-  into part of it. Letterbox a 667 × 508 animation into a square and the bands
-  above and below are inside the viewport and outside the composition, so a
-  layer overhanging the frame draws in them: `lf20_qbvfmu8h` rendered 555
-  composition units tall instead of 508. lottie-web wraps its whole tree in
-  `<g clip-path="…">` over a `w × h` rect.
-
-- **`ADBE Fill` was dropped silently**, and it is fourteen of `lf20_W14Z1y`'s
-  layers: coloured squares After Effects paints a single flat grey. Implemented
-  as the one `feColorMatrix` lottie-web writes. Every *other* effect type that
-  draws is now reported by `support::scan` as `layer-effect` rather than
-  vanishing.
-
-- **A shape reached by no paint was drawn black.** lottie-web writes a shape's
-  `d` into its *styles'* elements and creates none of its own, so a shape with
-  no fill and no stroke is never painted — where SVG defaults `fill` to black.
-  After Effects exports one of these per composition as an unpainted `Frame`
-  rectangle. `lf30_jrfgebuy` drew five solid black boxes over its own artwork,
-  at 20%.
-
-Two things that are **not** bugs, recorded so they are not chased again:
-
-- **lottie-web does not implement merge paths either.** Its modifier table is
-  `tm`, `pb`, `rp`, `rd`, `zz`, `op` — no `mm`. Ten files in this corpus carry
-  one, all ten match, and implementing it would make this compiler differ from
-  the thing it is diffed against.
-- **lottie-web truncates colour channels and this rounds them** —
-  `bmFloor(v * 255)` against `Math.round`, though lottie-web itself rounds
-  gradient stops. Truncating was tried and reverted: a channel is quantized to
-  three decimals on the wire like every other value, and `0.196078…` — which is
-  `50/255`, what bodymovin writes — comes back as `0.196`, whose 255ths are
-  49.98. Rounding absorbs that; flooring reads one step low and the baked
-  document and the runtime stop agreeing. Matching lottie-web exactly needs
-  colours on the wire as bytes. It is worth one unit in one channel and moved no
-  odiff score anywhere in the corpus.
-
-#### The player counted frames from `ip` and lottie-web counts from 0
-
-`goToAndStop(n, true)` renders `ip + n` in lottie-web; `goToFrame(n)` rendered
-frame `n` here. Every call site in this repo — `compare.mjs`, `visual.spec.ts`,
-`perf.spec.ts`, the demo — already pairs the two as though they named the same
-picture, and `totalFrames` was already `op - ip`, so the convention was
-inconsistent with itself. It only shows on an animation whose `ip` is not 0:
-`lf20_tWzLYe` starts at 3.0000001 and was being compared three frames out of
-step, which read as a rendering bug and scored 2.1%. The clock stays absolute
-because that is what `apply` takes; `ip` is added on the way in and taken off on
-the way out.
-
-#### Two blind spots in `compare.mjs` itself
-
-Both made the structural diff argue about things that were not there:
-
-- **Hidden layers counted as painted.** `outline()` tested the `display="none"`
-  *attribute*; both renderers hide a layer with `elem.style.display = 'none'`.
-  Worth 29 phantom elements on `lf20_GsFUFN`, which read as a missing feature.
-  It now reads `style` for `display`, `visibility` and `opacity` too.
-- **One mark, two elements.** lottie-web builds a `<path>` per *style* and
-  writes every shape sharing it into that one element, so a filled-and-stroked
-  shape is a fill element plus a stroke element; the compiler emits one carrying
-  both. Left alone that is two diff rows per shape, which is the whole 24-row
-  budget on anything real — the actual divergence never got printed.
-  `coalescePaints` merges an adjacent, same-box, complementary pair.
-
-  What it does **not** merge is lottie-web putting *several shapes* into one
-  style element across a nested group, so a painted-element count of
-  "lottie-web 54, ulottie 63" is still expected on a file whose groups hold more
-  than one path. Siblings are merged in the compiler now — see below, because
-  that turned out not to be cosmetic at all.
-
-### A third corpus, and what `td` versus `tp` actually mean
-
-Three production assets from Karrot: two logo animations and a
-1.2 MB map carrying nine embedded PNGs. All three are within tolerance now; the
-map's residual is a deliberate divergence, recorded below.
-
-Two of the three were reported by eye, not by the gate — filled counters in a
-wordmark that odiff scored at 0.03%. That is the shared-style rule, two sections
-down.
-
-**A layer named by someone's `tp` is drawn *as well as* matting.** The two
-fields answer different questions: `td` says "this layer is a matte, never draw
-it", `tp` says "the layer I am masked by is that one". After Effects' newer
-track-matte model uses a layer that is not hidden, so the two are independent —
-and the map animation has one layer that is both, masked by the `td` layer above
-it and the matte for two ripples below. Hiding every matte source took the map
-out of the picture entirely.
-
-A subtree can only be in one place in a document, so the mask reaches a
-still-drawn source by reference: an id on the layer's own group and a `<use>` in
-the mask, wrapped in its ancestors' transforms so it lands in the space the
-matte was authored in. That is what lottie-web's `getMatte` does too. It works
-in all three delivery modes — `ids.js` rewrites `href` because it walks *every*
-attribute rather than a list of the id-bearing ones, which is the reason that
-scan was written wide. `tests/track_matte.rs` pins both halves, including that
-the `<use>`'s href resolves to an element that is actually in the picture.
-
-**The residual on that file is lottie-web's own bug, and it is deliberate.**
-lottie-web writes the same `<use href="#…">` but only ever puts that id on a
-layer with `td` — `createContainerElements` sets it inside `if (this.data.td)`,
-still true in 5.13.0. So for a `tp` source without `td` the reference dangles,
-the alpha mask is empty, and the layer it was meant to shape disappears.
-lottie-web's own comment above `getMatte` calls the path "not a common case …
-for backward compatibility". The two `Wave` ripples in this animation are
-therefore invisible there and drawn here, which is ~10% on the two sampled
-frames where a wave is live and 0.0–0.5% on the other seven. Reproducing it
-would mean emitting a dangling `url(#…)` on purpose and dropping a visual the
-author put in the file; this renders what After Effects means instead. It is the
-one place in this corpus where matching lottie-web and rendering the animation
-are not the same thing.
-
-#### Which of a fill and a stroke is on top is Lottie's decision
-
-A style's element is appended where the backwards walk meets it, so a style
-*earlier* in `it` paints *later* — on top. SVG has one order and it is
-fill-then-stroke, whatever the source said. So a stroke Lottie put under its
-fill was drawn over it, eating half its own width out of the fill.
-
-`krrt-7ab2a6d4` is three avatars, each a coloured disc ringed in white, `it`
-order `el fl st tr`. The 30-unit ring ate 15 units into the disc — the ring
-looked thin and the disc looked small, at 0.55%. It is also the whole of the
-0.56% on `krrt-9272cb41` that two earlier passes could not explain: the clip was
-never the problem, and neither was `<clipPath>` versus `<mask>`.
-
-`paint-order="stroke"` is that ordering in one attribute, and measures identical
-to lottie-web's two elements in Chrome — 120 px of fill across the middle either
-way, against 90 px for the SVG default. It is emitted only when the fill is
-ahead of the stroke in the style list, which is where the two disagree.
-
-Nothing in twelve fixtures had the construct. `stroke_under_fill` does now, and
-`census` names it so the gate can see it.
-
-#### Shapes that share a style are one path
-
-This is the rule that took longest to see, because the pixel gate cannot see it
-at all.
-
-lottie-web builds a `<path>` per **style** and writes every shape using that
-style into the one element. This compiler built one per shape. For a hole — two
-contours wound opposite ways — that is the entire difference: in one element the
-non-zero rule cancels the inner contour, in two the inner one is filled solid.
-
-It reached the corpus three ways, in ascending order of how obvious it was:
+### Runtime (Chrome, 120-frame sweep, best of 5)
 
 ```
-lottie-web   1 × <path d="M374.53,92.39 C…            (one element, two contours)
-ulottie      2 × <path d="M-374.53,-92.39 L905.47,-92.39 L905.47,627.61 L-374.53,627.61 Z"
-                 <path d="M-374.53,627.61 L905.47,627.61 L905.47,-92.39 L-374.53,-92.39 Z"
+ fixture                lottie ms  ulottie ms  speedup   writes/frame (lw → ul)
+ rectangle/ellipse/fill/trim_path   0.000        —       0 → 0
+ bouncy_ball               0.0021    0.0011     1.9×     1.0 → 1.0
+ boucing-ball              0.0032    0.0011     2.9×     1.0 → 1.0
+ lottie-logo               0.0055    0.0060     0.9×     3.4 → 0.9
+ precomp_star_circle       0.0340    0.0080     4.3×     19.5 → 11.5
+ ripple                    0.3004    0.1139     2.6×     181.7 → 181.7
+ starfish                  0.0461    0.0101     4.6×     4.1 → 1.9
+ lights                    0.0220    0.0137     1.6×     6.0 → 6.0
+ TOTAL                     0.414     0.154      2.7×     216.7 → 204.1
 ```
 
-That is `lf20_yoatyllj`, one of the six URLs jlottie's own demo has commented
-out — and now the reason is known. Its two rectangles cancel to *nothing*, so
-two elements painted a white rectangle over sixty-five marks and the book, bulb,
-pencil, planet and balloon all disappeared. 4%.
+Mount: `ripple` ~1.3 ms, and it is DOM and decode (`innerHTML` over 785
+elements, `dec`, record materialisation, `querySelectorAll`) — not plumbing;
+replacing per-binding closures with batches did not move it. Per-frame cost
+never binds in practice (48 simultaneous instances hold 120 fps on both
+players); mount is where an AOT compiler wins, 6–8× per instance here.
 
-`krrt-7ccaf912`'s wordmark is the same rule at the other end of the scale: every
-counter in the logo text filled in, and the hole in the bag handle with them.
-**The pixel gate scored that 0.03%** — the letters are small and odiff's antialiasing
-pass discounts thin marks — so it passed every automated check in this repo and
-was found by a person looking at the render. It is the sharpest example yet of
-what the [pixel gate's blind spot](#the-pixel-gate-has-a-blind-spot) costs.
+---
 
-The rest of the corpus hid it because two shapes with the *same* fill differ
-only where the winding cancels: a hole filled in with its own colour is
-invisible unless something shows through it.
+## Beyond the fixtures: corpora and tools
 
-**What landed** is `Planner::merge_paths`, and it is deliberately syntactic:
-adjacent siblings, both plain `<path>`, every attribute equal but `d`, and
-neither carrying a binding. Under exactly those conditions the two are the same
-paint in the same space at adjacent z, so concatenating their `d` changes
-nothing a renderer can see except the winding — which is the point. It runs
-after pruning, so paths an identity `<g>` was separating merge too.
+`_fixtures/` answers whether the fixtures still pass. The tools answer what an
+arbitrary file does:
 
-Three things it does **not** do, each for a reason:
+- **`tools/compare.mjs <files|dir>`** — compiles (retrying with `--allow` for
+  whatever the compiler refuses, so a degradation shows next to the render
+  rather than in place of it), renders beside lottie-web in headless Chromium,
+  odiffs sampled frames, writes an HTML report. `--dom` adds a structural diff
+  at the worst frame: only what draws, elements matched by *alignment* keyed on
+  the box each occupies in composition space (comparing `d` text cannot work —
+  the same picture is legally written three ways), colours canonicalised,
+  image hrefs digested, `style`-based hiding respected, and lottie-web's
+  fill+stroke element pairs coalesced against our combined ones.
+- **`tools/census.mjs`** — feature census of any file or directory;
+  `--coverage` is the fixture-gap report.
+- **`tools/probe.mjs <module.js>`** — decodes a compiled module's payload back
+  into readable structure (records, expression sites), through the runtime's
+  own decoder.
 
-* **A bound path keeps its element.** Merging shapes whose geometry or paint is
-  written per frame means a binding owning a *slice* of an attribute, which the
-  wire has no room for. A hole is drawn once, so the static case is the case.
-* **A native `<rect>`/`<ellipse>` does not join a `d`.** lottie-web turns every
-  primitive into path data; this keeps the native element, which is smaller and
-  rounder. No file in three corpora authors a counter as a rectangle, and
-  `native_rect_and_ellipse_do_not_merge` will fail loudly if that stops being
-  true.
-* **It does not walk into a `<clipPath>` or a `<mask>`.** Contours in there
-  **union**; they are separate children for that reason, and concatenating them
-  would put them under one fill rule and let opposite windings cancel — the
-  opposite of what a two-contour mask means.
+Corpus standings:
 
-lottie-web also flattens group transforms into the path data, so it merges
-shapes across nested groups where this cannot. That is the part still missing,
-and no file in these corpora needs it.
+| corpus | files | state |
+|---|---|---|
+| jlottie demo list | 34 | all match; 25 at exactly 0.000%, worst residual 0.09% |
+| Karrot production | 3 | all within tolerance; one *deliberate* divergence (below) |
+| rlottie examples | 93 | screening source for fixtures (42 render exactly; 4 adopted so far) |
+| lottie-flutter | 432 | 208 compile clean; of 207 comparable, **168 pixel-exact**, 39 diverge |
 
-#### A mask is a `<clipPath>` unless it needs to be a `<mask>`
+The flutter refusals are the demand ranking for unimplemented features:
+merge-paths 54, blend-mode 22, text 22, time-stretch 13, stroke-dash 10,
+layer-effect 10, mask-mode 7, repeater 6, 3D 6, even-odd-fill 5,
+rounded-corners 5, skew 5, reversed-direction 4 (plus combinations and 3
+parse errors).
 
-`MaskElement` picks `clipPath` until some mask is subtractive, inverted or not
-fully opaque, and only then a luminance `mask`. The test is on the opacity's
-*value* — bodymovin writes `"o": {"a":0,"k":100}` on a mask that is simply
-opaque, so checking whether the field is present answers "needs alpha" for
-almost every mask in existence.
+The 39 divergences are each a named construct, worst first: `Tests_RGBMarker`
+76.6%, `Tests_MaskInv` 71.6% (despite the name it contains *no* inverted mask —
+a plain Add+Subtract pair renders wrong; the open mask-semantics bug),
+`Tests_MattWithParentAlpha` 55.4%, `gradient_animated_background` 43.7%,
+`Tests_WeAcceptInlineImage` 35.5%, `Tests_hd` 30.3%, `Tests_LayerBlend_0`
+25.5%, `hardware` 22.6%, `birds` 19.1%, `Tests_Rect6` 12.9%,
+`Tests_TrimPathsInsideAndOutsideGroup` 9.4%, `Tests_dalek` 8.0%,
+`Tests_Rect4` 7.1%, `Tests_MiterLimit` 6.5%, `Tests_Remap` 5.2%,
+`Tests_TriangleLargeStroke` 4.5%, `Tests_NullEndShape` 3.8%,
+`Tests_MissingEndValue` 2.9% (last frame only) — and a tail under 2.5%.
 
-Matching that is not cosmetic. A `<mask>` with no `maskUnits` takes the default
-`objectBoundingBox` region, which is the *masked element's* bounding box plus
-10% — so a mask reaching past its content is quietly cropped to it. A clip has
-no region and no soft edge, which is exactly the semantics of an additive opaque
-mask, and it is cheaper.
+---
+
+## Lottie semantics worth knowing
+
+Hard-won facts about the format and about lottie-web, each of which cost a bug:
+
+- **A shape group's `it` array is top-first, so the walk that reads it runs
+  backwards.** That single fact decides which item paints on top (`it[0]`),
+  which items a fill or trim covers (only those above it), and whether an inner
+  style beats an inherited one (it does). `encode_shape_tree_with` is one
+  reverse pass for exactly this reason.
+- **Shapes that share a style are one `<path>`.** lottie-web writes every shape
+  using a style into that style's one element, so two contours wound opposite
+  ways cancel under the nonzero rule — that is how holes work. One element per
+  shape fills the hole in with its own colour, which no pixel gate can see
+  until something shows through. `Planner::merge_paths` merges adjacent
+  same-paint sibling paths (never bound ones, never native `<rect>`/`<ellipse>`,
+  never inside `<clipPath>`/`<mask>` where contours union instead).
+- **Which of a fill and a stroke is on top is Lottie's decision, not SVG's.**
+  A style earlier in `it` paints later; when the fill is ahead of the stroke,
+  `paint-order="stroke"` reproduces it in one attribute.
+- **A mask is a `<clipPath>` unless it needs to be a `<mask>`** (subtractive,
+  inverted, or not fully opaque — tested on the opacity's *value*, since
+  bodymovin writes `o:{a:0,k:100}` on plainly opaque masks). This is not
+  cosmetic: a `<mask>`'s default region quietly crops to the masked element's
+  bbox +10%.
+- **The mask goes on an untransformed wrapper, never the layer's own group** —
+  a mask resolves in the user space its element's transform establishes, so
+  hanging it on the layer applies the transform to the matte twice.
+- **`td` takes a layer out of the picture; `tp` does not.** A layer named by
+  another's `tp` mattes *and* draws — the mask reaches it by `<use>` (wrapped
+  in its ancestors' transforms), exactly what lottie-web's `getMatte` does.
+  lottie-web only ever puts the referenced id on `td` layers, so a `tp` source
+  without `td` dangles there and the matted layer vanishes — its own comment
+  calls the path legacy. **We render what After Effects means instead**; it is
+  the one place in three corpora where matching lottie-web and rendering the
+  animation are not the same thing.
+- **Every composition and precomp layer is clipped to its own `w × h`, with a
+  nested `<svg>`.** `overflow:hidden` on the root clips to the *viewport*, not
+  the viewBox — letterboxing exposes the difference. A nested `<svg>` is the
+  same rectangle a `<clipPath>` would need a document-unique id for.
+- **A layer's `st` shifts nothing but a precomp's children** — the reference
+  renderer subtracts it from the frame and from every keyframe time, so it
+  cancels except where a precomp hands a clock down. Applying it the "obvious"
+  way breaks real files.
+- **Both easing handles live on the keyframe a segment starts at** (`o` leaving
+  it, `i` arriving at the next). Reading `i` off the following keyframe finds
+  nothing and silently interpolates linearly.
+- **Lottie's older keyframe form** puts a segment's destination in `e` on the
+  first keyframe and leaves the last a bare terminator with no `s`. Readers
+  resolve it by looking back at `e[i-1]` — which only works if the encoder
+  distinguishes "absent" from "zero"
+  (`a_keyframe_with_no_start_value_encodes_as_absent_not_zero`).
+- **Parenting contributes a transform and nothing else** — it must not change
+  paint order. `scene::build` nests a child only when that preserves order, and
+  otherwise wraps it in its ancestors' transforms at its own position
+  (`nesting_preserves_order` simulates both to decide).
+- **A group transform is identity only when every component is *statically*
+  identity** — `static_*().unwrap_or(default)` reads an animated property as
+  its default and deletes a live group.
+- **A shape reached by no paint is not drawn** (lottie-web writes `d` into the
+  styles' elements and creates none of its own); SVG would default it to black.
+- **lottie-web has no merge-paths either** (`mm` is absent from its modifier
+  table), so not implementing it is *matching* behaviour, not a gap against
+  the reference. And it truncates colour channels where this compiler rounds —
+  rounding is what keeps the wire's 3-decimal quantization exact, worth one
+  unit in one channel, invisible to odiff.
+
+---
+
+## What was measured and rejected
+
+Settled negatives, recorded so they are not re-proposed. The recurring lesson:
+verify the *share* before optimising the rate, and measure compressed, because
+gzip already exploits repetition.
+
+- **An integer number formatter.** 2.36× faster in isolation, byte-identical
+  on all 7434 corpus values — and still a loss: `fmt` is ~3% of a frame at
+  worst, so the cap is ~1.7%, under the noise floor, while the extra code made
+  every module +2.2% gzipped. `num.js` carries the comment.
+- **A fully-flat dense payload as a *size* play.** Built completely, twice
+  simulated first (both simulations wrong in opposite directions). Raw bytes
+  −26%, gzipped **+11–19%** against the JSON it replaced: dense integer
+  encodings destroy exactly the redundancy LZ77 fed on. The flat stream stayed
+  — for the loops and mount, not the bytes — with the two encodings that *did*
+  pay: per-column shifts, and delta only for ascending-never-repeating columns.
+  Delta anywhere else loses (the clock table: −41% characters, +23% gzip).
+- **Struct-of-arrays for the bytes.** −1.7% before the deltas, beaten by them
+  after; gzip already exploits what transposition exposes. Bindings are
+  transposed *now*, but for the monomorphic loops — it is roughly free on
+  bytes, not a win.
+- **Typed arrays / base64 / varints for `D`**: +22% to +26% gzipped, and lossy.
+  IEEE-754 mantissas of nice decimals are near-incompressible where their text
+  compresses well.
+- **Transposing keyframe values** (+28 B) and **delta-encoding keyframe times**
+  (net positive after the decoder): tuples repeat whole; times are already
+  small integers.
+- **`scale(s)`/`rotate(deg)` spellings for baked matrices**: worth zero bytes —
+  none of the corpus's 163 candidates has a zero translation, and
+  `matrix(s,0,0,s,e,f)` is shorter than `translate(e,f) scale(s)`.
+- **Three cheaper clipping spellings** (bare nested `<svg>` with no
+  `width`/`height`; dropping viewport-equal clips; folding transform-only
+  groups into their child). All correct, all reverted — the bytes were small
+  and the markup stopped being readable; the fold in particular has four
+  refusal conditions that are each a bug when missed.
+- **Regrouping the frame loop for dispatch alone.** The megamorphic-dispatch
+  penalty itself measured 0.1% of a frame. The batched-loop rewrite that later
+  landed paid off through what monomorphism *enables* — V8 inlining the
+  property reads — not the dispatch; the original measurement still holds for
+  what it measured.
+- **Hoisting the `x.expr ?` guard into `xcol`** (−32 ternaries, ~380 B): breaks
+  every animation without expressions, because `shake::GATED` drops `xcol`'s
+  *declaration* and the call-site guard is what keeps it from being called.
+- **"Obvious" mask fixes without measurement**: skipping mode-`n` masks was
+  inert (the mode is already lowered to `"a"` upstream), and
+  `subtract XOR inverted` regressed `Tests_Masks` from 6.8% to 10.6%. Both
+  reverted; the modes are refusals until the semantics are actually understood.
+- **Normalising `thisProperty.loopOut(` to the bare shim so a dedup can merge
+  two bodies**: sound, and worth one duplicated body on one fixture. Not done.
 
 ---
 
 ## What is left
 
-Ordered by value. The recon that produced these numbers is worth re-reading before
-starting any of them.
+Ordered by value.
 
-0. **The rest of the layer effects.** `ADBE Fill` is implemented; `support::scan`
-   now reports `tint`, `stroke`, `tritone`, `pro levels`, `drop shadow`,
-   `matte3`, `gaussian blur` and `transform` as `layer-effect` instead of
-   dropping them. Each is one filter primitive in lottie-web
-   (`elements/svgElements/effects/`), and `emit_effects` is the place. Only the
-   static colour case is on the wire so far — an animated effect parameter is
-   left out of the payload rather than frozen, which is what keeps a moving
-   colour from baking wrong.
-
-1. **Compile the expression bodies.** Names are resolved, the proxy is gone and
-   dead bodies are swept, but what survives still runs as JavaScript through
-   `evalExpr` — and on `lights` and `starfish` the engine is larger than the
-   animation it decorates. Turning `loopOut('cycle')` into the arithmetic it
-   denotes is where those two actually go. See "Why the expressions need a
-   compiler, not analysis".
-4. **Const-fold frame-invariant expressions.** Deduplication and preamble
-   trimming have landed; what is left is folding the expressions whose value
-   never changes. Most of starfish's are `clamp(value, 0, 100)` over a static
-   source. Doing it in the compiler needs an evaluator; a cheaper first step is
-   a wire flag marking a property frame-invariant so the runtime evaluates it
-   once at mount instead of every frame.
-3. **Close the coverage gap, starting with the implemented half.**
-   `node ulottie-dev-server/tools/census.mjs --coverage` lists it: 14 constructs
-   with working code and no fixture — every subtractive and inverted mask, three
-   of the four matte modes, radial gradients, animated ramps, gradient fills,
-   image layers. Each is a small hand-written Lottie, which is also the only
-   kind whose licence is unambiguous: every public corpus in the wild is a pile
-   of LottieFiles downloads, including rlottie's, whose `COPYING` scopes MIT to
-   `src/` and says nothing about `example/resource/`.
-4. **Make silent feature drops loud.** `can_encode` never rejects: blend modes,
-   repeaters, hold keyframes, skew, `sr`, auto-orient and 3D rotation are all
-   dropped without a word. (Merge paths and drawing layer effects are reported
-   now. Merge paths is not a divergence — lottie-web has no `mm` modifier
-   either.) `shape:twist` has no `Feature` at all. Wanted: a diagnostics list on
-   stderr plus a sidecar JSON, with hard rejection behind `--strict`.
-4. **Trim `m=2` (individually) is ignored**, and nonzero trim offsets on open paths
-   clamp where lottie-web wraps. No fixture covers either — add one first.
-5. **Pause when offscreen.** There is no IntersectionObserver or
-   `visibilitychange` gating, so a mounted-but-invisible animation still burns a
-   frame budget.
-6. **`lights` is 1.7× lottie-web, `lottie-logo` still 0.9×.** For `lights` the
-   remaining cost is the expression path itself; (1) and (2) are the fix. For
-   `lottie-logo` it is path-string assembly, which the profile has put at 15%
-   of its frame for a while.
-7. **`ripple` is +8% on bytes for the batched runtime** (11.7K → 12.6K gz). It
-   is the only fixture that reaches the interpreter, and the bytes are in the op
-   bodies — each state record names its fields twice, once where `bXxx` builds
-   it and once where `oXxx` hoists it. Worth a look if it grows further; not
-   worth undoing the loops for.
+1. **Compile the expression bodies.** References are resolved, the proxy and
+   the `ctx` plumbing are gone, dead bodies are swept — but what survives runs
+   as JavaScript through `evalExpr`, and the engine is larger than the module
+   on three of the four expression fixtures (table above). `loopOut` is
+   arithmetic; `pointOnPath` is a kernel over resolved inputs. This also makes
+   the baked document exact for expression-driven properties, and removes the
+   runtime's last two closures.
+2. **The mask-combination bug.** `Tests_MaskInv` — a plain Add + Subtract pair,
+   no inversion — renders 71.6% wrong. Whatever the real combination semantics
+   are, the inverted/None modes stay refusals until this is understood.
+3. **Matte/blend compositing cluster**: `Tests_RGBMarker` 76.6%,
+   `Tests_MattWithParentAlpha` 55.4%, `Tests_LayerBlend_0` 25.5% — and
+   blend-mode is the #2 refusal in the flutter corpus (22 files).
+4. **The rest of the layer effects.** `ADBE Fill` is implemented (the one
+   `feColorMatrix` lottie-web writes); tint, stroke, tritone, levels, drop
+   shadow, blur and transform are reported as `layer-effect`. Each is one
+   filter primitive in lottie-web; `emit_effects` is the place. Animated effect
+   parameters are left off the wire rather than frozen.
+5. **Dashed strokes** (`Feature::StrokeDash`, 10 flutter refusals): SVG spells
+   it `stroke-dasharray` — a refusal waiting to become an implementation.
+6. **The legacy end-value tail**: `Tests_MissingEndValue` diverges at the last
+   frame only; `Tests_NullEndShape` a constant 3.8%. Same `e`/terminator family
+   as the starfish-wink encoder bug, in the readers this time.
+7. **Rect geometry cluster**: `Tests_Rect4/6/7` (3.8–12.9%), plus stroke joins
+   (`Tests_MiterLimit`, `Tests_TriangleLargeStroke`).
+8. **Trim**: `Tests_TrimPathsInsideAndOutsideGroup` 9.4% and `Tests_TrimPaths`
+   0.8% are open; nonzero offsets on open paths clamp where lottie-web wraps
+   (no fixture covers it); `m=2` (individually) is ignored and tracked in
+   `coverage.json`.
+9. **Close the coverage gap's implemented half** — 4 constructs with working
+   code and no fixture (luma mattes, animated ramps, embedded images).
+   Implemented-without-fixture is where the expensive bugs have lived.
+10. **Explain instancing's 5× frame cost**, which is what keeps
+    `Instancing::Auto` declining `ripple`'s −56% payload.
+11. **Const-fold frame-invariant expressions** (`clamp(value, 0, 100)` over a
+    static source) — needs an evaluator, or a wire flag for evaluate-once.
+12. **Pause when offscreen** — no IntersectionObserver / `visibilitychange`
+    gating yet.
+13. **`lottie-logo` is 0.9×** — the profile puts path-string assembly at 15%
+    of its frame.
 
 ## Notes for whoever picks this up
 
-- `data::Payload` is the analysis IR, not the wire format. Change the wire format in
-  `scene/`, and the reference renderer plus its snapshots keep working.
-- `scene::plan` reuses `eval::{geometry, transform, gradient, trim}` to bake static
-  values, so there is exactly one implementation of each behind both the reference
-  renderer and the compiler. Keep it that way.
+- `data::Payload` is the analysis IR, not the wire format. Change the wire in
+  `scene/`; the reference renderer and its snapshots keep working.
+- `scene::plan` reuses `eval::{geometry, transform, gradient, trim}` to bake
+  static values — one implementation behind both the reference renderer and
+  the compiler. Keep it that way; `scene/bake.rs` additionally mirrors the
+  runtime *ops* (not the planner's static branches) so hydration stays sound.
+- Every mutation of a planned `Scene` must be followed by `seal()` — the
+  stream is a snapshot, and forgetting it means the mutation silently ships
+  nothing.
 - The runtime's flat-concatenation bundling requires globally-unique top-level
-  names across `runtime/**`. There is no namespacing to save you; add a module
-  and pick names accordingly.
+  names across `runtime/**`, and the shaker resolves references on bare names —
+  a local named `r` reads as num.js's formatter and ships it everywhere.
+- There are **three module assembly sites** (minified, the size probe, the
+  unminified reviewer). A new module-level constant must be emitted at all
+  three, or the missing one only fails at run time.
 - Payload `pr` and `tp` are **array indices** into the layer list, not the
-  layer's `ind`. `precomp_star_circle` emits `i=0` for all 12 of its layers, so
-  anything resolving parents by id will silently pick the wrong one.
-- **A layer's `st` shifts nothing but a precomp's children.** The reference
-  renderer subtracts it from the frame *and* from every keyframe time it is
-  compared against, so the two cancel — which is why `car-5` keyframes a layer
-  at t=55..70, gives it `st: 55`, and still means composition time. The one
-  place it survives is a precomp handing a clock to its children. Applying it
-  the "obvious" way breaks four files at once.
-- **A shape group's `it` array is top-first, so the walk that reads it runs
-  backwards.** That single fact decides three things, and all three were wrong:
-  which item paints on top (`it[0]` does), which items a fill or a trim covers
-  (only the ones above it), and whether an inner style beats an inherited one
-  (it does). `encode_shape_tree_with` is one reverse pass for exactly this
-  reason — do not split it back into a collect-then-emit pair.
-- **A group transform is identity only when every component is *statically*
-  identity.** `static_*(…).unwrap_or(default)` on an animated property answers
-  the default, which reads as "nothing happens here" and deletes the group.
-- **`td` takes a layer out of the picture; `tp` does not.** A layer named by
-  another's `tp` mattes *and* draws, so the mask reaches it with `<use>` rather
-  than swallowing it. Only `td` means "never draw this".
-- **Every composition and every precomp layer is clipped to its own `w × h`,
-  with a nested `<svg>`.** `overflow:hidden` on the root clips to the viewport,
-  not to the viewBox, and the two differ the moment the mount box is not the
-  composition's aspect ratio. A nested `<svg>` is the same rectangle a
-  `<clipPath>` would give without a document-unique id — which is what would
-  drag `runtime/ids.js` into every animation with a precomp, measured at +425 B
-  on `precomp_star_circle` for one rectangle.
-- **Both easing handles live on the keyframe a segment starts at** — `o`
-  leaving it, `i` arriving at the next. Reading `i` off the following keyframe
-  finds nothing there and silently interpolates linearly.
-- **Parenting must not change paint order.** `scene::build` still nests a child
-  in its parent's group when that happens to leave the layers in the order they
-  must be painted in, and otherwise gives each child wrappers carrying its
-  ancestors' transforms at its own position. `nesting_preserves_order` decides
-  by simulating both, so the rule is a property of the composition rather than
-  a guess about indices.
+  layer's `ind` (`precomp_star_circle` emits `i=0` for all 12 layers).
+- A new `Caps` bit goes after the last one, not in a gap —
+  `every_capability_has_a_bit_to_itself` pins it, because two names on one bit
+  silently merge capability sets.
 - `runtime/pv.js` references `EASE` and the spatial sampler only on branches
-  guarded by data the planner emits exclusively when the matching `Caps` bit is
-  set, and every op names `xcol` on a branch it only takes when there is an
-  expression engine. That is what makes it safe to leave those declarations out
-  of a bundle — do not add an unguarded reference, and if you add a guarded one,
-  add it to `shake::GATED` too.
-- **A gated declaration must have no unconditional reader.** The `GATED` table
-  cuts a *declaration* when its capability is absent; it does not cut the text
-  that *read* it. A guarded call (`x.expr ? xcol(…) : null`) is safe because the
-  guard skips the call. An unconditional assignment (`ctx.createPath =
-  createPath` in `attachHelpers`) is not: the right-hand side is evaluated at
-  mount regardless of the guard, so it reads a name the shaker has dropped and
-  throws `ReferenceError`. This is how `createPath` broke for every animation
-  whose expressions did not reach the path API. The fix is structural — the path
-  constructors are now exported top-level functions called by bare name, not
-  `ctx` properties, so nothing reads them unless a body does. The same applies
-  to the arithmetic helpers (`sum`, `sub`, `mul`, `div`, `clamp`,
-  `radiansToDegrees`, `degreesToRadians`): `attachHelpers` is gone entirely, and
-  each is a plain export retained as a shake root only when a body calls it.
-- An op's arguments are one column each, so **every binding of an op must have
-  the same argument count**. A `debug_assert` in `batch_section` pins it; an
-  argument that is an enumeration rather than a measurement must be `Arg::Tag`,
-  because `Arg::Num` is scaled by a thousand.
-- **A new `Caps` bit goes after `EXPR_PATH`, not in the gap before it.** The
-  three `EXPR_*` flags were given the top of a `u32` when that was the whole
-  set. `RAMP` was first written as `1 << 28`, which is `EXPR_PROPERTY`: the caps
-  line still read as valid, and `lights` quietly stopped importing half the
-  expression runtime that draws it. `every_capability_has_a_bit_to_itself`
-  pins it — over `Caps::FLAGS`, because `Caps::all().iter()` walks set bits and
-  two names on one bit yield a single entry.
+  guarded by planner-emitted data; every op names `xcol` behind `x.expr ?`.
+  Add a guarded reference → add it to `shake::GATED`; never add an unguarded
+  one (see the two `GATED` rules under *Runtime delivery*).
+- The perf discipline for op loops: hoist state fields into locals before the
+  loop, resolve per-binding lookups at bind time, allocate nothing per frame
+  (scratch buffers and outline objects are made at bind), and keep every call
+  site in a loop at a single target.
+- The pixel gate discounts antialiasing; the geometry gate cannot see
+  clipping; a sampled sweep steps over short windows. When adding a feature
+  with a narrow visible effect, add the narrow assertion for it.
 
-#### The demo shows the artifacts, not just their sizes
-
-Every part row in the size breakdown names a real file, so it now opens one.
-Clicking `compiled module`, `runtime it imports`, `SVG sprite` or `Lottie JSON`
-shows that artifact's actual bytes next to its raw and gzipped size — 825 B of
-compiled module against the 298 KB it replaces reads rather differently as text
-than as a number.
-
-**The compiler formats; the page only colours.** Everything that ships is
-minified onto one line, so the viewer needs an unminified form — but
-reconstructing one in JavaScript means being right about template literals,
-regexes and comments, and a compiled module is mostly one enormous template
-literal holding SVG markup, full of the very characters a naive formatter
-splits on. The first attempt was exactly that, and it mangled import
-specifiers.
-
-There was no need: `CompileOptions.minify: false` is the `--pretty` path, the
-same form `_fixtures/__snapshots__/` is reviewed in, complete with a provenance
-header. So every artifact is served twice — as it ships, and as the compiler
-writes it. `/.output/<name>.pretty.js`, `.embedded.pretty.js`,
-`.extracted.pretty.js`, `.slice.pretty.js`, `.sprite.pretty.svg` and
-`.pretty.json`; `runtime_slice_pretty` and `markup_pretty` are the two new
-compiler entry points behind them. The wasm build produces all of them too, so
-the static demo is at parity with the server and neither reformats anything.
-
-The toggle is `minified`/`unminified` — both are real artifacts, and the header
-always reports the true byte counts.
-
-Colour is a real grammar's job, so it is shiki, loaded lazily and imported
-fine-grained: `shiki/core` plus three languages, one theme and the JavaScript
-regex engine. The bundled `shiki` entry emits a chunk per language — wolfram,
-emacs-lisp, cpp — for a page that shows JavaScript, JSON and XML. As it stands
-it is six lazy chunks, ~81 KB gzipped, fetched only when a row is opened, so
-first load is unaffected.
-
-The sprite also renders, through a `<use>`, because a sprite is `<symbol>`
-definitions and nothing draws until something references one — which is also
-how a page consumes it. It is drawn inside a dashed frame at the symbol's own
-viewBox and captioned as the *static* picture: on a shape-heavy fixture most
-geometry is written by bindings at runtime, so the render is a few marks in the
-corner of a large canvas. Without the frame and the caption that reads as
-clipped or broken rather than as accurate.
-
-Switching artifacts clears the rendered markup rather than just hiding it. A
-sprite carries `<symbol id="…">`, and a leftover definition stays live in the
-document for anything referencing that id — including the animations mounted on
-the same page.
-
-Two things had to move for it. `/.output/<id>.slice.js` is a new variant — the
-size table always named the runtime slice but nothing served it. And `/compile`
-now *writes* the extracted module, the sprite and the slice rather than only
-measuring them: an upload is addressed by content hash, so the on-demand
-compile route cannot rebuild them from a fixture file that does not exist. The
-wasm backend already had all three in hand and just publishes blob URLs.
-
-##### Two layout bugs the viewer surfaced
-
-Shiki emits `<pre class="shiki">`, which is `white-space: pre` and will not
-wrap, and `.wrap` is a grid. A grid item's `min-width` defaults to `auto`, so it
-refuses to shrink below its content — one minified line made the card 5508 px
-wide inside a 940 px page and gave the whole document a horizontal scrollbar,
-rather than scrolling inside the panel. Fixed by allowing the items to shrink
-(`min-width: 0`) *and* wrapping shiki's output; `overflow-wrap: anywhere`,
-because minified output has long runs with no break opportunity at all.
-
-Checking that across viewports turned up a second, unrelated one: the scrubber
-overflowed a narrow page by 20 px. `max-width: 100%` does not fix it — the
-control is a grid item in an auto-sized track, where a percentage resolves
-against an indefinite containing block and is ignored. `width: min(420px, 100%)`
-does.
-
-#### The document had to be a frame, not a template
-
-The planner splits an animation into markup for what cannot change and a
-binding table for what can. That is right for a module, which writes the moving
-half on mount, and wrong for a document served on its own — which is exactly
-what the extracted sprite is for: SSR, `<noscript>`, `<img src>`, and the tree
-a client hydrates onto. A layer with an animated transform had no `transform`
-at all and drew at the origin; a shape with an animated `d` drew nothing.
-`bouncy_ball` was off-centre and `lights` was five bulbs stacked on one point.
-
-So `Scene::markup` is now baked at the composition's first frame — every
-binding evaluated once at compile time and written as an ordinary attribute
-(`scene/bake.rs`). `Scene::inline`, what the module carries, stays unbaked;
-the runtime writes those attributes on mount, so there they would be dead
-bytes.
-
-Two rules make hydration sound, and they are why the bake mirrors
-`runtime/ops/*.js` op by op instead of reusing the planner's own static-value
-branches:
-
-* **Write exactly what the op writes.** The planner bakes a static fill as
-  `fill="#f00" fill-opacity=".5"`; `oFill` writes one combined `fill="rgba(…)"`
-  and never touches `fill-opacity`. Baking the planner's form would leave an
-  opacity attribute the runtime never overwrites, and the alpha would apply
-  twice from the first frame on.
-* **Write nothing the op would not have written.** A binding gated off at this
-  frame is skipped here too, so nothing is left for the runtime to fail to
-  clear.
-
-Only attributes are added, never elements — bindings address elements by
-document-order index, and that is what makes a sprite legally both the
-pre-script picture and the tree that hydrates.
-
-The oracle is the module itself: `player()` calls `apply(ip)` before scheduling
-anything, so a mount with `autoplay: false` *is* the first frame. Comparing the
-two attribute by attribute across the corpus leaves 0 differences on every
-fixture without expressions, and on the three with them the differences are
-*only* on expression-driven properties — 1 on starfish, 5 on lights, 184 of
-ripple's 785 elements. An expression cannot be evaluated ahead of time (that
-needs the engine, which is JavaScript), so those bake to the fallback the
-runtime itself uses when no engine is present. lottie-web agrees with the
-module in all three cases, so the document is the approximate one.
-
-Both halves are pinned in `visual.spec.ts`: the sprite against a fresh mount,
-and a served frame hydrated then driven to mid-animation against a fresh mount
-— mid-animation because an off-by-one in element indexing would still look
-right at the frame the markup was baked at. Hydration had no coverage at all
-before this.
-
-The cost is attributes on animated elements: +10–18% of document bytes on most
-fixtures, +56% on `precomp_star_circle` and +65% on `starfish`, and nothing at
-all on the four that were already fully static. It buys a first paint that is
-correct instead of one that is wrong.
-
-##### The viewer outlived its animation
-
-`renderSizes` rebuilt the table on every source change but left the viewer
-alone, so switching animations kept the previous one's artifact open — and if
-it had been rendered, a live `<symbol id="…">` stayed in the document, where the
-next animation's mount would resolve `url(#…)` against it. Closing the viewer
-is now part of re-rendering the table rather than only a button.
-
-The ways are ordered shared runtime → markup extracted → self-contained, and
-extracted lists its parts in the same order as the split it varies (module,
-runtime slice, then the sprite). Reading the two side by side, the only row that
-differs is the one that is actually different.
-
-### Why the expressions need a compiler, not analysis
-
-The initial-frame bake made the case concrete. Everything the compiler can
-evaluate, it now bakes exactly — 8 of 11 fixtures agree with a mounted module
-attribute for attribute. The three that do not are exactly the three with
-expressions, and the differences are *only* on expression-driven properties.
-The document cannot be right for those, because being right means running the
-expression, and the expression is JavaScript.
-
-That is the correctness argument. The size argument is larger. From
-`tests/expression_cost.rs` (`cargo test --test expression_cost -- --nocapture`),
-all figures minified:
-
-```
-fixture       module   engine   bodies  strings   overhead  ratio
-lights          5792     7760     1917      530      10207   1.8×
-starfish        5763     7762     1526      479       9767   1.7×
-ripple         33508     7780      740      581       9101   0.3×
-```
-
-`engine` is the runtime slice an expression animation drags in that an
-otherwise identical one would not, measured by differencing `runtime_slice`
-with and without the four `EXPR_*` caps. On `lights` and `starfish` the
-machinery is **larger than the animation it decorates** — 1.8× and 1.7×.
-
-What ships for one of `lights`' four expressions, verbatim:
-
-```js
-function(e,t,n,r,i){let{thisComp:a,div:o}=i;var s,
-  c=a.layer(`wire`),
-  l=o(t.effect(`Pseudo/ADBE Trace Path`)(`Pseudo/ADBE Trace Path-0001`),100),
-  u=c(`ADBE Root Vectors Group`)(1)(`ADBE Vectors Group`)(1)(`ADBE Vector Shape`);
-  return s=c.toComp(u.pointOnPath(l)),s}
-```
-
-Every string in it names something the compiler already resolved. `layer('wire')`
-is a layer whose record index is known; the four-step chain is a shape the
-planner has already flattened into a `d`; the effect lookup is a slider whose
-value is in the payload. The module ships the names, ships a body that looks
-them up, and ships `proxyFor` — 2776 B unminified, the single largest function
-in `expr.js` — whose entire job is to make those chains callable at runtime.
-Resolve the references ahead of time and all three go: the strings, the lookup
-code, and the proxy.
-
-Some expressions come off entirely. This one is also from `lights`:
-
-```js
-function(e,t,n,r,i){
-  return n.propertyGroup(1)(`Pseudo/ADBE Trace Path-0002`)==1&&n.numKeys>1
-    ? n.loopOut(`cycle`) : e}
-```
-
-Both operands of the `&&` are compile-time constants — an effect checkbox and a
-keyframe count — so the conditional folds at compile time to one branch or the
-other. If it folds to `e` the property is plain keyframes and the expression is
-gone. If it folds to `loopOut('cycle')` that is a time transform on keyframes
-the module already carries, `f → ip + (f - ip) % span`, which is arithmetic, not
-an interpreter. Either way the body, the string and the engine call disappear.
-
-What does *not* disappear is real evaluation: `pointOnPath` against a moving
-path still has to run per frame. But that is a compiled arithmetic kernel over
-resolved inputs, not a JS interpreter walking proxies by name — and being able
-to run it at compile time is what makes the document exact.
-
-#### Stage one: resolve and fold
-
-`src/expr/` is the front end. It parses each body with oxc — a real parser, not
-the identifier scans it replaces, which could not tell an effect name from a
-string literal — and evaluates it against what the compiler already knows:
-effect parameters with static values, keyframe counts, the property's own
-range. Three verdicts, per *property* rather than per expression, since the
-bodies are deduplicated and one body folds differently on each layer it is
-applied to:
-
-* **Identity** — the body returns `value`. The expression is deleted and the
-  property is its keyframes.
-* **Constant** — the property is that number.
-* **Open** — undecidable; the expression ships.
-
-It is one-directional by construction: anything not resolvable *exactly* is
-Open. A missed fold costs bytes, a wrong one is a silent rendering change.
-
-Bodymovin emits more of the deletable kind than one would guess. Every property
-a "loop" toggle can reach gets
-
-```js
-if (thisProperty.propertyGroup(1)('…-0002') == true && thisProperty.numKeys > 1)
-  { $bm_rt = thisProperty.loopOut('cycle'); } else { $bm_rt = value; }
-```
-
-whether or not the toggle is on, and every opacity gets `clamp(value, 0, 100)`
-whether or not the keyframes can leave the range. `lights` drops from 6
-expressions to 4, `starfish` from 4 to 3; `ripple`'s six all survive, which is
-correct — every one of them samples another layer's path.
-
-Modules: `lights` 5792 → 5581 B, `starfish` 5763 → 5633 B. Real but small, and
-the reason is visible in what survives: the remaining bodies are the ones full
-of names. The string table has not moved at all, and neither has the engine,
-because *some* property still reaches for `proxyFor`. Deleting whole bodies was
-never going to be where the bytes were — resolving the references inside the
-bodies that stay is, and that is the next stage.
-
-##### The sweep is the dangerous half
-
-Folding alone changes nothing measurable: the property gets cheaper and the
-module still carries the body, the names, and the engine. So dead bodies are
-swept and the table renumbered — and the first version of that swept `ripple`
-completely, all six expressions, because the walk covered `module.layers` and
-`ripple`'s animation lives inside a precomp asset. An empty live set read as
-"nothing references anything". The browser suite caught it as a geometry
-divergence, not as a crash.
-
-The fix is not just walking assets. The sweep now tracks `seen` alongside
-`live`, and keeps any id the walk never reached: a property site this pass does
-not know about costs bytes rather than losing the body it still points at. A
-missing walk case should not be able to delete live code.
-
-#### Stage two: resolve the references
-
-Stage one deleted whole expressions and moved ~200 B. The measurement said why:
-the string table had not shifted at all, and almost none of it is layer names —
-`lights` carries 454 B of names of which *four* are a layer. The rest is After
-Effects effect and parameter names, each paid for three times: the literal in
-the body, the name on the effect in the payload, and the linear search in
-`proxyFor` that matches them up.
-
-So `expr::resolve` rewrites `effect('Position - Overshoot')('ADBE Slider
-Control-0001')` to `effect(0)(0)`. Bodies are deduplicated, so one is shared by
-every layer it was applied to and a rewrite has to be right for all of them: the
-indices are resolved once per using layer and applied only if they all agree.
-They do whenever one effect was applied across sibling layers, which is the case
-worth having. Only the *owning* layer is resolved — a bare `effect(…)` and
-`thisLayer.effect(…)` — because `thisComp.layer('x').effect(…)` reaches a
-different table, and `ripple` has one of those, correctly left alone.
-
-`proxy.effect` takes either form, so a lookup the compiler could not decide
-still works. Then `Scene::prune_effect_names` drops every name no surviving body
-still mentions.
-
-```
-                module    strings          module    strings
-              (before)   (before)          (after)    (after)
-lights            5792        530            4897        130    −15.5%
-starfish          5763        479            5312        327     −7.8%
-ripple           33508        581           33257        519     −0.7%
-```
-
-Two things about the pruning are load-bearing. It asks about the finished body
-*text*, not its syntax: a lookup this compiler does not recognise keeps its
-name, so a gap in the rewrite costs bytes rather than shipping a module that
-throws. And it matches whole string literals rather than substrings —
-`'ADBE Layer Control'` is a substring of `'ADBE Layer Control-0001'`, so a
-`contains` test kept ten effect names on `starfish` that nothing looks up.
-
-What is left in the tables is the dynamic case: `lights` and `starfish` build an
-array of effect names and index it in a loop, `effect(nullLayerNames[i])(…)`.
-The names are constants and the loop bounds are constants, so it is resolvable —
-it just needs the array literal rewritten rather than a call argument.
-
-`proxyFor` is still shipped, and will be until *every* reference in a module is
-resolved: it takes one surviving name lookup to need the whole surface. That is
-the remaining half.
-
-##### The `thisProperty` preamble is decided, not probed
-
-Each surviving body was preceded by a line per accessor it used, of the form
-
-```js
-const nearestKey = thisProperty?.nearestKey
-  ? thisProperty.nearestKey.bind(thisProperty)
-  : ((t) => ({ index: 1, time: 0 }));
-```
-
-Three separate things were being deferred to run time, and none of them had to
-be:
-
-* **`?.`** — `evalExpr` builds a `thisProperty` for every call, so it is never
-  null.
-* **`.bind(thisProperty)`** — not one of the three shapes' methods reads
-  `this`; they close over their own state. Worse, the preamble lives *inside*
-  the body, so the bind ran per evaluation: every frame allocated one bound
-  function per accessor per expression.
-* **the conditional itself** — which accessors exist follows from the value
-  source, which the planner resolved long ago. `expr::thisPropertyFor` picks
-  keyed / path / stub, and only the path shape lacks `key`, `nearestKey`,
-  `valueAtTime`, `velocityAtTime` and `loopOut`.
-
-So `Site` now carries a `Surface`, filled by the same guarded walk that collects
-layer sites — the one whose comment explains that a *missed* site is a wrong
-fold — and `Plan::surface` is `Some` only when every property using that body
-agrees, which is `agree()`'s rule applied to a second question. The preamble is
-then a plain read, a plain stub, or (only where the uses disagree) a `||`.
-`numKeys` folds to the literal `0` off the keyed shape.
-
-```
-             bodies (min)      module
-lights        1118 → 988      4467 → 4337
-starfish       983 → 830      4700 → 4547
-ripple         389 → 366     31520 → 31497
-```
-
-Every accessor in the corpus folds to the direct read, so the stub and the
-mixed forms ship unexercised by any fixture — they are pinned by unit tests
-instead, which is the only reason they are allowed to exist.
-
-**One thing this surfaced and did not fix.** `evalExpr` calls
-`thisPropertyFor(ctx, p)` unconditionally, but that declaration is cut by
-`shake::GATED` when `Caps::EXPR_PROPERTY` is absent — and that cap is set from a
-word scan of the bodies. An animation whose expressions never mention the
-property surface (`$bm_rt = value * 2;` is enough) therefore ships a module
-where every expression throws a `ReferenceError` into `evalExpr`'s own catch and
-silently falls back to the base value. Confirmed: at `Caps::EXPRESSIONS` alone,
-`evalExpr` is retained and `thisPropertyFor` is not. No fixture reaches it —
-all three set the cap — which is exactly why it has not been noticed. The same
-class of bug was fixed for the path/arithmetic helpers (see *The `ctx` helpers
-are gone too* below); this one survives because `evalExpr` is in the runtime,
-not the emitted body, and the call is not guarded by data the compiler controls.
-
-##### Tables of names
-
-The last thing in the string tables was the shape After Effects generates when
-one effect is applied across a set of layers:
-
-```js
-var nullLayerNames = ['Shape Layer 1: Path 1 [1.0]', 'Shape Layer 1: Path 1 [1.1]', …];
-for (var i = 0; i < nullLayerNames.length; i++)
-  out.push(effect(nullLayerNames[i])('ADBE Layer Control-0001'));
-```
-
-The names are constants and the loop bound is the array's own length, so the
-elements resolve to effect indices and the array becomes `[0, 1, …]` — no
-unrolling, the loop is untouched. The one parameter literal serves every
-iteration, so it is only replaced when every effect in the table puts the
-parameter in the same slot; they do when the table is one effect applied N
-times, which is the only way AE writes this.
-
-An array is rewritten only when *every* reference to it is one the rewrite
-understands — `x.length`, or `x[i]` inside an `effect(…)` call. A name that
-escapes anywhere else could be read as a string, and a number there would change
-what the body computes.
-
-```
-              module    strings         module    strings
-            (stage 0)  (stage 0)      (stage 2)  (stage 2)
-lights           5792        530           4661          8    −19.5%
-starfish         5763        479           4674          0    −18.9%
-ripple          33508        581          33257        519     −0.7%
-```
-
-`starfish` now ships no expression names at all, and `lights` ships one: the
-layer name `wire`, which is a `thisComp.layer('wire')` lookup and a different
-resolution problem.
-
-`proxyFor` is still there, and the reason is worth being precise about. It is no
-longer needed for *name matching* — it is needed because the surviving bodies
-still call proxy *methods*: `toComp`, `fromCompToSurface`, `pointOnPath`,
-`points`, `numKeys`, `nearestKey`. Removing it means resolving those to direct
-handles too, which is a different and larger piece of work than resolving names
-was. What has gone is the lookup: the strings, and the search that used them.
-
-##### The proxy, and what it takes to remove it
-
-`proxyFor` builds a callable object per layer record with about fifteen accessor
-definitions on it, and `placeAll` built one for *every* record at mount:
-`ripple` has 232 records, and its expressions name two of them. The maps that
-back `thisComp.layer(…)` held those proxies, which is what forced them all into
-existence — so they now hold record *indices*, and the object is built the first
-time something asks for one. 229 of `ripple`'s 232 are never built.
-
-That is the construction gone, not the code. `proxyFor` still ships, and the
-reason is worth stating precisely, because it is not the one we started with.
-Name lookup is resolved: the strings and the search that consumed them are gone.
-What keeps the proxy alive is that the surviving bodies still call its *methods*
-— `toComp`, `fromCompToSurface`, `pointOnPath`, `points`, `numKeys`,
-`nearestKey`. Removing it means rewriting each of those into a free function
-over a record handle, which is a different and larger job than resolving names:
-every one is a syntactic rewrite plus a runtime entry point, and
-`thisComp.layer('wire')` has to resolve to a handle the emitter can hand over,
-which the wire format has no slot for yet.
-
-Two of the corpus's bodies also build layer objects *dynamically* —
-`getNullLayers.push(effect(i)(j))` then `getNullLayers[i].anchorPoint` — so even
-a complete method rewrite needs a plain record handle those accessors can work
-on. `ripple` has none of that and could shed the proxy entirely; `lights` and
-`starfish` could not without it.
-
-Lazy construction costs +154 B of runtime (the flat record tables and
-`proxyOf`). It is worth it on any animation with more layers than expressions,
-which is all of them, and it is the shape the method rewrite needs anyway —
-a record handle looked up by index is exactly what a free function would take.
-
-##### Stage three: the proxy is gone
-
-The method rewrite the section above called "a different and larger job" landed.
-`backend::layers` runs after planning, per candidate scene, and rewrites every
-body so that a layer reference is a slot in the owning record's own table and
-every access is a free call:
-
-```text
-thisComp.layer('wire').toComp(p)   →  toComp(lyAt(thisLayer, 8), p, frame)
-barLayer.content('Path 1').path.points()
-                                   →  lyPoints(lyRel(thisLayer, 2), frame)
-thisComp.layer('traceNull').effect('Trace Path')('Progress')
-                                   →  lyEffect(lyRel(thisLayer, -3), 0, 0, frame)
-```
-
-No wire-format change was needed after all. The `E[]` table is JavaScript the
-compiler generates, so a resolved record index is simply a literal in the body.
-
-**Two spellings, because neither alone covers the corpus.** Bodies are
-deduplicated across every property they were applied to, so one literal has to
-be right for all of them. `lyAt(thisLayer, T)` when every using property agrees
-on the absolute slot — `lights` names `wire` from five layers and it is record 8
-for all five. `lyRel(thisLayer, D)` when the absolute slot differs but the
-offset from the owner does not — `ripple`'s precomp is inlined twenty-three
-times, so its `thisComp.layer('bar')` has twenty-three answers and one delta.
-`agree()` folds one resolution per use into a spelling or refuses; it prefers
-absolute because `Handle::At` is the only one gated on the uses sharing a table.
-
-**A reference that resolves to *nothing* is not writable, and refusing is the
-whole point.** The proxy answered `null` for a missing layer and the number `0`
-for a missing effect, and a body that then read a member off either *threw*,
-landing in `evalExpr`'s catch and falling back to the property's own value. The
-free functions are null-safe by design: `lyPos(null, f)` is `[0,0,0]` and
-`lyAnchor(0, f)` is `[0,0,0]`. So emitting `null` or `0` would not reproduce the
-old behaviour — it would compute on a fabricated point instead of aborting.
-`Handle` therefore has only the two record spellings, and `agree` returns `None`
-for everything else, which sends the body to the fallback where the behaviour is
-reproduced exactly. This was the one wrong-fold in the first cut of the pass.
-
-**There is no fallback.** A reference the pass cannot resolve fails the compile,
-with the body and `ULOTTIE_WHY=1` to say which construct defeated it. The first
-cut kept the old proxy behind `Caps::EXPR_LEGACY` for exactly this case, and no
-fixture ever reached it — which is the argument against keeping it. Dead code
-that only runs on input nobody has yet is how it rots, and an AOT compiler that
-silently degrades to a runtime lookup is not one. If a real file hits it, the
-answer is to resolve that construct, not to ship a second evaluator.
-
-**`verify()` has the last word, and shares no code with the walk.** It is a text
-scan of the finished body: any surviving layer member, or any surviving free
-`effect` / `thisComp`, sends the body to the fallback. The second half of that
-matters more than it looks — both names used to be bound in front of *every*
-body and are now never emitted, so a mention the walk did not rewrite would be a
-`ReferenceError` on every frame, which `evalExpr`'s catch turns into a silent
-fall back to the base value. Fail-open is the one thing this pass may not be. The failure it guards against is the walk believing it rewrote
-something it did not, and a scan sharing no code with the walk cannot share its
-blind spot.
-
-**`sites()` is fail-safe by construction.** Missing a site is a *wrong* fold, not
-a missed one: `agree` folds over the uses it was given and a use it never saw
-cannot disagree, so an incomplete walk emits a literal that is right for the
-sites it visited and wrong for the one it did not. `SceneData`, `AssetPlan` and
-`LayerRecord` are therefore destructured exhaustively, and a `Prop`-carrying
-field added to any of them stops compiling until it is walked or waved past.
-
-##### What it cost and what it bought
-
-Against the proxy build that preceded it:
-
-| fixture  | module          | engine      | bodies      | strings   |
-|----------|-----------------|-------------|-------------|-----------|
-| lights   | 5308 → **4454** | 8021 → 6508 | 1787 → 1118 | 191 → **0** |
-| starfish | 5297 → **4675** | 8032 → 6439 | 1199 →  983 | 378 → **0** |
-| ripple   | 33997 → **32560** | 8054 → 6201 | 1191 →  457 | 561 → 477 |
-
-`lights` and `starfish` ship no string table at all. Symbol *count* went up
-(89 → 97 on `lights`) while engine bytes fell: one 2.7 kB `proxyFor` became
-seventeen one-liners of which only the used ones are retained, and retention is
-exact — `Plan::helpers` reports what a body calls rather than inferring it from
-a word scan, which is why `ripple` drops `fromCompToSurface` and the others do
-not.
-
-##### The `ctx` helpers are gone too
-
-`attachHelpers` used to wire the full expression vocabulary onto `ctx` at
-mount — `ctx.sum`, `ctx.clamp`, `ctx.createPath`, … — and each body
-destructured the names it used out of `ctx` in its preamble. That had two
-problems, both silent, and both the same shape as the proxy: the runtime
-plumbed names through a context object the compiler could not see into, so the
-shaker had no way to cut what a body did not reach.
-
-The path constructors were the first to break. `createPath`, `pointOnPath` and
-`tangentOnPath` are gated under `EXPR_PATH`, so the shaker correctly dropped
-their declarations when no body reached the path API — but `attachHelpers` read
-them unconditionally (`ctx.createPath = createPath`), and an unconditional read
-of an undeclared name is a `ReferenceError` at mount. Every animation with
-expressions but without path calls threw into `evalExpr`'s catch and silently
-fell back. No fixture hit it; a URL-tested animation did.
-
-The fix removed the plumbing rather than patching the guard. Every helper —
-`sum`, `sub`, `mul`, `div`, `clamp`, `radiansToDegrees`, `degreesToRadians`,
-`createPath`, `pointOnPath`, `tangentOnPath` — is now a plain `export` at the
-top of `expr.js`, called by bare name. `attachHelpers` is gone; the only thing
-left on `ctx` is `frameRate`, set once in `initExpr`.
-
-Retention is static and exact: `emit_expressions::bare_helpers` scans the
-shipped bodies for free identifiers against the helper vocabulary, and the
-result feeds `Exprs::helpers` alongside the names the rewrite pass reports via
-`need()`. Those helpers enter `roots()` and are retained (embedded) or imported
-(extern) only when a body calls them. `CTX_NAMES` is gone — bodies no longer
-destructure anything from `ctx` except `frameRate`, and that read is emitted
-directly where `time` or `frameDuration` needs it.
-
-The rule this pins, alongside the one about guarded calls: **a declaration the
-shaker can drop must not have an unconditional reader.** A guarded call is safe
-because the guard skips it; an unconditional assignment never is.
-
-##### Two bugs the new geometry sweep caught, both silent
-
-The shipped `--embedded` build was pixel-checked at one frame with
-`antialiasing: true` and geometry-checked never — precisely the hole a
-one-slot-off `lyAt`/`lyRel` hides in, since a constant offset on hairline
-geometry is what odiff's antialiasing pass discounts. Sweeping the geometry check
-over all five sample frames of the shipping build found:
-
-* **`starfish` was 10 px out at t=0.5**, and exact at the other four frames.
-  Not the layer pass — the extern build runs the identical rewritten bodies
-  through the identical free functions and was exact. `codegen` has two forms for
-  a keyframed property, an unrolled if-chain and (above `UNROLL_MAX` segments, or
-  whenever the expression engine needs a handle to hang keyframes off) a columnar
-  literal sampled by `kfEval`. The unrolled form emitted spatial tangents; the
-  columnar one dropped them, so a motion path became a straight line. Invisible
-  in the source: the property still animated, just along the wrong curve. Two of
-  that limb's position keyframes are *equal*, so the entire excursion between
-  them was the tangent — a straight line between two identical points does not
-  move at all. `a_generated_module_keeps_its_spatial_motion_paths` pins it.
-* **`ripple`'s `E[4]`** was still scanning an effect list and its parameters by
-  string on every read of every binding. `expr::resolve` only ever resolves the
-  *owning* layer's own effects; this one reads another layer's.
-  `render_effect` now resolves both selectors per use site and folds them to
-  slots when the uses agree, which also drops `"Trace Path"` and `"Progress"`
-  from the payload.
-
-#### Removing the fallback
-
-The layer pass shipped with a gated proxy behind it, `Caps::EXPR_LEGACY`, for
-references it could not resolve. No fixture ever reached it. That is the case
-for deleting it rather than the case for keeping it: dead code that only runs on
-input nobody has yet is how it rots, and an AOT compiler that quietly degrades
-to a runtime name lookup is not one. A reference the pass cannot resolve now
-fails the compile and says which construct defeated it.
-
-Gone with it: `lyView` (the proxy itself), `lyPlace`, `lyName`, `lyIndex`,
-`ctx.byName`, `ctx.byIndex`, the composition-scope column and its header slot,
-`LEGACY_ROOTS`, `Plan::legacy`, `Plan::keeps_names`, `reachable_names` and its
-tests, `Scene::prune_names`'s reason for existing, and the
-`ULOTTIE_NO_LAYER_PASS` escape that existed only to exercise the fallback.
-`Caps` went back to `u32` — bit 31 was taken for `EXPR_LEGACY` and the widening
-to `u64` had no other cause.
-
-The layer name table goes too. It existed so `thisComp.layer('…')` could resolve
-at runtime, and no emitted body performs that lookup any more, so every name is
-pruned rather than scanned for.
-
-The shipped bytes barely move — about 22 B, since the shaker was already cutting
-the unreachable half — and no snapshot changed, which is the point: this is the
-source getting smaller, not the output. What it buys is one path instead of two,
-and no second evaluator to keep in step with the first.
-
-##### Deciding the guard
-
-`ripple` shipped 27 B of expression name — `Pseudo/ADBE Trace Path-0002` — and a
-body that read it:
-
-```js
-if (thisProperty.propertyGroup(1)('Pseudo/ADBE Trace Path-0002') == true
-    && thisProperty.numKeys > 1) { $bm_rt = thisProperty.loopOut('cycle'); }
-else { $bm_rt = value; }
-```
-
-Both halves are things the compiler knows, so `fold_branches` decides the test
-and replaces the whole `if` with the arm it takes. The test goes, the literal
-goes, and the payload name goes with it through the lexical rule in
-`prune_effect_names` — which is the point of that rule being lexical: nothing
-had to be told the name was dead, it stopped being mentioned.
-
-The count has to reach the test **per property**, not per layer. One body serves
-many properties and they do not agree about `numKeys`, so the collection walk
-carries `(expression id, keyframe count)` per use rather than just the id. A
-first attempt evaluated every test with a stand-in count of zero and inverted
-`ripple`'s guard; the across-the-animation geometry gate caught it at t=0.25,
-which is exactly the hole that gate was added for.
-
-What lands is the arm's *statements*, not the block that held them: splicing
-the block whole left a bare `{ … }` wrapping nothing where the guard used to be.
-Continuation lines are pulled back one level so the unminified form, which is
-what compiler changes are reviewed in, reads as though the guard was never
-written.
-
-Only top-level `if`s whose test mentions no local are considered. A test reading
-a local would need the statements before it replayed, and this pass does not run
-the body — Bodymovin's guards read `thisProperty` and `effect(…)` and nothing
-else, which is the case worth having.
-
-`ripple` 32560 → 32416 B, and no expression name is left in any fixture. What
-remains in its string table is markup templates.
-
-##### Templates as named slots
-
-The string pool's last job for most animations was holding the repeated subtrees
-the planner factored out, referenced by offset from an `H_TEMPLATES` section
-that `mount` read back through `str[…]`. They are the module's own strings, not
-payload, so they are named in the module now — `const TPL = [ … ]` — and `ext.t`
-closes over them: `t: s => expand(s, TPL)`. The section, the interning and the
-indirection are all gone, and with them the `"s"` array itself on every fixture
-that had one.
-
-Two things to know. The generated path already emitted `TPL` this way, so this
-only brought the interpreter into line — but there are *three* module assembly
-sites (minified, the size probe, and the unminified reviewer) and the constant
-has to be emitted at all three. Missing one produced a module that referenced
-`TPL` without declaring it, which nothing but running it would have caught.
-
-And `ext.t` is now gated on `scene.data.tpl` being non-empty rather than on
-`Caps::TEMPLATES`. The two can disagree, and when they did the module threw at
-`init`. A `debug_assert` pins the direction that should hold.
-
-What is left in the pool: `lottie-logo` keeps one entry, `"matrix(1,0,0,1,"` —
-the constant prefix of a `TRANSLATE` binding, which is a binding argument rather
-than a template. Every other fixture emits no `"s"` at all.
-
-
-#### `translate()` instead of `matrix(1,0,0,1,…)`
-
-The last thing in the string pool was `"matrix(1,0,0,1,"` on `lottie-logo` — the
-baked prefix of a `TRANSLATE` binding. `TRANSLATE` is the specialisation for a
-layer whose position moves and whose anchor, scale and rotation do not: the
-matrix's linear part is a compile-time constant, so it ships as a string and the
-frame loop appends two numbers to it.
-
-An identity linear part is by far the commonest case, and `matrix(1,0,0,1,x,y)`
-is `translate(x,y)` — same transform, five fewer bytes, and the spelling an
-author would have written. So the compiler now sends *no* prefix for it and the
-binder supplies `translate(` itself. `Arg::Str` is interned biased by one, the
-way effect names already were, so `Arg::Null` in that slot reads as absent.
-
-The same shortening applies wherever the planner bakes a transform it knows
-outright, through `svg::transform_str`. That is worth much more than the pool
-entry: `ripple` is 460 B smaller and `lottie-logo` 77 B, because a static pure
-translation is what most groups in most files have.
-
-**No fixture emits a string pool at all now.**
-
-Where it stops: a full `TRANSFORM` binding still bakes as `matrix(…)` even when
-the matrix happens to be a translation at the first frame. `scene::bake` has to
-write exactly what the binder writes — that is what lets a served frame be
-hydrated — and teaching `oTransform` to notice an identity linear part would put
-four comparisons per binding into the frame loop to save five bytes per write.
-`ripple` has 785 elements; that trade is the wrong way round.
-
-##### Why the remaining matrices stay matrices
-
-After `translate()` landed, 285 transform attributes remain across the document
-snapshots, 6429 B of values: 122 `translate(x,y)`, 99 rotations with scale, and
-64 pure scales. The obvious next cut is `scale(s)` and `rotate(deg)` for the
-last two — and it is worth **zero bytes**, because not one of them has a zero
-translation. `matrix(s,0,0,s,e,f)` is 22 characters; the `translate(e,f)
-scale(s)` that would replace it is 25. SVG has no shorter spelling for "scale
-about a point", which is what every one of them is.
-
-Measured before writing any of it. The transform seam is done at this corpus.
-
-#### `D` is the stream
-
-`SceneData` serialized as an object for as long as there was a second entry to
-hold: the strings that could not become integers. Layer names, effect names and
-factored-out markup have each stopped being payload, so the wrapper had become
-one key describing a table with one row — `{"d": "…"}` on every fixture.
-
-It is the string now. `mount` takes `dec(D)` rather than `dec(D.d)`.
-
-A pool is still *possible* — a `TRANSLATE` whose linear part is not the identity
-still needs its prefix — so it reaches the runtime the way templates do, as a
-named module constant handed over through `ext.p`. No fixture in the corpus
-emits one, which is why this could stop being a payload field at all rather than
-an optional one.
-
-##### The dedup that wasn't
-
-`ripple` ends with two bodies that both loop a property, and the obvious read is
-that a rewrite made them identical and nothing re-ran the dedup. It is not what
-happened, and the pass to fix it was written and then reverted.
-
-```js
-$bm_rt = thisProperty.loopOut('cycle');   // what the decided guard left
-$bm_rt = loopOut('cycle');                // what was always written bare
-```
-
-They differ textually, so re-running the dedup — same canonicalisation the
-lowering uses — merges nothing, on any fixture. And they differ *semantically*:
-the emitter binds the bare name to a shim,
-`thisProperty?.loopOut ? … : ((mode, n) => value)`, which answers with the base
-value where the member access would throw. Merging them is a semantic
-normalisation, not a dedup.
-
-The normalisation that would work is rewriting `thisProperty.loopOut(` to the
-shimmed free binding — strictly the safer of the two, and it would make the
-bodies identical so a dedup could then merge them. Not done: the case for it is
-one duplicated body on one fixture.
-
-#### Ops are loops, not callbacks
-<a id="ops-are-loops-not-callbacks"></a>
-
-Each binder used to resolve its element, its property evaluators and its
-attribute setters once at mount and return `(f) => …`; a frame was `U[i](t)`
-over a flat array. `U` held closures from twelve different factories, so that
-call site was megamorphic — it could not be inlined and took a polymorphic
-dispatch every call, 230 times a frame on `ripple`. Inside each one, `p(f)` was
-megamorphic again over the six shapes `resolve` could return.
-
-That is the shape of an interpreter, not of an ahead-of-time compiler. Every
-question those indirections answer at run time — which op, which property kind,
-which attribute — the compiler already knew. So:
-
-* **Bindings are grouped by op** and written as struct-of-arrays batches
-  (`scene::flat::batch_section`). A batch is `[count, flags, el…, gate…,
-  slot…, arg0…, …]`; the op code is not on the wire at all.
-* **No op returns a callback.** Each one is two flat functions: `bXxx` binds a
-  batch once and hands back a plain state record, `oXxx(x, s)` is the frame. A
-  binder that returns `(f) => …` is an interpreter deciding at run time what it
-  could have been told — so state is data, and every runtime primitive is a
-  direct call.
-* **The module carries a *program*** — two functions the compiler wrote, one
-  that binds every batch and one that runs them, both by name
-  (`emit::program`). `mount` no longer walks a binding list, and
-  `const B=[bTransform,,bOpacity]` is gone. `scene::program_ops` is the whole
-  contract between the two sides: batches are written, and calls are emitted, in
-  ascending op-code order.
-
-  ```js
-  const P0=(x,B,e,l,q,a)=>[bTranslate(x,B[0],e,l,q,a),bDisplay(x,B[1],e,l,q,a),bShape(x,B[2],e,l,q,a)];
-  const A0=(x,S)=>{oTranslate(x,S[0]);oDisplay(x,S[1]);oShape(x,S[2])};
-  export const init=(c,o)=>mount(M,D,P0,A0,c,o);
-  ```
-
-  Neither closes over anything. The only closure a mounted animation holds is
-  `apply`, which is what `player` is handed — the same single indirection the
-  generated backend has always had.
-* **Property evaluation is three functions, not six closure shapes.**
-  `runtime/pv.js` reads a property straight out of the stream at the frame it is
-  asked for — `pv` for a scalar, `pvv` into the caller's scratch, `pvp` for
-  geometry. The only state a property needs is a segment cursor, which lives in
-  an `Int32Array` the op indexes by binding. `kf.js` keeps `resolve` for the two
-  consumers that need a property as a *function* — the expression engine and a
-  precomp's time remap — and it is now a wrapper over the same three, so there
-  is one interpolator rather than two to keep in step.
-* **The geometry kind became the op.** `SHAPE` was one binder with a four-way
-  switch and every generator behind it; it is now `oShape`, `oShapeRect`,
-  `oShapeEllipse` and `oShapeStar`, which is what lets an animation that draws
-  only bezier paths ship neither the polystar generator nor the branch past it.
-  They share `Caps::GEOM_*` with the generator each one calls.
-* **Gate and clock lookups lost their branches.** Gate 0 is pinned on and slot 0
-  is the composition clock, so a loop reads `ON[G[i]]` and `T[L[i]]`
-  unconditionally instead of testing whether this binding has either.
-
-`mount` also handed playback to `runtime/play.js`, which the generated backend
-already used, so both backends now share one player. `layerTx`/`layerOp` became
-direct calls too — a record and a frame in, the finished attribute value out —
-so a generated module no longer allocates a closure per layer binding either.
-
-**Two closures are left, and both are the expression engine's.** `kf::resolve`
-returns a property *handle* because the engine hangs `thisProperty` off it and
-passes it around, and `ctx.expr` is the engine's own evaluator. Making those
-direct is not a runtime change — it is the open item below: compile the bodies,
-and there is nothing left to hand a handle to.
-
-##### What it bought, measured
-
-Frame time, against lottie-web in the same run (`vitest run tests/perf.spec.ts`):
-
-| fixture | before | after |
-|---|---|---|
-| ripple | 2.2× | **2.6×** |
-| starfish | 2.3× | **3.3×** |
-| lights | 1.2× | **1.5×** |
-| precomp_star_circle | 4.6× | 4.5× |
-| lottie-logo | 0.9× | 0.9× |
-| total | 2.2× | **2.6×** |
-
-Ratios rather than absolutes, because lottie-web's own numbers moved between
-runs — this machine is not the one the earlier table was taken on. Best of three
-consecutive runs each.
-
-**Two things had to be fixed to get the callback-free form back to parity**, and
-both are the same mistake in different clothes — work that used to happen once,
-at closure creation, quietly moving into the loop:
-
-* An op's state fields have to be **hoisted into locals before the loop**, not
-  read off `s` inside it. That is what a closure's capture list was; written as
-  a state record it has to be spelled out. `ripple` was 9% slower until it was.
-* `bLayerTx` **resolves each record's four fields at bind time**. Writing its
-  loop in terms of `layerTx(rec, f)` — which asks the record for its own
-  defaults — was tidier and cost 5% of `ripple`, which has 140 layer bindings.
-  `mtx` is still the one implementation of the matrix; only the field lookup is
-  in two places, and there is a comment saying why.
-
-**The earlier measurement was not wrong, it was measuring the wrong thing.** A
-synthetic put the megamorphic-vs-monomorphic *dispatch* penalty at 0.1% of a
-frame, and that still holds. What it did not price was everything downstream of
-being monomorphic: `pv` is one call target, so V8 inlines it into the loop,
-where a closure reached through `U[i]` could only ever be a generic call. The
-win is in the property reads, not in the call that reaches them.
-
-##### Mount did not move, and that answers the other open question
-
-```
-ripple   mount 1.26 ms best / 1.45 median   (1.30 ms before)
-```
-
-Mount allocated one updater per binding, one setter per attribute and one
-evaluator per property — well over a thousand small objects on `ripple`. It now
-allocates a few typed arrays per batch. **Mount time is unchanged**, which
-settles the question the previous revision left open: none of that 1.3 ms was
-closure allocation. It is `innerHTML` over 785 elements, `dec`, record
-materialisation and `querySelectorAll` — DOM and decode, not plumbing.
-
-##### What it cost
-
-`ripple` — the one fixture that still compiles to the interpreter — went
-**11.7K → 12.6K gzipped, +8%** (of which ~0.2K is the bind/apply split: a state
-record names its fields where a closure captured them implicitly). Every other fixture is byte-identical, because
-they are code-generated. Extern slices moved both ways: −0.3K on the simple
-fixtures (which no longer drag `resolve` and the keyframe-handle surface in,
-since `xcol` and `column` are now gated on `Caps::EXPRESSIONS`), +0.2–0.3K on
-the expression-heavy ones. The all-capabilities ceiling, which nothing loads,
-went 9.3K → 11.7K: it now holds four shape loops where it held one binder, and
-each op is two functions.
-
-The bytes went into the op bodies. Two things clawed most of it back and are
-worth keeping in mind before adding an op: `set::put` writes an attribute with
-its change check in one call rather than three inlined lines at ~25 sites, and
-`pv::xv`/`xvv` fold the "expression column first" test into the read.
-
-##### What the cleanup pass found
-
-Four review passes over the diff (reuse, simplification, efficiency, altitude).
-The three that mattered were all the *same* mistake as the two above — work that
-used to happen once quietly moving into the frame:
-
-* **`layerTx(rec, f)` in generated code** re-resolved the record's four defaults
-  per frame, which is exactly what `bLayerTx` had just been fixed not to do.
-  Both now go through `lyFields(rec)`, resolved once — at bind time for a batch,
-  in `init` for a generated module.
-* **`ORIGIN`/`FULL` returned a fresh array per call.** All three of `ripple`'s
-  records elide both anchor and scale, so that was 276 allocations a frame in a
-  path whose whole claim is that it allocates none. They are module constants
-  now; nothing mutates them.
-* **`resolve` lost its constant folding.** A static record field became
-  `(f) => pv(…)`, re-decoding a header every frame to produce a value that
-  cannot change — 92 a frame on `ripple`. `T_SCALAR` and `T_VECTOR` fold to a
-  captured value again.
-
-Two more were real defects rather than waste: `oRect` wrote `ry` outside the
-change check (one blind attribute write per rounded rect per frame — no fixture
-covers `op::RECT`, which is how it slipped), and `tools/probe.mjs`, the payload
-inspector, still read `D.d` from before the payload became a string. Both fixed.
-
-What was declined: hoisting the `x.expr ?` guard into `xcol` would delete 32
-ternaries and ~380 bytes, and would break every animation without expressions —
-`shake::GATED` drops `xcol`'s *declaration*, and the guard is what keeps the
-call from running. The comment on the gate now says so.
-
-Also dropped, as dead: `Use::rec_base` and `Use::scope` (and `Planner::rec_high`
-with them), the geometry tag `geo_descriptor` prepended only for its caller to
-strip — which is what left `bake_geometry` and `bake::bake_shape` indexing one
-shape's arguments at different offsets — and `column`'s `delta` parameter, which
-had only `true` callers left.
-
-##### Three bugs the split produced, all silent
-
-* **The polystar type went through the ×1000 measurement scaling.** It rode
-  inside `Arg::List`, where `arg_deep` stores numbers as-is; promoted to a
-  binding argument of its own it became `Arg::Num` and arrived as `1000`. The
-  pixel gate caught it — `precomp_star_circle` drew the wrong polygon.
-* **Then `Arg::Tag` broke `bake_geometry`.** Its reader handled `Arg::Num` and
-  `Arg::Prop` only, so the star's type read as absent, the whole shape stopped
-  being compile-time resolvable, and `trim_path` — a *fully static* animation —
-  quietly grew a runtime binding whose JS trim disagreed with its own baked
-  document by one hairline segment (`L128,178` against a degenerate
-  `C186.779,208.902,128,178,128,178`). Only the sprite check saw it: same
-  picture, different serialization.
-* **A third `bind(op::SHAPE, …)` site, in `emit_masks`, kept the old argument
-  shape.** `scene_supported` passed it and `emit_binding` then refused it, so
-  `starfish` silently stopped being code-generated and shipped 2 KB more.
-  `try_emit` now says which binding defeated it under `ULOTTIE_WHY`, and `emit`
-  prints both candidates' sizes, which is how this was found.
-
-`pv` also grew a `T_VECTOR` case for a scalar slot: the planner classifies by
-the dimension it asked for, not by what Lottie stored, so a scalar written `[x]`
-reaches a scalar read. The closure form handed the array back and let JS coerce
-it; that was working by accident.
