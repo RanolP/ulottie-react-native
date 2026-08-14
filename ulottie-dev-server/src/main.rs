@@ -339,7 +339,7 @@ fn compiler_mtime() -> SystemTime {
     static T: std::sync::OnceLock<SystemTime> = std::sync::OnceLock::new();
     *T.get_or_init(|| {
         std::env::current_exe()
-            .and_then(|p| std::fs::metadata(p))
+            .and_then(std::fs::metadata)
             .and_then(|m| m.modified())
             .unwrap_or(SystemTime::UNIX_EPOCH)
     })
@@ -845,7 +845,6 @@ async fn run_sizes(paths: Arc<PathLayout>, args: SizesArgs) -> Result<()> {
     let driver_gz = gzip_size(driver_bytes);
     let lottie_bytes = fs::read(&paths.lottie_web_bundle)
         .await
-        .map(|v| v)
         .unwrap_or_default();
     let lottie_raw = lottie_bytes.len();
     let lottie_gz = gzip_size(&lottie_bytes);

@@ -106,10 +106,6 @@ pub struct Anim {
     pub v: Vec<f64>,
     /// Path values, used only when `kind == Path`.
     pub paths: Vec<FlatPath>,
-    /// Explicit segment end values (legacy Lottie `e`). Present only when a
-    /// segment's end differs from the next keyframe's start.
-    pub end: Option<Vec<f64>>,
-    pub end_paths: Option<Vec<FlatPath>>,
     /// Per-segment easing index into the module easing table. `None` when
     /// every segment is linear.
     pub ez: Option<Vec<u32>>,
@@ -181,7 +177,6 @@ impl Serialize for Anim {
             n += 1;
         }
         for present in [
-            self.end.is_some() || self.end_paths.is_some(),
             self.ez.is_some(),
             self.hold.is_some(),
             self.to.is_some(),
@@ -205,11 +200,6 @@ impl Serialize for Anim {
         }
         if self.dim > 1 {
             m.serialize_entry("d", &self.dim)?;
-        }
-        if let Some(e) = &self.end {
-            m.serialize_entry("e", &Quantized(e))?;
-        } else if let Some(e) = &self.end_paths {
-            m.serialize_entry("e", e)?;
         }
         if let Some(z) = &self.ez {
             m.serialize_entry("z", z)?;
@@ -301,8 +291,6 @@ mod tests {
             t: vec![0.0, 10.0],
             v: vec![0.0, 100.0],
             paths: vec![],
-            end: None,
-            end_paths: None,
             ez: None,
             hold: None,
             to: None,

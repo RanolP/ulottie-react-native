@@ -28,7 +28,7 @@ const M =
     '</svg>' +
   '</svg>';
 
-const D = "0gmqe0gskt10q100o3q7000400gt7gt7qp20mj5gt74086212s226o7oc00oc80m4226oh1oc0mg260s3m7oc0oc2226ococ06i888o82s3q4o84i5s586g7";
+const D = "0gmqe0gskt10q100o3q7000400gt7gt7qp20mj5gt74086212s226o7oc00oc80m4226oh1oc0mg160s3m7oc0oc2226ococ06i888o82s3q4o84i5s586g7";
 
 const E = [
   function(value, thisLayer, $p, frame, ctx) {

@@ -69,11 +69,10 @@ frame_snapshot!(frame_fill, "fill");
 frame_snapshot!(frame_trim_path, "trim_path");
 
 // Step 2: keyframes + easing + spatial bezier + group/layer transforms.
-frame_snapshot!(frame_bouncy_ball, "bouncy_ball");
-frame_snapshot!(frame_boucing_ball, "boucing-ball");
+frame_snapshot!(frame_boucing_ball, "boucing_ball");
 
 // Step 3: opacity propagation + parent-chain transforms.
-frame_snapshot!(frame_lottie_logo, "lottie-logo");
+frame_snapshot!(frame_lottie_logo_1, "lottie_logo_1");
 
 // Step 4: gradients (linear + radial; color+alpha stop merging).
 frame_snapshot!(frame_ripple, "ripple");
@@ -86,3 +85,41 @@ frame_snapshot!(frame_starfish, "starfish");
 
 // Step 7+: expressions via rquickjs ($bm_rt context + callable proxies).
 frame_snapshot!(frame_lights, "lights");
+
+// The lottie-flutter logo variants, and AndroidWave (merge-paths allowed —
+// both renderers drop the modifier, so parity holds). `lottie_logo_1` is
+// the original wordmark (Step 3 above); `_2`/`_3` are the lottie-flutter
+// variants.
+frame_snapshot!(frame_lottie_logo_2, "lottie_logo_2");
+frame_snapshot!(frame_lottie_logo_3, "lottie_logo_3");
+frame_snapshot!(frame_android_wave, "android_wave");
+
+// Text lowered from embedded glyphs.
+frame_snapshot!(frame_text_baseline, "text_baseline");
+
+// A static repeater, expanded at lowering. NOT a pixel-parity fixture:
+// lottie-web clones the trim into every copy *and* keeps the layer-level
+// trim, so each repeated stroke is trimmed twice (measured: its arc equals
+// e² of the property value) — an artifact, not AE semantics. This compiler
+// trims once and repeats, which is what After Effects means; the reference
+// render is the gate.
+frame_snapshot!(frame_fireworks, "fireworks");
+
+// Layer blend mode (`bm: 1` multiply) as CSS `mix-blend-mode`.
+frame_snapshot!(frame_blend_multiply, "blend_multiply");
+
+// A v3.1.6 file: legacy 0–255 shape colours, the old property spellings, and
+// precomps on staggered clocks. `merge-paths` allowed (invisible — its merged
+// groups are static or style-bucketed); 0.05% pixel residual against
+// lottie-web.
+frame_snapshot!(frame_bodymoovin, "bodymoovin");
+
+// Luma mattes (plain and inverted) — the inverted one cannot be pixel-diffed
+// against lottie-web (see tests/track_matte.rs), so this reference render is
+// the only regression gate it has.
+frame_snapshot!(frame_matte_luma, "matte_luma");
+frame_snapshot!(frame_matte_luma_inv, "matte_luma_inv");
+
+// An animated colour ramp (one binding per <stop>) and an embedded image asset.
+frame_snapshot!(frame_gradient_animated, "gradient_animated");
+frame_snapshot!(frame_image_embedded, "image_embedded");

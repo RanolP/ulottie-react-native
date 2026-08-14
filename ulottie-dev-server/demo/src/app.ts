@@ -531,7 +531,7 @@ function countWrites(fn: () => void): number {
  *
  * Without this the timer sees the write and the invalidation walk and stops:
  * style and layout are lazy. Measured on ulottie, forcing them adds 38% of the
- * per-frame cost on `lottie-logo`, 41% on `lights` and 48% on `ripple` — so
+ * per-frame cost on `lottie_logo_1`, 41% on `lights` and 48% on `ripple` — so
  * without the flush the table would be describing attribute writes, not
  * rendering, and would omit roughly half the work. It omits it asymmetrically
  * too: ulottie's script is the cheaper half, so leaving layout out flatters it.

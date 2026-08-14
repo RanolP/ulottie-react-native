@@ -240,12 +240,11 @@ pub fn shake(decls: Vec<Decl>, roots: &[&str], caps: Caps) -> Vec<Decl> {
             if is_cut(r, caps) {
                 continue;
             }
-            if let Some(&j) = index.get(r.as_str()) {
-                if !live[j] {
+            if let Some(&j) = index.get(r.as_str())
+                && !live[j] {
                     live[j] = true;
                     stack.push(j);
                 }
-            }
         }
     }
 

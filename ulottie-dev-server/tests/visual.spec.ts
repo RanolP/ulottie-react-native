@@ -25,9 +25,8 @@ const FIXTURES: ReadonlyArray<{ name: string; tolerance?: number }> = [
   { name: 'ellipse' },
   { name: 'fill' },
   { name: 'trim_path' },
-  { name: 'bouncy_ball' },
-  { name: 'boucing-ball' },
-  { name: 'lottie-logo' },
+  { name: 'boucing_ball' },
+  { name: 'lottie_logo_1' },
   { name: 'starfish' },
   { name: 'ripple' },
   { name: 'precomp_star_circle' },
@@ -37,8 +36,22 @@ const FIXTURES: ReadonlyArray<{ name: string; tolerance?: number }> = [
   // across fifteen frames. See _fixtures/PROVENANCE.md.
   { name: 'gradient_radial' },
   { name: 'image_layer' },
+  { name: 'image_embedded' },
   { name: 'mask_subtract' },
   { name: 'matte_alpha' },
+  { name: 'matte_luma' },
+  // `gradient_animated` is hand-made for `gradient:animated-ramp`: an animated
+  // colour ramp without alpha stops, the one ramp shape a fixed set of `<stop>`
+  // elements can follow (alpha stops are refused — see `AnimatedGradient`).
+  { name: 'gradient_animated' },
+  // NOT here: `matte_luma_inv` (tt:4). lottie-web's `getMatte` creates a mask
+  // for matte types 1–3 only, so its tt:4 output references a mask that does
+  // not exist — and Chrome draws an element with an unresolvable mask
+  // reference *unmasked*. Pixel parity with lottie-web is therefore
+  // unreachable by construction; like `tp`-without-`td`, this compiler
+  // renders what After Effects means instead, and the construct is pinned by
+  // structural assertions in `ulottie-compiler/tests/track_matte.rs` plus the
+  // Rust-side reference render in `tests/frame_snapshot.rs`.
   { name: 'stroke_under_fill' },
   // Hand-made, for the one shape of expression the other three do not have: a
   // body that reads another layer and nothing else. `ripple`, `starfish` and
@@ -46,6 +59,25 @@ const FIXTURES: ReadonlyArray<{ name: string; tolerance?: number }> = [
   // bundles — so a shaken-out expression helper rendered correctly in every
   // fixture and silently returned the authored constant everywhere else.
   { name: 'expression_layer_ref' },
+  // The Lottie logo family (`_1` is the original wordmark from above's
+  // entry; `_2`/`_3` the lottie-flutter variants), AndroidWave and the
+  // multiply blend — all pixel-exact against lottie-web (AndroidWave's
+  // merge-paths modifier is dropped by both renderers, and its merged
+  // shapes are static, so the allowance is invisible).
+  { name: 'lottie_logo_2' },
+  { name: 'lottie_logo_3' },
+  { name: 'android_wave' },
+  { name: 'blend_multiply' },
+  { name: 'text_baseline' },
+  // NOT here, where lottie-web is the one that is wrong — the Rust-side
+  // reference render is their gate:
+  //   `matte_luma_inv` (tt:4) and `fireworks`: lottie-web cannot render the
+  //   first at all, and its repeater clones the trim into every copy *and*
+  //   keeps the layer-level trim, trimming each repeated stroke twice (arc
+  //   = e² of the property). AE trims once and repeats; so does this
+  //   compiler.
+  //   `bodymoovin` renders at 0.05% but carries a merge-paths allowance, so
+  //   it stays out of this table.
 ];
 
 const SAMPLES = [0, 0.25, 0.5, 0.75, 0.99] as const;
@@ -460,10 +492,35 @@ describe('geometry parity vs lottie-web', () => {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, n = 0;
     for (const el of svg.querySelectorAll('path,rect,ellipse,circle,line,polygon')) {
       const b = el.getBoundingClientRect();
-      if (!b.width && !b.height) continue;
+      // `getBoundingClientRect` is a *fill* box: it does not include the
+      // stroke. For an open, nearly straight contour — what a trim leaves of
+      // a swoosh — that box is a subpixel sliver at the mercy of its slope,
+      // unrelated to where the stroke actually paints (± half the stroke
+      // width beyond it). A box thinner than the element's own stroke
+      // under-measures its mark on both renderers' spellings (`fill="none"`
+      // here, `fill-opacity="0"` in lottie-web), so both are skipped and the
+      // pixel gate owns them.
+      const sw = parseFloat(el.getAttribute('stroke-width') ?? '0');
+      if (sw > 0 && (b.width < sw || b.height < sw)) continue;
+      // `getBoundingClientRect` cannot see clipping, and both renderers clip
+      // to the viewport — but they carry *different* amounts of geometry
+      // parked outside it (`lottie_logo_2`'s mid-flight swoosh leaves its
+      // trim's empty tails at different places, invisible either way). What
+      // renders is the intersection with the SVG's own box, so that is what
+      // this measures; a box that vanishes under the clamp drew nothing.
+      const l = Math.max(b.left, s.left);
+      const r = Math.min(b.right, s.right);
+      const t = Math.max(b.top, s.top);
+      const bm = Math.min(b.bottom, s.bottom);
+      // A box one pixel thin in either dimension paints at most an
+      // antialiasing hint — a trimmed stroke's subpixel tail (`lottie_logo_2`
+      // keeps one crossing the viewport edge that lottie-web trims away) —
+      // and the pixel gate owns those. Its *position* was never well measured
+      // by a box anyway.
+      if (r - l < 1 || bm - t < 1) continue;
       n++;
-      x0 = Math.min(x0, b.left); y0 = Math.min(y0, b.top);
-      x1 = Math.max(x1, b.right); y1 = Math.max(y1, b.bottom);
+      x0 = Math.min(x0, l); y0 = Math.min(y0, t);
+      x1 = Math.max(x1, r); y1 = Math.max(y1, bm);
     }
     if (!n || !s.width || !s.height) return null;
     return {
@@ -620,9 +677,20 @@ const compare = (a: ReturnType<typeof shape>[], b: ReturnType<typeof shape>[]) =
     if (!y) { off.push(`[${i}] <${x.tag}> missing`); continue; }
     if (x.tag !== y.tag) { off.push(`[${i}] ${x.tag} vs ${y.tag}`); continue; }
     for (const k of new Set([...Object.keys(x.attrs), ...Object.keys(y.attrs)])) {
-      if (x.attrs[k] !== y.attrs[k]) {
-        off.push(`[${i}] <${x.tag}> ${k}: ${x.attrs[k]} vs ${y.attrs[k]}`);
+      if (x.attrs[k] === y.attrs[k]) continue;
+      // A transform is the same value through two roundings — the bake folds
+      // it in f64, the runtime descales integers — and a tie in the last
+      // digit (`-605.965`) can round either way. One unit either side is
+      // below anything a pixel can see.
+      if (k === 'transform') {
+        const xs = x.attrs[k].match(/-?\d+(\.\d+)?(e-?\d+)?/g) ?? [];
+        const ys = y.attrs[k].match(/-?\d+(\.\d+)?(e-?\d+)?/g) ?? [];
+        if (xs.length === ys.length
+          && xs.every((v, j) => Math.abs(parseFloat(v) - parseFloat(ys[j])) <= 0.011)) {
+          continue;
+        }
       }
+      off.push(`[${i}] <${x.tag}> ${k}: ${x.attrs[k]} vs ${y.attrs[k]}`);
     }
   }
   return off;

@@ -48,14 +48,10 @@ fn layer_supported(layer: &ir::Layer) -> bool {
 
 fn shapes_supported(shapes: &[ir::ShapeNode]) -> bool {
     for s in shapes {
-        match s {
-            ir::ShapeNode::Group { items, .. } => {
-                if !shapes_supported(items) {
-                    return false;
-                }
+        if let ir::ShapeNode::Group { items, .. } = s
+            && !shapes_supported(items) {
+                return false;
             }
-            _ => {}
-        }
     }
     true
 }
@@ -259,6 +255,9 @@ impl Encoder {
         out.tp = layer.matte_parent.map(|id| id.0);
         if layer.matte_layer_for_above {
             out.td = Some(1);
+        }
+        if (1..=15).contains(&layer.blend_mode) {
+            out.bm = Some(layer.blend_mode);
         }
         if let Some(parent) = layer.parent {
             out.pr = Some(parent.0);
@@ -654,7 +653,7 @@ impl Encoder {
                 r: Some(self.inline_scalar(&tr.rotation)?),
                 o: Some(self.inline_scalar(&tr.opacity)?),
             };
-            out.push(ShapeRef::Group(group));
+            out.push(ShapeRef::Group(Box::new(group)));
         }
         Ok(())
     }
@@ -743,9 +742,7 @@ impl Encoder {
 fn encode_keyframes_scalar(kf: &ir::Keyframes<f64>) -> Keyframes {
     let mut times = Vec::with_capacity(kf.frames.len());
     let mut values = Vec::with_capacity(kf.frames.len());
-    let mut ends: Vec<Option<Value>> = Vec::with_capacity(kf.frames.len());
     let mut oi_list: Vec<EasingPair> = Vec::with_capacity(kf.frames.len());
-    let mut any_end = false;
     let mut any_easing = false;
     let mut holds: Vec<bool> = Vec::with_capacity(kf.frames.len());
     let mut any_hold = false;
@@ -756,23 +753,14 @@ fn encode_keyframes_scalar(kf: &ir::Keyframes<f64>) -> Keyframes {
         if frame.hold {
             any_hold = true;
         }
-        // An absent value is written as the empty marker, not as zero. Lottie's
-        // older keyframe form puts a segment's destination in `e` on the
-        // *first* keyframe and leaves the last one a bare terminator with no
-        // `s`; both readers resolve that by looking back at `e[i-1]`, but only
-        // if they can tell "absent" from "zero". `unwrap_or(0.0)` could not, so
-        // a two-keyframe legacy property looked constant and collapsed to a
-        // static value — which is how `starfish`'s eye lost its blink: its time
-        // remap ramps 0 → 2.333s entirely through `e`, and folded to a
-        // motionless 0. The vector encoder below has always done this.
+        // An absent value is written as the empty marker, not as zero. A
+        // keyframe that only terminates the previous segment arrives with no
+        // start value — the legacy `e` form was already normalized away at the
+        // parse boundary, so "absent" here means exactly that.
         values.push(match frame.value {
             Some(v) => Value::Scalar(v),
             None => Value::Vector(Vec::new()),
         });
-        ends.push(frame.end_value.map(Value::Scalar));
-        if frame.end_value.is_some() {
-            any_end = true;
-        }
         if let (Some(o), Some(i)) = (&frame.easing_out, &frame.easing_in) {
             oi_list.push(EasingPair {
                 o: convert_easing(o),
@@ -787,7 +775,6 @@ fn encode_keyframes_scalar(kf: &ir::Keyframes<f64>) -> Keyframes {
     Keyframes {
         t: times,
         v: values,
-        e: if any_end { Some(ends) } else { None },
         oi: if any_easing { Some(oi_list) } else { None },
         to: None,
         ti: None,
@@ -798,11 +785,9 @@ fn encode_keyframes_scalar(kf: &ir::Keyframes<f64>) -> Keyframes {
 fn encode_keyframes_vec<const N: usize>(kf: &ir::Keyframes<[f64; N]>, _dim: usize) -> Keyframes {
     let mut times = Vec::with_capacity(kf.frames.len());
     let mut values = Vec::with_capacity(kf.frames.len());
-    let mut ends: Vec<Option<Value>> = Vec::with_capacity(kf.frames.len());
     let mut oi_list: Vec<EasingPair> = Vec::with_capacity(kf.frames.len());
     let mut to_list: Vec<Vec<f64>> = Vec::with_capacity(kf.frames.len());
     let mut ti_list: Vec<Vec<f64>> = Vec::with_capacity(kf.frames.len());
-    let mut any_end = false;
     let mut any_easing = false;
     let mut any_spatial = false;
     let mut holds: Vec<bool> = Vec::with_capacity(kf.frames.len());
@@ -817,10 +802,6 @@ fn encode_keyframes_vec<const N: usize>(kf: &ir::Keyframes<[f64; N]>, _dim: usiz
         values.push(Value::Vector(
             frame.value.map(|v| v.to_vec()).unwrap_or_default(),
         ));
-        ends.push(frame.end_value.map(|v| Value::Vector(v.to_vec())));
-        if frame.end_value.is_some() {
-            any_end = true;
-        }
         if let (Some(o), Some(i)) = (&frame.easing_out, &frame.easing_in) {
             oi_list.push(EasingPair {
                 o: convert_easing(o),
@@ -848,7 +829,6 @@ fn encode_keyframes_vec<const N: usize>(kf: &ir::Keyframes<[f64; N]>, _dim: usiz
     Keyframes {
         t: times,
         v: values,
-        e: if any_end { Some(ends) } else { None },
         oi: if any_easing { Some(oi_list) } else { None },
         to: if any_spatial { Some(to_list) } else { None },
         ti: if any_spatial { Some(ti_list) } else { None },
@@ -859,9 +839,7 @@ fn encode_keyframes_vec<const N: usize>(kf: &ir::Keyframes<[f64; N]>, _dim: usiz
 fn encode_keyframes_path(kf: &ir::Keyframes<ir::PathData>) -> Keyframes {
     let mut times = Vec::with_capacity(kf.frames.len());
     let mut values = Vec::with_capacity(kf.frames.len());
-    let mut ends: Vec<Option<Value>> = Vec::with_capacity(kf.frames.len());
     let mut oi_list: Vec<EasingPair> = Vec::with_capacity(kf.frames.len());
-    let mut any_end = false;
     let mut any_easing = false;
     let mut holds: Vec<bool> = Vec::with_capacity(kf.frames.len());
     let mut any_hold = false;
@@ -875,15 +853,6 @@ fn encode_keyframes_path(kf: &ir::Keyframes<ir::PathData>) -> Keyframes {
         match &frame.value {
             Some(pd) => values.push(Value::Path(path_to_wire(pd))),
             None => values.push(Value::Vector(Vec::new())),
-        }
-        ends.push(
-            frame
-                .end_value
-                .as_ref()
-                .map(|pd| Value::Path(path_to_wire(pd))),
-        );
-        if frame.end_value.is_some() {
-            any_end = true;
         }
         if let (Some(o), Some(i)) = (&frame.easing_out, &frame.easing_in) {
             oi_list.push(EasingPair {
@@ -899,7 +868,6 @@ fn encode_keyframes_path(kf: &ir::Keyframes<ir::PathData>) -> Keyframes {
     Keyframes {
         t: times,
         v: values,
-        e: if any_end { Some(ends) } else { None },
         oi: if any_easing { Some(oi_list) } else { None },
         to: None,
         ti: None,
@@ -974,11 +942,10 @@ fn path_to_wire(pd: &ir::PathData) -> PathValue {
 mod tests {
     use super::*;
 
-    fn frame(time: f64, value: Option<f64>, end: Option<f64>) -> ir::Keyframe<f64> {
+    fn frame(time: f64, value: Option<f64>) -> ir::Keyframe<f64> {
         ir::Keyframe {
             time,
             value,
-            end_value: end,
             easing_in: None,
             easing_out: None,
             spatial_in: None,
@@ -987,20 +954,17 @@ mod tests {
         }
     }
 
-    /// Lottie's older keyframe form puts a segment's destination in `e` on the
-    /// *first* keyframe and leaves the last one a bare terminator with no `s`.
-    /// Both readers resolve that by looking back at `e[i-1]` — but only if the
-    /// encoder distinguishes "absent" from "zero".
-    ///
-    /// Writing the terminator as a literal `0` made such a property look
-    /// constant, so `classify_keyframes` collapsed it to a static value. That is
-    /// how `starfish`'s eye lost its blink: its time remap ramps 0 → 2.333s
-    /// entirely through `e`, folded to a motionless 0, and the eyelid mask sat
-    /// on its first keyframe forever.
+    /// A keyframe with no start value — one that only terminates the previous
+    /// segment, after the legacy `e` form has been normalized away at the parse
+    /// boundary — must encode as the empty marker, not as a zero. Writing a
+    /// literal `0` made such a property look constant, so `classify_keyframes`
+    /// collapsed it to a static value. That is how `starfish`'s eye lost its
+    /// blink: its time remap ramps 0 → 2.333s entirely through `e`, folded to a
+    /// motionless 0, and the eyelid mask sat on its first keyframe forever.
     #[test]
     fn a_keyframe_with_no_start_value_encodes_as_absent_not_zero() {
         let kf = ir::Keyframes {
-            frames: vec![frame(0.0, Some(0.0), Some(2.333)), frame(140.0, None, None)],
+            frames: vec![frame(0.0, Some(0.0)), frame(140.0, None)],
         };
         let out = encode_keyframes_scalar(&kf);
         assert_eq!(out.v[0], Value::Scalar(0.0), "a real value stays a scalar");
@@ -1008,11 +972,6 @@ mod tests {
             matches!(&out.v[1], Value::Vector(x) if x.is_empty()),
             "the terminator must carry the empty marker, not a zero: {:?}",
             out.v[1]
-        );
-        // …and the destination it stands for is still on the wire.
-        assert_eq!(
-            out.e.as_ref().and_then(|e| e[0].clone()),
-            Some(Value::Scalar(2.333))
         );
     }
 
@@ -1194,7 +1153,7 @@ mod tests {
             position: ir::Property::Static([0.0, 0.0, 0.0]),
             scale: ir::Property::Static([100.0, 100.0, 100.0]),
             rotation: ir::Property::Animated(ir::Keyframes {
-                frames: vec![frame(0.0, Some(-17.0), None), frame(62.0, Some(0.0), None)],
+                frames: vec![frame(0.0, Some(-17.0)), frame(62.0, Some(0.0))],
             }),
             opacity: ir::Property::Static(100.0),
             skew: None,

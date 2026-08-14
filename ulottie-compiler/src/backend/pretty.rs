@@ -34,8 +34,8 @@ fn write_json(v: &Value, indent: usize, out: &mut String) {
     // Coordinate and keyframe data is all numbers; wrapping it like prose keeps
     // it compact and still gives a diff a narrow line to point at. One number
     // per line would make a path unreadable.
-    if let Value::Array(items) = v {
-        if items.iter().all(Value::is_number) {
+    if let Value::Array(items) = v
+        && items.iter().all(Value::is_number) {
             out.push_str("[\n");
             out.push_str(&pad);
             let mut col = pad.len();
@@ -65,7 +65,6 @@ fn write_json(v: &Value, indent: usize, out: &mut String) {
             out.push(']');
             return;
         }
-    }
 
     match v {
         Value::Array(items) => {

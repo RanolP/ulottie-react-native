@@ -111,6 +111,50 @@ export function oShape(x, s) {
   }
 }
 
+// --- one element, several path properties -----------------------------------
+//
+// lottie-web gives every style ONE element and writes each shape it paints
+// into that element, so contours sharing a style share a fill rule and their
+// windings interact — that is how holes and merged paths render. The compiler
+// buckets same-style siblings onto one element; this concatenates their
+// outlines per frame. The property list is the one argument, a section
+// `[count, prop offset…]` referenced by offset.
+
+export function bShapeMulti(x, base, eb, sb, ps, at) {
+  const b = open(x, base, eb, sb, ps, 1);
+  const n = b.n, S = x.S, A0 = b.A[0];
+  // Each binding's argument is a section `[count, prop offset…]` — the count
+  // rides in the section because a list carries no length of its own.
+  const N = new Int32Array(n);
+  const B = new Int32Array(n + 1);
+  let total = 0;
+  for (let i = 0; i < n; i++) total += N[i] = S[A0[i]];
+  for (let i = 0; i <= n; i++) B[i] = i === 0 ? 0 : B[i - 1] + N[i - 1];
+  const P = new Int32Array(total);
+  for (let i = 0, k = 0; i < n; i++) {
+    for (let j = 0; j < N[i]; j++, k++) P[k] = S[A0[i] + 1 + j];
+  }
+  return {
+    n, E: b.E, G: b.G, L: b.L, N, B, P,
+    C: new Int32Array(total), Q: new Array(total), W: new Array(n),
+  };
+}
+
+export function oShapeMulti(x, s) {
+  const n = s.n, E = s.E, G = s.G, L = s.L, B = s.B, P = s.P;
+  const C = s.C, Q = s.Q, W = s.W, T = x.T, ON = x.ON;
+  for (let i = 0; i < n; i++) {
+    if (!ON[G[i]]) continue;
+    const t = T[L[i]];
+    let d = '';
+    for (let k = B[i], end = B[i + 1]; k < end; k++) {
+      const src = pvp(x, P[k], t, C, k, Q);
+      if (src) d += pathD(src);
+    }
+    put(E[i], 'd', d, W, i);
+  }
+}
+
 // --- generated outlines ----------------------------------------------------
 
 export function bShapeRect(x, base, eb, sb, ps, at) {

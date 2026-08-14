@@ -90,7 +90,7 @@ fn embedded_output_has_no_unreachable_declarations() {
 /// so pin the cases that motivated each gate.
 #[test]
 fn capability_gates_keep_unused_runtime_out() {
-    let ball = emitted("bouncy_ball", RuntimeMode::Embedded);
+    let ball = emitted("boucing_ball", RuntimeMode::Embedded);
     for gone in [
         "lerpPath",
         "trimTable",
@@ -101,18 +101,18 @@ fn capability_gates_keep_unused_runtime_out() {
     ] {
         assert!(
             !ball.contains(&format!("function {gone}")),
-            "bouncy_ball animates one transform but still ships `{gone}`"
+            "boucing_ball animates one transform but still ships `{gone}`"
         );
     }
 
-    let logo = emitted("lottie-logo", RuntimeMode::Embedded);
+    let logo = emitted("lottie_logo_1", RuntimeMode::Embedded);
     assert!(
         logo.contains("function trimTable"),
-        "lottie-logo trims paths"
+        "lottie_logo_1 trims paths"
     );
     assert!(
         !logo.contains("function oGradient"),
-        "lottie-logo has no gradients but ships the gradient binder"
+        "lottie_logo_1 has no gradients but ships the gradient binder"
     );
 }
 
@@ -120,7 +120,7 @@ fn capability_gates_keep_unused_runtime_out() {
 /// sees a normal module graph instead of one aggregate driver.
 #[test]
 fn extern_output_imports_only_what_it_binds() {
-    let ball = emitted("bouncy_ball", RuntimeMode::Extern);
+    let ball = emitted("boucing_ball", RuntimeMode::Extern);
     assert!(ball.contains("import { mount } from './runtime/core.js';"));
     assert!(ball.contains("import { bTransform, oTransform } from './runtime/ops/tx.js';"));
     assert!(
@@ -129,7 +129,7 @@ fn extern_output_imports_only_what_it_binds() {
     );
     assert!(
         !ball.contains("oGradient"),
-        "bouncy_ball binds no gradients"
+        "boucing_ball binds no gradients"
     );
 }
 
@@ -200,11 +200,10 @@ fn expression_bodies_only_call_what_the_module_declares() {
         for line in table.lines() {
             let t = line.trim_start();
             // `catch (e$$4)` binds a name too, and Bodymovin emits one.
-            if let Some(rest) = t.split_once("catch (") {
-                if let Some((binding, _)) = rest.1.split_once(')') {
+            if let Some(rest) = t.split_once("catch (")
+                && let Some((binding, _)) = rest.1.split_once(')') {
                     known.insert(binding.trim().to_string());
                 }
-            }
             // Arrow parameters: the preamble stubs are all arrows, and
             // `((mode, n) => value)` binds two names in passing.
             for (at, _) in t.match_indices("=>") {

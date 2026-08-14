@@ -296,11 +296,10 @@ impl Index {
             // rather than overwriting it: the runtime's map keeps the last
             // writer, and picking one here would be a coin toss that renders.
             bump(&mut self.by_ind, (table, scope, r.i), i as u32);
-            if let Some(n) = r.n {
-                if let Some(name) = names.get(n as usize) {
+            if let Some(n) = r.n
+                && let Some(name) = names.get(n as usize) {
                     bump(&mut self.by_name, (table, scope, name.clone()), i as u32);
                 }
-            }
         }
     }
 
@@ -1030,7 +1029,7 @@ fn collect_tables(
 ) {
     for s in stmts {
         each_stmt_expr(s, &mut |e| find_table_use(e, used));
-        each_sub_stmt(s, &mut |inner| collect_tables_one(inner, arrays, used));
+        each_sub_stmt(s, &mut |inner| collect_tables_one(inner, used));
         if let ast::Statement::VariableDeclaration(d) = s {
             for decl in &d.declarations {
                 let (Some(id), Some(ast::Expression::ArrayExpression(a))) =
@@ -1060,11 +1059,10 @@ fn collect_tables(
 
 fn collect_tables_one(
     s: &ast::Statement,
-    arrays: &mut BTreeMap<String, (Vec<u32>, (u32, u32))>,
     used: &mut BTreeMap<String, Option<u32>>,
 ) {
     each_stmt_expr(s, &mut |e| find_table_use(e, used));
-    each_sub_stmt(s, &mut |inner| collect_tables_one(inner, arrays, used));
+    each_sub_stmt(s, &mut |inner| collect_tables_one(inner, used));
 }
 
 /// `effect(t[i])(<int>)` anywhere under `e`.
@@ -1178,9 +1176,9 @@ impl Rw<'_> {
                     }
                 }
                 ast::Expression::CallExpression(c) => {
-                    if let ast::Expression::StaticMemberExpression(m) = &c.callee {
-                        if m.property.name == "push" {
-                            if let ast::Expression::Identifier(id) = &m.object {
+                    if let ast::Expression::StaticMemberExpression(m) = &c.callee
+                        && m.property.name == "push"
+                            && let ast::Expression::Identifier(id) = &m.object {
                                 let holds_layer = c
                                     .arguments
                                     .iter()
@@ -1193,8 +1191,6 @@ impl Rw<'_> {
                                     self.bind(&name, Ty::Other);
                                 }
                             }
-                        }
-                    }
                 }
                 _ => {}
             }
@@ -1369,11 +1365,10 @@ impl Rw<'_> {
     fn render(&mut self, e: &ast::Expression) -> Option<String> {
         // A layer-control table: its elements stop being effect indices and
         // become the layers those effects name.
-        if let ast::Expression::ArrayExpression(a) = e {
-            if let Some(text) = self.render_control_table((a.span.start, a.span.end)) {
+        if let ast::Expression::ArrayExpression(a) = e
+            && let Some(text) = self.render_control_table((a.span.start, a.span.end)) {
                 return Some(text);
             }
-        }
         // A layer-typed expression is rewritten to whatever produces its record.
         if self.is_layer(e) {
             // …except a chain that *ends* at `.path`, which is not a layer but
@@ -1435,13 +1430,12 @@ impl Rw<'_> {
 
     fn render_call(&mut self, c: &ast::CallExpression) -> Option<String> {
         // Bare `fromCompToSurface(pt)` is AE for the owning layer's inverse.
-        if let ast::Expression::Identifier(id) = &c.callee {
-            if id.name == "fromCompToSurface" && c.arguments.len() == 1 {
+        if let ast::Expression::Identifier(id) = &c.callee
+            && id.name == "fromCompToSurface" && c.arguments.len() == 1 {
                 let pt = self.arg_text(c.arguments.first()?)?;
                 self.need("fromCompToSurface");
                 return Some(format!("fromCompToSurface({pt}, thisLayer, frame)"));
             }
-        }
         // `X.effect(a)(b)` and bare `effect(a)(b)`, uncurried.
         if let Some(text) = self.render_effect(c) {
             return Some(text);
@@ -1742,9 +1736,7 @@ impl Rw<'_> {
     /// takes the whole body to the fallback rather than being written as `null`
     /// or `0` — see [`Handle`] for why neither reproduces what the proxy did.
     fn render_control_table(&mut self, span: (u32, u32)) -> Option<String> {
-        let Some((name, table)) = self.tables.iter().find(|(_, t)| t.span == span) else {
-            return None;
-        };
+        let (name, table) = self.tables.iter().find(|(_, t)| t.span == span)?;
         let (name, param, elems) = (name.clone(), table.param, table.elems.clone());
         let mut out = Vec::with_capacity(elems.len());
         for k in elems {
@@ -1853,11 +1845,10 @@ impl Rw<'_> {
             cuts.push((c.callee.span(), t));
         }
         for a in &c.arguments {
-            if let Some(x) = a.as_expression() {
-                if let Some(t) = self.render(x) {
+            if let Some(x) = a.as_expression()
+                && let Some(t) = self.render(x) {
                     cuts.push((x.span(), t));
                 }
-            }
         }
         self.splice(c.span(), cuts)
     }

@@ -1,0 +1,33 @@
+---
+source: ulottie-compiler/tests/frame_snapshot.rs
+expression: snap
+---
+=== sample t=0 frame=0 ===
+Frame frame=0.000000 composition=200x200 fr=30.000000
+  Layer #1 "img" ty=2 opacity=1.000000 visible=true
+    transform=[4.000000 0.000000 0.000000 4.000000 68.000000 68.000000]
+    Unsupported layer ty=2
+
+=== sample t=0.25 frame=15 ===
+Frame frame=15.000000 composition=200x200 fr=30.000000
+  Layer #1 "img" ty=2 opacity=1.000000 visible=true
+    transform=[3.950753 0.625738 -0.625738 3.950753 73.399876 63.388070]
+    Unsupported layer ty=2
+
+=== sample t=0.5 frame=30 ===
+Frame frame=30.000000 composition=200x200 fr=30.000000
+  Layer #1 "img" ty=2 opacity=1.000000 visible=true
+    transform=[3.804226 1.236068 -1.236068 3.804226 79.454735 59.677648]
+    Unsupported layer ty=2
+
+=== sample t=0.75 frame=45 ===
+Frame frame=45.000000 composition=200x200 fr=30.000000
+  Layer #1 "img" ty=2 opacity=1.000000 visible=true
+    transform=[3.564026 1.815962 -1.815962 3.564026 86.015487 56.960095]
+    Unsupported layer ty=2
+
+=== sample t=0.99 frame=59 ===
+Frame frame=59.000000 composition=200x200 fr=30.000000
+  Layer #1 "img" ty=2 opacity=1.000000 visible=true
+    transform=[3.464102 2.000000 -2.000000 3.464102 88.287187 56.287187]
+    Unsupported layer ty=2

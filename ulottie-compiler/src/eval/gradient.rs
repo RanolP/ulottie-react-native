@@ -51,13 +51,25 @@ pub fn animated_ramp(g: &Json) -> Option<AnimatedRamp> {
     let mut easing = Vec::with_capacity(frames.len());
     let mut holds = Vec::with_capacity(frames.len());
     let mut stops = vec![Vec::with_capacity(frames.len()); count];
+    // The previous keyframe's `e`, for the legacy form: a segment's
+    // destination lives there and the terminator carries no `s`. This reads
+    // the raw ramp JSON directly, so the AST-level normalization cannot
+    // have done it — same rule, second copy.
+    let mut prev_e: Option<&Vec<Json>> = None;
     for kf in frames {
-        // Lottie's older form leaves the final keyframe a bare terminator with
-        // no `s`; there is nothing to interpolate past it, so it is dropped
-        // rather than read as zeros.
-        let Some(vals) = kf.get("s").and_then(Json::as_array) else {
-            continue;
+        let vals: Vec<Json> = match kf.get("s").and_then(Json::as_array) {
+            Some(v) => v.clone(),
+            // A bare terminator inherits the previous keyframe's `e`; there
+            // is nothing to interpolate past a keyframe that has neither.
+            None => match prev_e {
+                Some(e) => e.clone(),
+                None => {
+                    prev_e = kf.get("e").and_then(Json::as_array);
+                    continue;
+                }
+            },
         };
+        prev_e = kf.get("e").and_then(Json::as_array);
         // Anything beyond the colour stops is the alpha ramp.
         if vals.len() != count * 4 {
             return None;

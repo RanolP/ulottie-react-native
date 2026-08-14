@@ -109,11 +109,10 @@ pub fn bare_helpers(bodies: &[String]) -> Vec<&'static str> {
     let mut found: Vec<&'static str> = Vec::new();
     for body in bodies {
         for name in free_identifiers(body) {
-            if let Some(h) = HELPERS.iter().find(|s| **s == name.as_str()) {
-                if !found.contains(h) {
+            if let Some(h) = HELPERS.iter().find(|s| **s == name.as_str())
+                && !found.contains(h) {
                     found.push(h);
                 }
-            }
         }
     }
     found

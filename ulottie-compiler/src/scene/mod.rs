@@ -68,6 +68,11 @@ pub mod op {
     pub const SHAPE_STAR: u8 = 14;
     /// One `<stop>` of a keyframed gradient ramp: its offset and its colour.
     pub const RAMP: u8 = 15;
+    /// Write one element's `d` from several path properties concatenated —
+    /// the shapes one style paints all land in that style's single element,
+    /// so same-style contours share a fill rule and interact. The one
+    /// argument is a list section of property offsets.
+    pub const SHAPE_MULTI: u8 = 16;
 }
 
 bitflags! {
@@ -133,6 +138,11 @@ bitflags! {
         // silently alias `EXPR_PROPERTY` and turn its runtime off.
         /// A gradient whose colour ramp is keyframed, not just its handles.
         const RAMP          = 1 << 31;
+        /// One element fed by several path properties (`SHAPE_MULTI`). Its
+        /// own bit, not `SHAPE`'s: capability bits root the op's declarations,
+        /// and sharing one would ship the multi loop with every ordinary
+        /// shape animation.
+        const SHAPE_MULTI  = 1 << 32;
     }
 }
 
@@ -182,12 +192,11 @@ impl Scene {
     pub fn prune_effect_names(&mut self, mentioned: &dyn Fn(&str) -> bool) -> Result<()> {
         let mut dropped = false;
         let mut cull = |slot: &mut Option<String>| {
-            if let Some(n) = slot {
-                if !mentioned(n) {
+            if let Some(n) = slot
+                && !mentioned(n) {
                     *slot = None;
                     dropped = true;
                 }
-            }
         };
         // Both tables, the way `prune_names` does it: an instanced precomp
         // keeps its records on the asset, and those carry the effects every
@@ -502,6 +511,7 @@ pub fn caps_for_op(op: u8) -> Caps {
         op::SHAPE_ELLIPSE => Caps::GEOM_ELLIPSE,
         op::SHAPE_STAR => Caps::GEOM_STAR,
         op::RAMP => Caps::RAMP,
+        op::SHAPE_MULTI => Caps::SHAPE_MULTI,
         _ => Caps::empty(),
     }
 }

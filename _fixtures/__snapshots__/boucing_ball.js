@@ -20,7 +20,7 @@ const M =
     '</svg>' +
   '</svg>';
 
-const D = "0gmqe0gpst10q100qh10000c00gt7gt7qp200gt7gp70kn4gt7gt70mj5gt7qp20mj5gt7uk10mj5gt7msq5e0k1o2s3g5k6o7sgopg1inngt1sgopg1ihlp8sgopg1inngt1sgopg1ihlp8sgopg1inngt1sgopg1ihlp8sgopg1inngt12426260lmom3000000000000000000000lmom3i34upvu3spsk8mgi5i1k1i2q2u3s4k5k6i7q7g5g5o3m6g5g5g5g5o3m6g5g5g5g5o3m6g5g588888a8800204s4mbubog12sg1";
+const D = "0gmqe0gpst10q100qh10000c00gt7gt7qp200gt7gp70kn4gt7gt70mj5gt7qp20mj5gt7uk10mj5gt7msl5e0k1o2s3g5k6o7sgopg1inngt1sgopg1ihlp8sgopg1inngt1sgopg1ihlp8sgopg1inngt1sgopg1ihlp8sgopg1inngt12426260lmom3000000000000000000000lmom3i34upvu3spsk8mgh5i1k1i2q2u3s4k5k6i7q7g5g5o3m6g5g5g5g5o3m6g5g5g5g5o3m6g5g588888a8800204s4mbubog12sg1";
 
 export const markup = M;
 export const init = (c, o) => mount(M, D, P0, A0, c, o);

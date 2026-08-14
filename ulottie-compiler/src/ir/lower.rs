@@ -25,6 +25,11 @@ use super::types::*;
 // ---------------------------------------------------------------------------
 
 pub fn lower(anim: &Animation) -> Result<Module> {
+    // Files older than 4.1.9 write shape colours 0–255; lottie-web's
+    // `checkColors` rescales them at load, so the reference render is 0–1.
+    // Normalize before anything else sees a value (`bodymoovin`'s bg at
+    // `v: 3.1.6` painted white instead of green until this existed).
+    let anim = &rescale_legacy_colors(anim);
     let composition = Composition {
         name: anim.name.clone(),
         width: anim.width,
@@ -37,10 +42,21 @@ pub fn lower(anim: &Animation) -> Result<Module> {
 
     let mut module = Module::new(composition);
 
+    // Glyph outlines and font metadata are document-wide (lottie-web's font
+    // manager is global), so every composition — root and assets alike —
+    // lowers text against the same tables.
+    let glyph_table = (
+        anim.chars.clone(),
+        anim.fonts.as_ref().map(|f| f.list.clone()).unwrap_or_default(),
+    );
+
     // Assign LayerIds in source order; build an `ind -> LayerId` lookup so we
     // can resolve `parent` references inside the same composition. (Precomps
     // have their own layer space, handled separately when lowering an asset.)
-    let mut ctx = LowerContext::default();
+    let mut ctx = LowerContext {
+        glyphs: glyph_table.clone(),
+        ..Default::default()
+    };
     let layers = lower_layers(&mut module, &mut ctx, &anim.layers)?;
     module.layers = layers;
 
@@ -48,7 +64,10 @@ pub fn lower(anim: &Animation) -> Result<Module> {
     // don't collide with the top-level mapping.
     for asset in &anim.assets {
         let kind = if let Some(asset_layers) = &asset.layers {
-            let mut sub_ctx = LowerContext::default();
+            let mut sub_ctx = LowerContext {
+                glyphs: glyph_table.clone(),
+                ..Default::default()
+            };
             let inner = lower_layers(&mut module, &mut sub_ctx, asset_layers)?;
             AssetKind::Precomp { layers: inner }
         } else {
@@ -84,6 +103,8 @@ struct LowerContext {
     /// `ind` (1-based composition index) → `LayerId` (0-based index into the
     /// flat layers vector for this composition).
     ind_to_id: HashMap<u32, LayerId>,
+    /// Document-wide glyph outlines and fonts, for text layers.
+    glyphs: (Vec<lottie::GlyphChar>, Vec<lottie::Font>),
 }
 
 fn lower_layers(
@@ -139,6 +160,19 @@ fn lower_layer(
                 .transpose()?
                 .unwrap_or_default(),
         },
+        // A text layer lowers to the shapes its glyphs lay out to. The
+        // support scan reaches the same verdict through the same call, so an
+        // unsupported text layer only reaches here when the degradation was
+        // explicitly allowed — and "the text is not drawn" is that
+        // degradation.
+        5 => {
+            let shapes = src.t.as_ref()
+                .and_then(|t| lottie::text_shapes(t, &ctx.glyphs.0, &ctx.glyphs.1).ok())
+                .unwrap_or_default();
+            LayerKind::Shape {
+                shapes: lower_shapes(module, &shapes)?,
+            }
+        }
         ty => LayerKind::Other { ty },
     };
 
@@ -371,7 +405,6 @@ fn lower_split_to_vec(
             Keyframe {
                 time: t,
                 value: Some([x, y, z]),
-                end_value: None,
                 easing_in: at.and_then(|k| k.easing_in.clone()),
                 easing_out: at.and_then(|k| k.easing_out.clone()),
                 spatial_in: None,
@@ -382,6 +415,123 @@ fn lower_split_to_vec(
         .collect();
 
     Ok(Property::Animated(Keyframes { frames }))
+}
+
+/// Files older than 4.1.9 write shape colours 0–255; newer ones 0–1.
+/// Returns true when the document is in the old spelling. This is
+/// lottie-web's `checkColors` threshold — `[4, 1, 9]` compared
+/// major/minor/patch — *not* "before 4.9": `simple_loader` at `v: 4.6.3`
+/// already writes 0–1 and would render black if divided again.
+fn uses_legacy_colors(version: &str) -> bool {
+    let mut parts = version.split('.');
+    let num = |p: Option<&str>| -> Option<u32> {
+        p?.trim_end_matches(|c: char| !c.is_ascii_digit())
+            .parse()
+            .ok()
+    };
+    let (major, minor, patch) = (
+        num(parts.next()),
+        num(parts.next()),
+        num(parts.next()),
+    );
+    match (major, minor) {
+        // A missing minor cannot be below 1.
+        (Some(m), Some(n)) => m < 4 || (m == 4 && n < 1) || (m == 4 && n == 1 && patch.unwrap_or(0) < 9),
+        (Some(m), None) => m < 4,
+        // Unparseable: assume modern, the safer reading for a value that is
+        // already 0–1 in most exports.
+        _ => false,
+    }
+}
+
+/// Rescale 0–255 colours to 0–1 across every shape layer of the document —
+/// lottie-web's `checkColors`, run at the parse boundary so no later stage
+/// can see the wrong scale. Animated keyframes carry their values in `s`/`e`,
+/// which the legacy-`e` normalization has already folded into `s` by now.
+///
+/// The **alpha channel is pinned to 1**, not divided: lottie-web's own pass
+/// divides all four components but only ever reads three — its styles take
+/// opacity from the separate `o` property — while this compiler folds colour
+/// alpha into paint alpha. `Tests_Rect9` strokes with `[0,0,0,1]` in 0–255
+/// spelling would otherwise paint at 1/255 opacity.
+fn rescale_legacy_colors(anim: &Animation) -> Animation {
+    if !uses_legacy_colors(&anim.version) {
+        return anim.clone();
+    }
+    let mut anim = anim.clone();
+    let mut layers = std::mem::take(&mut anim.layers);
+    for l in &mut layers {
+        rescale_layer_colors(l);
+    }
+    anim.layers = layers;
+    for a in &mut anim.assets {
+        if let Some(layers) = &mut a.layers {
+            for l in layers {
+                rescale_layer_colors(l);
+            }
+        }
+    }
+    anim
+}
+
+fn rescale_layer_colors(layer: &mut lottie::Layer) {
+    let Some(shapes) = &mut layer.shapes else {
+        return;
+    };
+    rescale_shape_colors(shapes);
+}
+
+fn rescale_shape_colors(shapes: &mut [GraphicElement]) {
+    for s in shapes.iter_mut() {
+        match s {
+            GraphicElement::Fill { c, .. } | GraphicElement::Stroke { c, .. } => {
+                rescale_color_property(c);
+            }
+            GraphicElement::Group { it, .. } => rescale_shape_colors(it),
+            _ => {}
+        }
+    }
+}
+
+/// A Lottie (AST) property: static value or keyframes.
+fn rescale_color_property(p: &mut lottie::Property) {
+    match p {
+        lottie::Property::Static(s) => {
+            if let Some(arr) = s.value.as_array_mut() {
+                for (i, v) in arr.iter_mut().enumerate() {
+                    if let Some(n) = v.as_f64() {
+                        // Alpha pinned: see `rescale_legacy_colors`.
+                        *v = if i < 3 {
+                            serde_json::Value::from(n / 255.0)
+                        } else {
+                            serde_json::Value::from(1.0)
+                        };
+                    }
+                }
+            }
+        }
+        lottie::Property::Animated(a) => {
+            for kf in a.keyframes.iter_mut() {
+                rescale_color_kf(&mut kf.start_value);
+                rescale_color_kf(&mut kf.end_value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn rescale_color_kf(v: &mut Option<serde_json::Value>) {
+    if let Some(serde_json::Value::Array(arr)) = v {
+        for (i, n) in arr.iter_mut().enumerate() {
+            if let Some(x) = n.as_f64() {
+                *n = if i < 3 {
+                    serde_json::Value::from(x / 255.0)
+                } else {
+                    serde_json::Value::from(1.0)
+                };
+            }
+        }
+    }
 }
 
 /// The keyframes behind a scalar property, whether or not an expression wraps
@@ -429,8 +579,8 @@ fn subdivide(times: &[f64]) -> Vec<f64> {
 
 fn project_vec3_to_vec2(prop: Property<Vec3>) -> Property<Vec2> {
     // `spatial_in` / `spatial_out` are typed `Option<Vec3>` regardless of the
-    // outer keyframe value, so we keep them as-is and only project the
-    // value / end_value down to 2D.
+    // outer keyframe value, so we keep them as-is and only project the value
+    // down to 2D.
     match prop {
         Property::Static(v) => Property::Static([v[0], v[1]]),
         Property::Animated(kf) => Property::Animated(Keyframes {
@@ -452,7 +602,6 @@ fn project_kf_vec3_to_vec2(f: Keyframe<Vec3>) -> Keyframe<Vec2> {
     Keyframe {
         time: f.time,
         value: f.value.map(|v| [v[0], v[1]]),
-        end_value: f.end_value.map(|v| [v[0], v[1]]),
         easing_in: f.easing_in,
         easing_out: f.easing_out,
         spatial_in: f.spatial_in,
@@ -504,7 +653,7 @@ fn interpolate_scalar(kf: &Keyframes<Scalar>, t: f64, fallback: Scalar) -> Scala
     }
     let last = frames.last().unwrap();
     if t >= last.time {
-        return last.end_value.or(last.value).unwrap_or(fallback);
+        return last.value.unwrap_or(fallback);
     }
     for i in 0..frames.len() - 1 {
         let a = &frames[i];
@@ -530,7 +679,7 @@ fn interpolate_scalar(kf: &Keyframes<Scalar>, t: f64, fallback: Scalar) -> Scala
                 let (x2, y2) = handle(inn);
                 u = crate::eval::keyframes::cubic_bezier(u, x1, y1, x2, y2);
             }
-            let bv = a.end_value.or(b.value).unwrap_or(fallback);
+            let bv = b.value.unwrap_or(fallback);
             return av + (bv - av) * u;
         }
     }
@@ -614,7 +763,6 @@ fn lower_kf<T: Clone>(src: &AstKeyframe, parse: fn(&[f64]) -> Option<T>) -> Keyf
     Keyframe {
         time: src.time,
         value: src.start_numbers().as_deref().and_then(parse),
-        end_value: src.end_numbers().as_deref().and_then(parse),
         easing_in: src.in_tangent.as_ref().map(lower_easing),
         easing_out: src.out_tangent.as_ref().map(lower_easing),
         spatial_in: src.spatial_tangent_in.as_deref().and_then(parse_vec3),
@@ -632,7 +780,6 @@ fn lower_kf_path(src: &AstKeyframe) -> Keyframe<PathData> {
     Keyframe {
         time: src.time,
         value: src.start_path().and_then(parse_path_value),
-        end_value: src.end_path().and_then(parse_path_value),
         easing_in: src.in_tangent.as_ref().map(lower_easing),
         easing_out: src.out_tangent.as_ref().map(lower_easing),
         spatial_in: None,
@@ -762,6 +909,17 @@ fn parse_path_opt(v: Option<&serde_json::Value>) -> Option<PathData> {
 // ---------------------------------------------------------------------------
 
 fn lower_shapes(module: &mut Module, shapes: &[GraphicElement]) -> Result<Vec<ShapeNode>> {
+    // A static repeater expands before anything else sees the list — the
+    // copies it produces are ordinary groups. A non-static one reaches
+    // `lower_shape` as `Unknown` and drops, which only happens under an
+    // explicit allowance (the scan refuses it).
+    if let Some(at) = shapes
+        .iter()
+        .position(|s| matches!(s, GraphicElement::Repeater { .. }))
+        && let Some(expanded) = lottie::repeat::expand(shapes, at)
+    {
+        return lower_shapes(module, &expanded);
+    }
     let mut out = Vec::with_capacity(shapes.len());
     for s in shapes {
         if let Some(node) = lower_shape(module, s)? {
@@ -1013,6 +1171,10 @@ fn lower_shape(module: &mut Module, src: &GraphicElement) -> Result<Option<Shape
             },
             hidden: *hidden,
         },
+        // Only reachable under an explicit allowance: the scan refuses a
+        // repeater `expand` cannot take, and lowering drops it — the
+        // documented "only the original copy is drawn" degradation.
+        GraphicElement::Repeater { .. } => return Ok(None),
         GraphicElement::Unknown => return Ok(None),
     }))
 }
@@ -1143,4 +1305,50 @@ fn canonicalize_expression(body: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_colors_rescale_below_4_1_9_only() {
+        assert!(uses_legacy_colors("3.1.6"));
+        assert!(uses_legacy_colors("4.0.0"));
+        assert!(uses_legacy_colors("4.1.8"));
+        assert!(!uses_legacy_colors("4.1.9"));
+        assert!(!uses_legacy_colors("4.6.3"));
+        assert!(!uses_legacy_colors("5.5.7"));
+        // Unparseable assumes modern.
+        assert!(!uses_legacy_colors("latest"));
+    }
+
+    #[test]
+    fn legacy_rescale_pins_alpha() {
+        let anim: Animation = serde_json::from_str(
+            r#"{"v":"3.1.6","fr":30,"ip":0,"op":10,"w":10,"h":10,"layers":[
+                {"ty":4,"ind":1,"ip":0,"op":10,"st":0,"ks":{},
+                 "shapes":[{"ty":"gr","it":[
+                    {"ty":"fl","c":{"k":[88,214,112,255]},"o":{"k":100}},
+                    {"ty":"tr","p":{"k":[0,0]},"a":{"k":[0,0]},"s":{"k":[100,100]},"r":{"k":0},"o":{"k":100}}
+                 ]}]}]}"#,
+        )
+        .unwrap();
+        let out = rescale_legacy_colors(&anim);
+        let shapes = out.layers[0].shapes.as_deref().unwrap();
+        let GraphicElement::Group { it, .. } = &shapes[0] else {
+            panic!("group");
+        };
+        let fl = it.iter().find_map(|s| match s {
+            GraphicElement::Fill { c, .. } => Some(c),
+            _ => None,
+        }).unwrap();
+        let lottie::Property::Static(s) = fl else { panic!("static") };
+        let arr = s.value.as_array().unwrap();
+        assert!((arr[0].as_f64().unwrap() - 88.0 / 255.0).abs() < 1e-12);
+        assert!((arr[1].as_f64().unwrap() - 214.0 / 255.0).abs() < 1e-12);
+        // Alpha pinned to 1: lottie-web divides all four but only reads
+        // three, and this compiler folds colour alpha into paint alpha.
+        assert_eq!(arr[3].as_f64().unwrap(), 1.0);
+    }
 }

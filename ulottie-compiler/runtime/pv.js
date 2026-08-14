@@ -31,11 +31,11 @@ export const T_EXPR = 4;
 /// path properties where the others hold numbers.
 export const T_KIND_PATH = 2;
 
-/// `Anim` header flags, above the tag and the two shifts.
-const F_END = 1;
-const F_EASE = 2;
-const F_HOLD = 4;
-const F_SPATIAL = 8;
+/// `Anim` header flags, above the tag and the two shifts. In step with
+/// `scene/flat.rs`'s `anim` module.
+const F_EASE = 1;
+const F_HOLD = 2;
+const F_SPATIAL = 4;
 
 /**
  * The segment containing `ft`, remembered per binding.
@@ -63,12 +63,12 @@ function pease(z, S, ez, k, u) {
   return h === 0 ? u : EASE(z[h], u);
 }
 
-// The optional columns follow the values in a fixed order — ends, easing,
-// holds, then the two spatial tangent columns — so each reader walks a running
-// offset through the ones it needs. Three functions that each recomputed the
-// whole staircase from the header meant the shared prefix was derived two or
-// three times per property per frame, and adding a column meant editing all
-// three in step.
+// The optional columns follow the values in a fixed order — easing, holds,
+// then the two spatial tangent columns — so each reader walks a running offset
+// through the ones it needs. Three functions that each recomputed the whole
+// staircase from the header meant the shared prefix was derived two or three
+// times per property per frame, and adding a column meant editing all three
+// in step.
 
 /**
  * A scalar property at frame `f`.
@@ -101,14 +101,14 @@ export function pv(x, off, f, c, i) {
   const k = pseg(S, t, n, ft, c, i);
   const span = S[t + k + 1] - S[t + k];
   if (span === 0) return S[v + k + 1] * iv;
-  const fl = (head >> 7) & 15;
-  let nx = v + n + (fl & F_END ? n : 0);
+  const fl = (head >> 7) & 7;
+  let nx = v + n;
   const ez = fl & F_EASE ? nx : 0;
   if (ez) nx += n - 1;
   if (fl & F_HOLD && S[nx + k]) return S[v + k] * iv;
   const u = pease(x.z, S, ez, k, (ft - S[t + k]) / span);
   const a = S[v + k];
-  const b = fl & F_END ? S[v + n + k] : S[v + k + 1];
+  const b = S[v + k + 1];
   return (a + (b - a) * u) * iv;
 }
 
@@ -151,8 +151,8 @@ export function pvv(x, off, f, c, i, out) {
   const k = pseg(S, t, n, ft, c, i);
   const span = S[t + k + 1] - S[t + k];
   if (span === 0) return pslice(S, v + (k + 1) * d, d, iv, out);
-  const fl = (head >> 7) & 15;
-  let nx = v + vlen + (fl & F_END ? vlen : 0);
+  const fl = (head >> 7) & 7;
+  let nx = v + vlen;
   const ez = fl & F_EASE ? nx : 0;
   if (ez) nx += n - 1;
   if (fl & F_HOLD) {
@@ -161,7 +161,7 @@ export function pvv(x, off, f, c, i, out) {
   }
   const u = pease(x.z, S, ez, k, (ft - S[t + k]) / span);
   const ai = v + k * d;
-  const bi = fl & F_END ? v + vlen + k * d : v + (k + 1) * d;
+  const bi = v + (k + 1) * d;
   if (fl & F_SPATIAL) {
     const to = nx;
     // Both tangent columns are per *segment*, so each is `(n-1)*d` — one
@@ -211,13 +211,12 @@ export function pvp(x, off, f, c, i, m) {
   const n = S[off + 1];
   const t = off + 2;
   const v = t + n;
-  const fl = (head >> 7) & 15;
-  // The keyframes hold offsets to pooled path properties. They are constant, so
-  // the whole column is materialized on this binding's first frame — end values
-  // included, which is why the cache is `2n` long when the property carries them.
+  const fl = (head >> 7) & 7;
+  // The keyframes hold offsets to pooled path properties. They are constant,
+  // so the whole column is materialized on this binding's first frame.
   let keys = m[i];
   if (keys === undefined) {
-    keys = m[i] = new Array(fl & F_END ? n * 2 : n);
+    keys = m[i] = new Array(n);
     for (let k = 0; k < keys.length; k++) keys[k] = mkPath(S, S[v + k]);
   }
   const ft = f * P10[(head >> 3) & 3];
@@ -226,12 +225,12 @@ export function pvp(x, off, f, c, i, m) {
   const k = pseg(S, t, n, ft, c, i);
   const span = S[t + k + 1] - S[t + k];
   if (span === 0) return keys[k + 1];
-  let nx = v + n + (fl & F_END ? n : 0);
+  let nx = v + n;
   const ez = fl & F_EASE ? nx : 0;
   if (ez) nx += n - 1;
   if (fl & F_HOLD && S[nx + k]) return keys[k];
   const u = pease(x.z, S, ez, k, (ft - S[t + k]) / span);
-  return lerpPath(keys[k], fl & F_END ? keys[n + k] : keys[k + 1], u);
+  return lerpPath(keys[k], keys[k + 1], u);
 }
 
 /**

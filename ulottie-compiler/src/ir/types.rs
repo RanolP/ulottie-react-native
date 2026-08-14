@@ -106,9 +106,6 @@ pub struct Keyframes<T: Clone> {
 pub struct Keyframe<T: Clone> {
     pub time: f64,
     pub value: Option<T>,
-    /// Older Lottie keyframe format: explicit end value. Newer omits this and
-    /// uses the next keyframe's start value as the destination.
-    pub end_value: Option<T>,
     pub easing_in: Option<EasingHandle>,
     pub easing_out: Option<EasingHandle>,
     pub spatial_in: Option<Vec3>,
@@ -555,11 +552,10 @@ impl ExprTable {
     /// collision costs a missed dedup rather than merging two expressions that
     /// only happened to collide.
     pub fn insert(&mut self, mut e: Expression) -> ExprId {
-        if let Some(&existing) = self.by_hash.get(&e.canonical_hash) {
-            if self.expressions[existing.0 as usize].body == e.body {
+        if let Some(&existing) = self.by_hash.get(&e.canonical_hash)
+            && self.expressions[existing.0 as usize].body == e.body {
                 return existing;
             }
-        }
         let id = ExprId(self.expressions.len() as u32);
         e.id = id;
         self.by_hash.insert(e.canonical_hash, id);

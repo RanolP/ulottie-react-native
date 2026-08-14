@@ -36,16 +36,15 @@ pub mod tag {
     pub const EXPR: i32 = 4;
 }
 
-/// `Anim` header flag bits, above the tag and the two shifts.
+/// `Anim` header flag bits, above the tag and the two shifts. Kept in step
+/// with the `F_*` constants in `runtime/pv.js`.
 pub mod anim {
-    /// Explicit segment end values (legacy Lottie `e`).
-    pub const END: i32 = 1;
     /// Per-segment easing indices.
-    pub const EASE: i32 = 2;
+    pub const EASE: i32 = 1;
     /// Per-segment hold flags.
-    pub const HOLD: i32 = 4;
+    pub const HOLD: i32 = 2;
     /// Spatial tangents (`to`/`ti`).
-    pub const SPATIAL: i32 = 8;
+    pub const SPATIAL: i32 = 4;
 }
 
 /// Largest power of ten a column is allowed to scale by. Matches [`svg::q`]:
@@ -298,7 +297,6 @@ impl Flat {
     /// [tag | tShift<<3 | vShift<<5 | flags<<7 | kind<<11 | (dim-1)<<13, count,
     ///  t…,                       count
     ///  v…,                       count*dim, or count path offsets
-    ///  e…,   if END              same shape as v
     ///  ez…,  if EASE             count-1
     ///  h…,   if HOLD             count-1
     ///  to…, ti…, if SPATIAL      count*dim each ]
@@ -320,13 +318,6 @@ impl Flat {
         } else {
             Vec::new()
         };
-        let e_offs: Vec<i32> = match &a.end_paths {
-            Some(ps) => ps
-                .iter()
-                .map(|p| self.prop(&Prop::Path(p.clone())) as i32)
-                .collect(),
-            None => Vec::new(),
-        };
 
         let ts = shift_for(a.t.iter().copied());
         let vs = if path_kind {
@@ -334,7 +325,6 @@ impl Flat {
         } else {
             shift_for(
                 a.v.iter()
-                    .chain(a.end.iter().flatten())
                     .chain(a.to.iter().flatten())
                     .chain(a.ti.iter().flatten())
                     .copied(),
@@ -342,9 +332,6 @@ impl Flat {
         };
 
         let mut flags = 0;
-        if a.end.is_some() || a.end_paths.is_some() {
-            flags |= anim::END;
-        }
         if a.ez.is_some() {
             flags |= anim::EASE;
         }
@@ -370,11 +357,6 @@ impl Flat {
             out.extend_from_slice(&v_offs);
         } else {
             out.extend(a.v.iter().map(|x| self.scaled(*x, vs)));
-        }
-        if let Some(e) = &a.end {
-            out.extend(e.iter().map(|x| self.scaled(*x, vs)));
-        } else if !e_offs.is_empty() {
-            out.extend_from_slice(&e_offs);
         }
         if let Some(z) = &a.ez {
             out.extend(z.iter().map(|x| *x as i32));
@@ -520,10 +502,10 @@ impl Flat {
         let mut flat = Vec::with_capacity(rows.len() * 2 + 1);
         flat.push(shift as i32);
         for g in rows {
-            for k in 0..2 {
-                let v = self.scaled(g[k], shift);
-                flat.push(v);
-            }
+            // The first component is an index (never scaled), the second a
+            // frame time (scaled) — one loop, two roles.
+            flat.push(g[0] as i32);
+            flat.push(self.scaled(g[1], shift));
         }
         let at = self.ints.len() as u32;
         self.ints.push(rows.len() as i32);
@@ -548,9 +530,9 @@ impl Flat {
         flat.push(shift as i32);
         for t in rows {
             flat.push(t[0] as i32);
-            for k in 1..4 {
-                let v = self.scaled(t[k], shift);
-                flat.push(v);
+            // The three frame-time fields share the shift; the slot does not.
+            for v in t[1..4].iter() {
+                flat.push(self.scaled(*v, shift));
             }
         }
         let at = self.ints.len() as u32;

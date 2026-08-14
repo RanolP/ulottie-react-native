@@ -38,10 +38,10 @@ fn embedded(name: &str) -> String {
 
 /// `(fixture, raw byte budget)`. Headroom is ~10% over the measured size.
 ///
-/// Raised 2026-07-28 for `bouncy_ball`, `boucing-ball` and `lottie-logo`:
+/// Raised 2026-07-28 for `bouncy_ball`, `boucing_ball` and `lottie_logo_1`:
 /// implementing time remap put a branch in `mount`, which every embedded module
 /// inlines whether or not it remaps anything (~85 B), and track mattes give
-/// `lottie-logo` a `<mask>` and an inversion `<filter>` it previously did not
+/// `lottie_logo_1` a `<mask>` and an inversion `<filter>` it previously did not
 /// draw at all. Both are new output for new capability, not drift.
 ///
 /// Raised 2026-07-31 for `precomp_star_circle`: a precomp layer is now clipped
@@ -61,14 +61,23 @@ const BUDGETS: &[(&str, usize)] = &[
     // binder table, no interpreter. `ripple` is the counter-example and the
     // reason the compiler builds both and keeps the smaller — 230 bindings
     // unroll to 151 KB against the interpreter's 52.
-    ("bouncy_ball", 2_900),
-    ("boucing-ball", 4_400),
-    // `lottie-logo` moves little because two thirds of it is baked markup,
+    ("boucing_ball", 4_400),
+    // `lottie_logo_1` moves little because two thirds of it is baked markup,
     // which the generator does not touch.
     ("precomp_star_circle", 9_700),
-    ("lottie-logo", 14_000),
+    ("lottie_logo_1", 14_000),
     ("starfish", 22_500),
     ("lights", 20_500),
+    // The lottie-flutter logo variants (`_2`, `_3`; `_1` is the original
+    // wordmark above); AndroidWave; text_baseline (text from glyphs);
+    // bodymoovin (legacy 0–255 colours, v3.1.6 lettermark).
+    ("lottie_logo_2", 28_000),
+    ("lottie_logo_3", 38_500),
+    ("android_wave", 13_500),
+    ("text_baseline", 1_400),
+    ("fireworks", 24_100),
+    ("blend_multiply", 3_800),
+    ("bodymoovin", 192_400),
     // ripple instances one precomp 46 times and the planner expands every
     // instance into the markup, so its element count — not its animation —
     // sets the size. Bringing this down needs precomp templating: emit the
@@ -78,8 +87,14 @@ const BUDGETS: &[(&str, usize)] = &[
     // way. `matte_alpha` carries the mask and the inversion filter.
     ("gradient_radial", 8_000),
     ("image_layer", 3_000),
+    ("image_embedded", 2_600),
     ("mask_subtract", 4_000),
     ("matte_alpha", 14_000),
+    // The luma variants carry `mask-type="luminance"` masks; the inverted one
+    // additionally inverts the matte source through a filter.
+    ("matte_luma", 12_600),
+    ("matte_luma_inv", 13_300),
+    ("gradient_animated", 8_700),
     ("stroke_under_fill", 12_000),
 ];
 
@@ -122,19 +137,19 @@ fn static_animations_ship_no_runtime() {
 /// feature leaks into an animation that never uses it, sizes creep back.
 #[test]
 fn unused_capabilities_are_not_bundled() {
-    let ball = embedded("bouncy_ball");
+    let ball = embedded("boucing_ball");
     assert!(
         !ball.contains("trimTable"),
-        "bouncy_ball pulled in trim support"
+        "boucing_ball pulled in trim support"
     );
     assert!(
         !ball.contains("radialGradient"),
-        "bouncy_ball pulled in gradient support"
+        "boucing_ball pulled in gradient support"
     );
 
-    let logo = embedded("lottie-logo");
+    let logo = embedded("lottie_logo_1");
     assert!(
         !logo.contains("radialGradient"),
-        "lottie-logo pulled in gradient support"
+        "lottie_logo pulled in gradient support"
     );
 }

@@ -102,3 +102,75 @@ fn between<'a>(s: &'a str, open: &str, close: &str) -> Option<&'a str> {
     let end = s[start..].find(close)? + start;
     Some(&s[start..end])
 }
+
+/// Luma mattes (`tt:3` plain, `tt:4` inverted) are luminance masks; the
+/// inverted one inverts the matte source through a filter.
+///
+/// These cannot be pixel-diffed against lottie-web: its `getMatte` creates a
+/// `<mask>` for types 1–3 only, so a `tt:4` layer references a mask that is
+/// never defined — and Chrome's error recovery for an unresolvable mask
+/// reference is to draw the element *unmasked*. lottie-web therefore renders
+/// `tt:4` as "no matte at all", which is not what After Effects means. Like
+/// the `tp`-without-`td` case, this compiler renders what AE means instead,
+/// and these structural assertions are the gate — verified against
+/// `_fixtures/animations/matte_luma{,_inv}.json`, derived from `matte_alpha`.
+#[test]
+fn a_luma_matte_is_a_luminance_mask() {
+    let json = std::fs::read_to_string(fixture("matte_luma")).unwrap();
+    let doc = compile_document(&json).unwrap();
+    let (defs, _) = split_defs(&doc);
+    assert!(
+        defs.contains("mask-type=\"luminance\""),
+        "tt:3 must mask by luminance:\n{defs}"
+    );
+    assert!(
+        !defs.contains("tableValues=\"1 0\""),
+        "a plain luma matte must not invert its source:\n{defs}"
+    );
+}
+
+#[test]
+fn an_inverted_luma_matte_inverts_the_source() {
+    let json = std::fs::read_to_string(fixture("matte_luma_inv")).unwrap();
+    let doc = compile_document(&json).unwrap();
+    let (defs, _) = split_defs(&doc);
+    assert!(
+        defs.contains("mask-type=\"luminance\""),
+        "tt:4 masks by luminance:\n{defs}"
+    );
+    // The inversion is a filter applied *inside* the mask: inverting the RGB
+    // channels and then computing luminance equals inverting the luminance,
+    // because luminance is linear in each channel.
+    let refs: Vec<_> = defs.match_indices("filter=\"url(#").collect();
+    assert!(!refs.is_empty(), "tt:4 must reference an inversion filter:\n{defs}");
+    for (at, _) in refs {
+        let id = between(&defs[at..], "url(#", ")").expect("filter reference id");
+        let def_at = defs.find(&format!("<filter id=\"{id}\"")).expect("filter def");
+        let def_end = defs[def_at..].find("</filter>").unwrap() + def_at;
+        assert!(
+            defs[def_at..def_end].contains("tableValues=\"1 0\""),
+            "the filter a tt:4 mask references must invert:\n{}",
+            &defs[def_at..def_end]
+        );
+        // …and the reference itself sits inside a luminance mask.
+        let mask_at = defs[..at].rfind("<mask").expect("the reference is inside a mask");
+        let mask_end = defs[mask_at..].find("</mask>").unwrap() + mask_at;
+        assert!(
+            at > mask_at && at < mask_end,
+            "the inversion filter is applied inside the mask:\n{defs}"
+        );
+        assert!(
+            defs[mask_at..mask_end].contains("mask-type=\"luminance\""),
+            "the enclosing mask is a luminance mask:\n{defs}"
+        );
+    }
+}
+
+fn fixture(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("_fixtures")
+        .join("animations")
+        .join(format!("{name}.json"))
+}

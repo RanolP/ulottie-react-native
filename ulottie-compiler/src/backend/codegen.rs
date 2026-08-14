@@ -56,10 +56,9 @@ impl Val {
 fn mul(a: &Val, b: &Val) -> Val {
     match (a.lit(), b.lit()) {
         (Some(x), Some(y)) => Val::Lit(x * y),
-        (Some(x), _) if x == 0.0 => Val::Lit(0.0),
-        (_, Some(y)) if y == 0.0 => Val::Lit(0.0),
-        (Some(x), _) if x == 1.0 => b.clone(),
-        (_, Some(y)) if y == 1.0 => a.clone(),
+        (Some(0.0), _) | (_, Some(0.0)) => Val::Lit(0.0),
+        (Some(1.0), _) => b.clone(),
+        (_, Some(1.0)) => a.clone(),
         _ => Val::Expr(format!("{}*{}", paren(a), paren(b))),
     }
 }
@@ -67,7 +66,7 @@ fn mul(a: &Val, b: &Val) -> Val {
 fn sub(a: &Val, b: &Val) -> Val {
     match (a.lit(), b.lit()) {
         (Some(x), Some(y)) => Val::Lit(x - y),
-        (_, Some(y)) if y == 0.0 => a.clone(),
+        (_, Some(0.0)) => a.clone(),
         _ => Val::Expr(format!("{}-{}", a.js(), paren(b))),
     }
 }
@@ -75,8 +74,8 @@ fn sub(a: &Val, b: &Val) -> Val {
 fn add(a: &Val, b: &Val) -> Val {
     match (a.lit(), b.lit()) {
         (Some(x), Some(y)) => Val::Lit(x + y),
-        (Some(x), _) if x == 0.0 => b.clone(),
-        (_, Some(y)) if y == 0.0 => a.clone(),
+        (Some(0.0), _) => b.clone(),
+        (_, Some(0.0)) => a.clone(),
         _ => Val::Expr(format!("{}+{}", a.js(), paren(b))),
     }
 }
@@ -131,9 +130,10 @@ fn prop_supported(p: &Prop) -> bool {
         // An expression is a handle handed to the engine. The engine no longer
         // knows where handles come from, so emitting one is enough.
         Prop::Expr { fallback, .. } => fallback.as_deref().is_none_or(prop_supported),
-        // Explicit segment ends (legacy `e`) are rare and would double every
-        // segment's emitted values; not worth the code until a fixture needs it.
-        Prop::Anim(a) => a.end.is_none() && a.end_paths.is_none(),
+        // Every segment's destination is the next keyframe's start value —
+        // the legacy `e` spelling is normalized away at the parse boundary —
+        // so any keyframed property fits in straight-line code.
+        Prop::Anim(_) => true,
     }
 }
 
@@ -429,19 +429,18 @@ impl Builder {
                 out.push_str(&format!(",z:[{}]", items.join(",")));
             }
         }
-        if let Some(h) = &a.hold {
-            if h.iter().any(|x| *x == 1) {
+        if let Some(h) = &a.hold
+            && h.contains(&1) {
                 let items: Vec<String> = h.iter().map(|x| x.to_string()).collect();
                 out.push_str(&format!(",h:[{}]", items.join(",")));
             }
-        }
         // Spatial tangents, per segment. Dropping these was silent — the
         // columns still evaluated, just along a straight line — and it is what
         // made `starfish`'s shipped build disagree with lottie-web while the
         // extern build, which reads the same tangents off the stream, did not.
         // `anim`'s unrolled form never had the gap; only the columns did.
-        if let (Some(to), Some(ti)) = (&a.to, &a.ti) {
-            if to.iter().chain(ti).any(|x| q(*x) != 0.0) {
+        if let (Some(to), Some(ti)) = (&a.to, &a.ti)
+            && to.iter().chain(ti).any(|x| q(*x) != 0.0) {
                 self.need("spBuild");
                 self.need("spSample");
                 let col = |v: &Vec<f64>| {
@@ -452,7 +451,6 @@ impl Builder {
                 };
                 out.push_str(&format!(",to:[{}],ti:[{}]", col(to), col(ti)));
             }
-        }
         out.push('}');
         out
     }
@@ -671,18 +669,17 @@ impl Builder {
                 writeln!(self.pre, "const {tab}=spBuild({args});").unwrap();
                 self.decls.push(format!("{out}=new Array({dim})"));
                 parts.push(format!("spSample({tab},u,{out})"));
-                for c in 0..dim {
-                    parts.push(format!("{}={out}[{c}]", names[c]));
+                for (c, name) in names.iter().enumerate().take(dim) {
+                    parts.push(format!("{name}={out}[{c}]"));
                 }
             } else {
-                for c in 0..d {
+                for (c, name) in names.iter().enumerate().take(d) {
                     let (va, vb) = (at(i, c), at(i + 1, c));
                     if va == vb {
-                        parts.push(format!("{}={}", names[c], fmt_num(va)));
+                        parts.push(format!("{name}={}", fmt_num(va)));
                     } else {
                         parts.push(format!(
-                            "{}={}+{}*u",
-                            names[c],
+                            "{name}={}+{}*u",
                             fmt_num(va),
                             fmt_num(q(vb - va))
                         ));

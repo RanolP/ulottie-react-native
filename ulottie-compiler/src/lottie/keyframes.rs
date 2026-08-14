@@ -83,13 +83,11 @@ fn value_as_numbers(v: Option<&serde_json::Value>) -> Option<Vec<f64>> {
 fn value_as_path(v: Option<&serde_json::Value>) -> Option<&serde_json::Value> {
     let v = v?;
     // Path keyframes wrap the path in a single-element array.
-    if let Some(arr) = v.as_array() {
-        if let Some(first) = arr.first() {
-            if first.is_object() {
+    if let Some(arr) = v.as_array()
+        && let Some(first) = arr.first()
+            && first.is_object() {
                 return Some(first);
             }
-        }
-    }
     if v.is_object() {
         return Some(v);
     }

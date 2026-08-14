@@ -20,21 +20,13 @@
     "mask:a-inv": "rejected: `MaskInverted`. The paint-it-black approximation rendered wrong on every corpus file that combined masks.",
     "mask:s-inv": "rejected: `MaskInverted`, as above.",
 
-    "matte:mode-3": "implemented: luma matte, `mask-type=\"luminance\"`. Untested.",
-    "matte:mode-4": "implemented: luma inverted, which goes through `invert_filter`. Untested.",
-
-    "gradient:animated-ramp": "implemented: one RAMP binding per `<stop>`, added for the external corpus and never pinned by a fixture.",
     "gradient:highlight": "not implemented: a displaced focus (`h`/`a`) is read and dropped. Needs a fixture and a `support::scan` finding.",
-
-    "asset:image-embedded": "implemented: a data URI carried straight into the markup.",
 
     "stroke:dash": "rejected: `StrokeDash`. It used to draw solid with no finding; SVG spells it `stroke-dasharray`, so this is a refusal waiting to become an implementation.",
     "trim:individually": "not implemented: `m=2` is ignored, so a multi-shape group trims as one. Listed in *What is left*.",
     "shape:no-op": "not implemented: the `no` style is dropped.",
 
-    "shape:repeater": "rejected: `support::Feature::Repeater`. No fixture asserts the rejection.",
     "shape:rounded-corners": "rejected: `RoundedCorners`. Corners stay sharp.",
-    "shape:merge": "rejected: `MergePaths` — and correctly so, lottie-web has no `mm` modifier either.",
     "shape:pucker-bloat": "rejected: `PuckerBloat`. The distortion is dropped and the path draws as authored.",
     "shape:twist": "rejected: no `Feature` at all — a twist is not even reported.",
     "shape:offset-path": "rejected: `OffsetPath`. The path is drawn at its authored position, not offset.",
@@ -46,10 +38,6 @@
     "auto-orient": "rejected: `AutoOrient`.",
     "time-stretch": "rejected: `TimeStretch`.",
 
-    "layer:text": "rejected: `TextLayer`. Nothing is drawn for it at all.",
-    "text:layer": "rejected: the same layer seen from the layer side.",
-    "text:fonts": "rejected: an embedded font list, which only a text layer needs.",
-    "text:glyphs": "rejected: embedded glyph outlines.",
     "layer:audio": "rejected: `UnknownLayerType`.",
     "layer:camera": "rejected: `UnknownLayerType`.",
 

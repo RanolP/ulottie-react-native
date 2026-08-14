@@ -237,12 +237,10 @@ fn stmt_refs<'a>(stmt: &ast::Statement<'a>, out: &mut Out) {
                 let Some(e) = &decl.init else { continue };
                 if let (Some(id), ast::Expression::ArrayExpression(a)) =
                     (decl.id.get_binding_identifier(), e)
-                {
-                    if let Some(elems) = all_strings(a) {
+                    && let Some(elems) = all_strings(a) {
                         out.arrays.insert(id.name.to_string(), elems);
                         continue;
                     }
-                }
                 expr_refs(e, out);
             }
         }
@@ -490,6 +488,139 @@ fn span_at(sp: oxc_span::Span) -> Span {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Branch folding
+// ---------------------------------------------------------------------------
+
+/// An `if` whose test the compiler may be able to decide.
+///
+/// Bodymovin guards a great deal behind conditions made entirely of things the
+/// compiler knows — an effect checkbox, a keyframe count — and leaves the guard
+/// in the shipped body. Paying for it at runtime costs the test, the string
+/// literals in it, and the effect names those literals keep alive through the
+/// lexical rule in `prune_effect_names`.
+pub struct Branch {
+    /// The whole `if (…) … else …` statement.
+    stmt: Span,
+    /// Its test, as source, so it can be evaluated on its own.
+    pub test: String,
+    taken: Span,
+    other: Option<Span>,
+}
+
+impl Branch {
+    /// The source that replaces the statement, once the test is `decided`.
+    ///
+    /// An arm is usually a block, and splicing the block in whole would leave
+    /// its braces behind wrapping nothing — a bare `{ … }` where a statement
+    /// used to be guarded. `arm_span` reaches inside it, so what lands is the
+    /// statements themselves.
+    pub fn arm(&self, body: &str, decided: bool) -> Option<(Span, String)> {
+        let arm = if decided { self.taken } else { self.other? };
+        // Nothing at all when the arm was an empty block: the `if` goes and
+        // leaves no trace, which is what it did.
+        if arm.start >= arm.end {
+            return Some((self.stmt, String::new()));
+        }
+        Some((self.stmt, dedent(&body[arm.start..arm.end])))
+    }
+}
+
+/// Every top-level `if` whose test reads nothing the body itself defines.
+///
+/// That restriction is what makes evaluating a test in isolation sound: one
+/// mentioning a local would need the statements before it replayed, and this
+/// pass does not run the body. Bodymovin's guards read `thisProperty` and
+/// `effect(…)` and nothing else, which is the case worth having.
+pub fn branches(body: &str) -> Vec<Branch> {
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, body, SourceType::cjs()).parse();
+    if !parsed.errors.is_empty() {
+        return Vec::new();
+    }
+    let mut locals = std::collections::BTreeSet::new();
+    for stmt in &parsed.program.body {
+        if let ast::Statement::VariableDeclaration(d) = stmt {
+            for decl in &d.declarations {
+                if let Some(id) = decl.id.get_binding_identifier() {
+                    locals.insert(id.name.to_string());
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for stmt in &parsed.program.body {
+        let ast::Statement::IfStatement(s) = stmt else {
+            continue;
+        };
+        let test = span_at(s.test.span());
+        let src = &body[test.start..test.end];
+        if locals.iter().any(|l| mentions_word(src, l)) {
+            continue;
+        }
+        out.push(Branch {
+            stmt: span_at(s.span()),
+            test: src.to_string(),
+            taken: arm_span(&s.consequent),
+            other: s.alternate.as_ref().map(arm_span),
+        });
+    }
+    out
+}
+
+/// An arm's statements, without the block that held them.
+fn arm_span(stmt: &ast::Statement) -> Span {
+    let ast::Statement::BlockStatement(b) = stmt else {
+        return span_at(stmt.span());
+    };
+    match (b.body.first(), b.body.last()) {
+        (Some(f), Some(l)) => Span {
+            start: f.span().start as usize,
+            end: l.span().end as usize,
+        },
+        // An empty block: a span that selects nothing.
+        _ => Span { start: 0, end: 0 },
+    }
+}
+
+/// Pull the arm back out one level of block indentation.
+///
+/// Only the continuation lines need it — the first begins where the statement
+/// does, which is where the `if` began. Purely for the unminified form, which
+/// is what compiler changes are reviewed in.
+fn dedent(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    for (i, line) in src.lines().enumerate() {
+        if i > 0 {
+            out.push('\n');
+            out.push_str(line.strip_prefix("    ").unwrap_or(line));
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+/// Whether `src` uses `word` as an identifier rather than inside a longer one.
+fn mentions_word(src: &str, word: &str) -> bool {
+    let edge =
+        |c: Option<char>| !matches!(c, Some(c) if c.is_alphanumeric() || c == '_' || c == '$');
+    src.match_indices(word).any(|(i, _)| {
+        edge(src[..i].chars().next_back()) && edge(src[i + word.len()..].chars().next())
+    })
+}
+
+/// Splice decided branches in, back to front so earlier spans stay valid.
+pub fn take_branches(body: &str, decided: &[(Span, String)]) -> String {
+    let mut cuts = decided.to_vec();
+    cuts.sort_by_key(|(s, _)| std::cmp::Reverse(s.start));
+    let mut out = body.to_string();
+    for (span, text) in cuts {
+        out.replace_range(span.start..span.end, &text);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -681,137 +812,4 @@ $bm_rt = label;
             "var $bm_rt;\n$bm_rt = sum(effect(0)(1), effect(2)(3));"
         );
     }
-}
-
-// ---------------------------------------------------------------------------
-// Branch folding
-// ---------------------------------------------------------------------------
-
-/// An `if` whose test the compiler may be able to decide.
-///
-/// Bodymovin guards a great deal behind conditions made entirely of things the
-/// compiler knows — an effect checkbox, a keyframe count — and leaves the guard
-/// in the shipped body. Paying for it at runtime costs the test, the string
-/// literals in it, and the effect names those literals keep alive through the
-/// lexical rule in `prune_effect_names`.
-pub struct Branch {
-    /// The whole `if (…) … else …` statement.
-    stmt: Span,
-    /// Its test, as source, so it can be evaluated on its own.
-    pub test: String,
-    taken: Span,
-    other: Option<Span>,
-}
-
-impl Branch {
-    /// The source that replaces the statement, once the test is `decided`.
-    ///
-    /// An arm is usually a block, and splicing the block in whole would leave
-    /// its braces behind wrapping nothing — a bare `{ … }` where a statement
-    /// used to be guarded. `arm_span` reaches inside it, so what lands is the
-    /// statements themselves.
-    pub fn arm(&self, body: &str, decided: bool) -> Option<(Span, String)> {
-        let arm = if decided { self.taken } else { self.other? };
-        // Nothing at all when the arm was an empty block: the `if` goes and
-        // leaves no trace, which is what it did.
-        if arm.start >= arm.end {
-            return Some((self.stmt, String::new()));
-        }
-        Some((self.stmt, dedent(&body[arm.start..arm.end])))
-    }
-}
-
-/// Every top-level `if` whose test reads nothing the body itself defines.
-///
-/// That restriction is what makes evaluating a test in isolation sound: one
-/// mentioning a local would need the statements before it replayed, and this
-/// pass does not run the body. Bodymovin's guards read `thisProperty` and
-/// `effect(…)` and nothing else, which is the case worth having.
-pub fn branches(body: &str) -> Vec<Branch> {
-    let allocator = Allocator::default();
-    let parsed = Parser::new(&allocator, body, SourceType::cjs()).parse();
-    if !parsed.errors.is_empty() {
-        return Vec::new();
-    }
-    let mut locals = std::collections::BTreeSet::new();
-    for stmt in &parsed.program.body {
-        if let ast::Statement::VariableDeclaration(d) = stmt {
-            for decl in &d.declarations {
-                if let Some(id) = decl.id.get_binding_identifier() {
-                    locals.insert(id.name.to_string());
-                }
-            }
-        }
-    }
-    let mut out = Vec::new();
-    for stmt in &parsed.program.body {
-        let ast::Statement::IfStatement(s) = stmt else {
-            continue;
-        };
-        let test = span_at(s.test.span());
-        let src = &body[test.start..test.end];
-        if locals.iter().any(|l| mentions_word(src, l)) {
-            continue;
-        }
-        out.push(Branch {
-            stmt: span_at(s.span()),
-            test: src.to_string(),
-            taken: arm_span(&s.consequent),
-            other: s.alternate.as_ref().map(arm_span),
-        });
-    }
-    out
-}
-
-/// An arm's statements, without the block that held them.
-fn arm_span(stmt: &ast::Statement) -> Span {
-    let ast::Statement::BlockStatement(b) = stmt else {
-        return span_at(stmt.span());
-    };
-    match (b.body.first(), b.body.last()) {
-        (Some(f), Some(l)) => Span {
-            start: f.span().start as usize,
-            end: l.span().end as usize,
-        },
-        // An empty block: a span that selects nothing.
-        _ => Span { start: 0, end: 0 },
-    }
-}
-
-/// Pull the arm back out one level of block indentation.
-///
-/// Only the continuation lines need it — the first begins where the statement
-/// does, which is where the `if` began. Purely for the unminified form, which
-/// is what compiler changes are reviewed in.
-fn dedent(src: &str) -> String {
-    let mut out = String::with_capacity(src.len());
-    for (i, line) in src.lines().enumerate() {
-        if i > 0 {
-            out.push('\n');
-            out.push_str(line.strip_prefix("    ").unwrap_or(line));
-        } else {
-            out.push_str(line);
-        }
-    }
-    out
-}
-
-/// Whether `src` uses `word` as an identifier rather than inside a longer one.
-fn mentions_word(src: &str, word: &str) -> bool {
-    let edge =
-        |c: Option<char>| !matches!(c, Some(c) if c.is_alphanumeric() || c == '_' || c == '$');
-    src.match_indices(word).any(|(i, _)| {
-        edge(src[..i].chars().next_back()) && edge(src[i + word.len()..].chars().next())
-    })
-}
-
-/// Splice decided branches in, back to front so earlier spans stay valid.
-pub fn take_branches(body: &str, decided: &[(Span, String)]) -> String {
-    let mut cuts = decided.to_vec();
-    cuts.sort_by_key(|(s, _)| std::cmp::Reverse(s.start));
-    let mut out = body.to_string();
-    for (span, text) in cuts {
-        out.replace_range(span.start..span.end, &text);
-    }
-    out
 }

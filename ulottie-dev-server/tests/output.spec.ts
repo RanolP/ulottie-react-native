@@ -53,10 +53,10 @@ const scratch = mkdtempSync(join(tmpdir(), 'ulottie-snapshot-'));
  *
  * Extraction changes the module and nothing else — same payload, same bindings,
  * plus the sprite wiring — so one fixture shows the mode and the rest show the
- * ordinary form. `lottie-logo` is the one with a track matte, which is the part
+ * ordinary form. `lottie_logo_1` is the one with a track matte, which is the part
  * of a document worth seeing leave the module.
  */
-const EXTRACTED = 'lottie-logo';
+const EXTRACTED = 'lottie_logo_1';
 
 /**
  * Compile one fixture's document template — standalone SVG, no script.
@@ -296,7 +296,7 @@ describe('compiled output', () => {
 
   // A mask is resolved in the user space its own element establishes, so a
   // `mask` and a `transform` on the same element push the matte through that
-  // transform a second time. `lottie-logo`'s matte layer sits under a rotation,
+  // transform a second time. `lottie_logo_1`'s matte layer sits under a rotation,
   // and putting the two together silently clipped the wrong part of the logo —
   // invisible to both the pixel diff (hairline antialiasing) and the geometry
   // check (the bounding box does not move).

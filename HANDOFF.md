@@ -16,24 +16,31 @@ this file's git history.
 - `ulottie-dev-server/` — compile server, browser test harness
 - `ulottie-dev-server/demo/` — the comparison page (Vite app)
 - `ulottie-dev-server/tools/` — `compare.mjs`, `census.mjs`, `probe.mjs`
-- `_fixtures/animations/` — 17 Lottie fixtures (`PROVENANCE.md` says where each
+- `_fixtures/animations/` — 28 Lottie fixtures (`PROVENANCE.md` says where each
   came from and why); `__snapshots__/` the review artifacts;
-  `allowances.json` (empty) and `coverage.json` the two feature ledgers
+  `allowances.json` (two deliberate merge-paths entries, both invisible in
+  the render) and `coverage.json` the two feature ledgers
 - `_fixtures/animations/tmp/` — external corpora, gitignored:
   `jlottie/` (34), `rlottie/` (93), `krrt/` (4), `flutter/` (432)
 
 ## Gates
 
 ```
-cargo nextest run --features eval                     # 165 tests: unit, frame snapshots, size budgets, output hygiene
-cd ulottie-dev-server && yarn test                    # 285 tests: output snapshots, coverage gate, pixel+geometry diff, perf
+cargo nextest run --features eval                     # 182 tests: unit, frame snapshots, size budgets, output hygiene
+cd ulottie-dev-server && yarn test                    # 397 tests: output snapshots, coverage gate, pixel+geometry diff, perf
 node ulottie-dev-server/tools/census.mjs --coverage   # what the fixtures do not exercise
 cargo run --release --bin ulottie-dev-server -- sizes # size report over the fixtures
 node ulottie-dev-server/tools/compare.mjs <any.json> --dom   # any file, vs lottie-web
 ```
 
 All green as of this writing, with **no per-fixture tolerance overrides** — every
-fixture matches lottie-web within the default 0.5% pixel budget. The fixtures
+parity fixture matches lottie-web within the default 0.5% pixel budget.
+(`matte_luma_inv` and `fireworks` are not parity fixtures — in both,
+lottie-web is the one that is wrong: it cannot render `tt:4` at all, and its
+repeater trims every copy twice (see *Lottie semantics* and PROVENANCE).
+Their gates are the structural assertions in `tests/track_matte.rs` and the
+Rust reference render. `bodymoovin` renders at 0.05% but carries a
+merge-paths allowance, so it stays out of the parity table.) The fixtures
 are the gate; `compare.mjs` is how you find out what an unfamiliar file does,
 and it is where most of the correctness fixes have come from.
 
@@ -52,11 +59,11 @@ yarn workspace ulottie-dev-server vitest run --project snapshot -u  # accept, th
 ```
 
 - **One `.js` and one `.svg` per fixture, and the `.js` is real JavaScript**
-  (`every module snapshot is valid JavaScript` pins it). `lottie-logo` is the
+  (`every module snapshot is valid JavaScript` pins it). `lottie_logo_1` is the
   worked example of extracted markup, so *its* module is the extracted one —
   extraction changes the module and nothing else, so a second copy would diff
   the same payload twice. The sprite is not snapshotted: its body is the
-  document, which `lottie-logo.svg` already holds.
+  document, which `lottie_logo_1.svg` already holds.
 - The `.js` snapshots are compiled with `--instance-precomps`, which is *not*
   the shipping default — they show the smallest thing the compiler can emit.
   **Sizes in `sizes` reflect the default instead, so the two will not match.**
@@ -83,7 +90,10 @@ Layered, because each layer has a known blind spot:
 2. **Geometry parity vs lottie-web**: the bounding box of all drawn geometry,
    normalised to the viewport, across the sample frames and in the shipped
    `--embedded` build specifically. Catches constant offsets the pixel gate
-   discounts. Blind to clipping — `getBoundingClientRect` does not see a mask.
+   discounts. Boxes are clamped to the viewport (both renderers park geometry
+   outside it, differently and invisibly), and an element thinner than its own
+   stroke is skipped — `getBoundingClientRect` is a *fill* box and cannot see
+   a stroke. Blind to clipping still.
 3. **Structural assertions** for what neither can see: `a mask is never applied
    to a transformed element`, `an animated mask keeps animating` (a mask whose
    `d` never changes is wrong on its own terms — added when `starfish`'s wink
@@ -538,15 +548,41 @@ writing a fixture is what deletes a line.
 node ulottie-dev-server/tools/census.mjs --coverage
 ```
 
-**29 of 60 constructs are exercised by the fixtures.** The uncovered 31 split
-into: 4 implemented-but-untested (luma mattes both ways, animated gradient
-ramps, embedded images) — the priority, since implemented-without-fixture is
-where the expensive bugs have lived; 4 tracked-but-unimplemented
-(gradient highlight, `trim m=2`, `no`-op style, markers); and 23 refusals.
-`_fixtures/PROVENANCE.md` records how fixtures are chosen — candidates are
-diffed against lottie-web at fifteen frames *and* inspected to confirm the
-feature is live in **both** DOMs, because a candidate can score 0.000% while
-lottie-web renders a feature this compiler drops.
+**29 of 60 → 39 of 60 constructs are exercised by the fixtures.** The
+implemented-but-untested class is empty. The uncovered 22 split into: 4
+tracked-but-unimplemented (gradient highlight, `trim m=2`, `no`-op style,
+markers) and 18 refusals. `_fixtures/PROVENANCE.md` records how fixtures are
+chosen — candidates are diffed against lottie-web at fifteen frames *and*
+inspected to confirm the feature is live in **both** DOMs, because a
+candidate can score 0.000% while lottie-web renders a feature this compiler
+drops.
+
+**The repeater is implemented for the static case** (`lottie/repeat.rs`):
+constant copies/offset/transform expand at the parse boundary into `n`
+groups — copy `k` carries rotation `k·r` about the anchor, scale `s^k`,
+translation `k·p`, and the `so → eo` opacity ramp — and nothing downstream
+learns a repeater existed. `support::scan` shares the same `expand` call, so
+an animated repeater still refuses with `repeater`. Divergence note:
+lottie-web's repeater clones the trim modifier into every copy *and* keeps
+the original layer-level trim, trimming each repeated shape **twice** — its
+arc measures exactly e² of the property value. AE trims once and repeats;
+this compiler does too (`fireworks` is the fixture, pinned by the reference
+render, not pixels).
+
+**Layer blend modes are implemented**: `bm` 1–15 become CSS
+`mix-blend-mode` on the layer group — the same keywords lottie-web writes.
+`bm: 0` exports explicitly and is normal; anything above 15 still refuses.
+
+**Text layers are implemented for the static case**: a text document against
+embedded glyph outlines lowers to shape geometry at compile time
+(`lottie/text.rs` — one group per character, the glyph's outlines, the
+document fill, and the letter's position, laid out exactly as
+`completeTextData`/`getMeasures` do, first-newline `+1px` and all). Refused,
+with precise findings (`text-no-chars`, `text-animated`, `text-animators`,
+`text-box`, `text-stroke`, `text-path`, `text-glyph-missing`): keyframed
+documents, animators, boxed text, strokes, text on a path, and characters
+with no outline. `support::scan` and the lowering share one `text_shapes`
+call, so the gate and the compiler cannot disagree.
 
 ---
 
@@ -567,7 +603,7 @@ Measured at 17 fixtures, this machine, current HEAD. `sizes` and
  gradient_radial            1.4K     1.2K      2.3K    code
  image_layer                336B     362B      1.2K    code
  lights                     2.3K     1.6K      6.0K    code
- lottie-logo                1.5K     1.4K      4.7K    code
+ lottie_logo_1              1.5K     1.4K      4.7K    code
  mask_subtract              404B     465B      1.6K    code
  matte_alpha                1.9K     1.4K      4.1K    code
  precomp_star_circle        845B     701B      2.4K    code
@@ -599,7 +635,7 @@ code-generated and unaffected.
  rectangle/ellipse/fill/trim_path   0.000        —       0 → 0
  bouncy_ball               0.0021    0.0011     1.9×     1.0 → 1.0
  boucing-ball              0.0032    0.0011     2.9×     1.0 → 1.0
- lottie-logo               0.0055    0.0060     0.9×     3.4 → 0.9
+ lottie_logo_1              0.0055    0.0060     0.9×     3.4 → 0.9
  precomp_star_circle       0.0340    0.0080     4.3×     19.5 → 11.5
  ripple                    0.3004    0.1139     2.6×     181.7 → 181.7
  starfish                  0.0461    0.0101     4.6×     4.1 → 1.9
@@ -645,20 +681,24 @@ Corpus standings:
 | lottie-flutter | 432 | 208 compile clean; of 207 comparable, **168 pixel-exact**, 39 diverge |
 
 The flutter refusals are the demand ranking for unimplemented features:
-merge-paths 54, blend-mode 22, text 22, time-stretch 13, stroke-dash 10,
-layer-effect 10, mask-mode 7, repeater 6, 3D 6, even-odd-fill 5,
-rounded-corners 5, skew 5, reversed-direction 4 (plus combinations and 3
-parse errors).
+merge-paths 54, ~~blend-mode 22~~ (implemented — CSS `mix-blend-mode`),
+~~text 22~~ (implemented — the static glyph-outlined case), time-stretch 13,
+stroke-dash 10, layer-effect 10, mask-mode 7, ~~repeater 6~~ (implemented —
+the static case expands), 3D 6, even-odd-fill 5, rounded-corners 5, skew 5,
+reversed-direction 4 (plus combinations and 3 parse errors).
 
 The 39 divergences are each a named construct, worst first: `Tests_RGBMarker`
 76.6%, `Tests_MaskInv` 71.6% (despite the name it contains *no* inverted mask —
 a plain Add+Subtract pair renders wrong; the open mask-semantics bug),
-`Tests_MattWithParentAlpha` 55.4%, `gradient_animated_background` 43.7%,
-`Tests_WeAcceptInlineImage` 35.5%, `Tests_hd` 30.3%, `Tests_LayerBlend_0`
+`Tests_MattWithParentAlpha` 55.4%, ~~`gradient_animated_background` 43.7%~~
+(fixed — the ramp reader's legacy-`e` bug; now a fixture, `gradient_animated`,
+at 0.000%), `Tests_WeAcceptInlineImage` 35.5%, `Tests_hd` 30.3%,
+`Tests_LayerBlend_0`
 25.5%, `hardware` 22.6%, `birds` 19.1%, `Tests_Rect6` 12.9%,
-`Tests_TrimPathsInsideAndOutsideGroup` 9.4%, `Tests_dalek` 8.0%,
-`Tests_Rect4` 7.1%, `Tests_MiterLimit` 6.5%, `Tests_Remap` 5.2%,
-`Tests_TriangleLargeStroke` 4.5%, `Tests_NullEndShape` 3.8%,
+`Tests_TrimPathsInsideAndOutsideGroup` 9.4%, `Tests_Rect4` 7.1%,
+`Tests_MiterLimit` 6.5%, `Tests_Remap` 5.2%,
+`Tests_TriangleLargeStroke` 4.5%, ~~`Tests_dalek` 8.0%~~ (fixed — legacy
+0–255 colours; 0.04% now), `Tests_NullEndShape` 3.8%,
 `Tests_MissingEndValue` 2.9% (last frame only) — and a tail under 2.5%.
 
 ---
@@ -709,11 +749,45 @@ Hard-won facts about the format and about lottie-web, each of which cost a bug:
 - **Both easing handles live on the keyframe a segment starts at** (`o` leaving
   it, `i` arriving at the next). Reading `i` off the following keyframe finds
   nothing and silently interpolates linearly.
+- **Files older than 4.1.9 write shape colours 0–255**; newer ones 0–1.
+  lottie-web's `checkColors` rescales at load, and the threshold is
+  `[4, 1, 9]` compared major/minor/patch — *not* "before 4.9": the whole
+  4.1.x–4.8.x band already writes 0–1. This compiler rescales at the parse
+  boundary (`rescale_legacy_colors`), with the **alpha pinned to 1** rather
+  than divided: lottie-web divides all four components but only ever reads
+  three (its styles take opacity from `o`), while this compiler folds colour
+  alpha into paint alpha — `Tests_Rect9`'s `[0,0,0,1]` strokes would paint
+  at 1/255 otherwise.
 - **Lottie's older keyframe form** puts a segment's destination in `e` on the
-  first keyframe and leaves the last a bare terminator with no `s`. Readers
-  resolve it by looking back at `e[i-1]` — which only works if the encoder
-  distinguishes "absent" from "zero"
-  (`a_keyframe_with_no_start_value_encodes_as_absent_not_zero`).
+  first keyframe and leaves the last a bare terminator with no `s`. It is
+  **normalized at the parse boundary** (`lottie/property.rs`,
+  `normalize_keyframes`): a missing `s` is filled from the previous keyframe's
+  `e`, `next.s` wins when both exist — lottie-web's `nextKeyData.s ||
+  keyData.e` precedence — and no `end_value` exists anywhere downstream: not
+  in the IR, not on the wire, not in the runtime. The ramp reader in
+  `eval/gradient.rs` reads raw JSON and carries the second copy of the same
+  rule. Two readers have been caught by this form (starfish's time remap, and
+  a 43.7%-wrong animated gradient that held its last keyframe instead of
+  easing into `e`).
+- **A style owns ONE element, and every shape it paints lands in it**
+  (lottie-web's `setElementStyles`): a shape between two fills appears in
+  both, the lower style's element first. The planner buckets same-style
+  siblings onto one element per style (`try_style_buckets`); static
+  geometry concatenates into a literal `d`, animated geometry binds
+  `SHAPE_MULTI` (one binding, a list of path properties, one concatenated
+  `d` per frame — own capability bit, codegen declines). This is also what
+  makes a dropped `mm` modifier invisible: same-style contours share a fill
+  rule, so their windings interact the way lottie-web's single element does.
+  The single-fill-and-single-stroke shape keeps its one element and
+  `paint-order`.
+- **A layer whose opacity is statically zero is `inert`** — transform for its
+  children, matte subtree if it is a matte source, and no content of its own.
+  `lottie_logo_2` parks nine white solids at `o: 0` as transform anchors;
+  rendering them as `opacity="0"` rects matched pixels and nothing else.
+- **lottie-web's repeater double-trims.** It clones the trim into every copy
+  and keeps the layer-level trim, so each repeated shape is trimmed twice —
+  `fireworks` measures its arc at exactly e² of the property. AE (and this
+  compiler) trim once and repeat.
 - **Parenting contributes a transform and nothing else** — it must not change
   paint order. `scene::build` nests a child only when that preserves order, and
   otherwise wraps it in its ancestors' transforms at its own position
@@ -808,24 +882,25 @@ Ordered by value.
 5. **Dashed strokes** (`Feature::StrokeDash`, 10 flutter refusals): SVG spells
    it `stroke-dasharray` — a refusal waiting to become an implementation.
 6. **The legacy end-value tail**: `Tests_MissingEndValue` diverges at the last
-   frame only; `Tests_NullEndShape` a constant 3.8%. Same `e`/terminator family
-   as the starfish-wink encoder bug, in the readers this time.
+   frame only; `Tests_NullEndShape` a constant 3.8%. Not the `e`/terminator
+   reader (that is normalized at the parse boundary now, and the animated
+   gradient it broke is a fixture at 0.000%) — a *different* cluster:
+   element-count mismatches and native `<rect>` spellings.
 7. **Rect geometry cluster**: `Tests_Rect4/6/7` (3.8–12.9%), plus stroke joins
    (`Tests_MiterLimit`, `Tests_TriangleLargeStroke`).
 8. **Trim**: `Tests_TrimPathsInsideAndOutsideGroup` 9.4% and `Tests_TrimPaths`
    0.8% are open; nonzero offsets on open paths clamp where lottie-web wraps
    (no fixture covers it); `m=2` (individually) is ignored and tracked in
    `coverage.json`.
-9. **Close the coverage gap's implemented half** — 4 constructs with working
-   code and no fixture (luma mattes, animated ramps, embedded images).
-   Implemented-without-fixture is where the expensive bugs have lived.
+9. **Close the remaining coverage gap** — the implemented-but-untested class
+    is empty now; what is left is 4 not-implemented and 17 refusals.
 10. **Explain instancing's 5× frame cost**, which is what keeps
     `Instancing::Auto` declining `ripple`'s −56% payload.
 11. **Const-fold frame-invariant expressions** (`clamp(value, 0, 100)` over a
     static source) — needs an evaluator, or a wire flag for evaluate-once.
 12. **Pause when offscreen** — no IntersectionObserver / `visibilitychange`
     gating yet.
-13. **`lottie-logo` is 0.9×** — the profile puts path-string assembly at 15%
+13. **`lottie_logo_1` is 0.9×** — the profile puts path-string assembly at 15%
     of its frame.
 
 ## Notes for whoever picks this up

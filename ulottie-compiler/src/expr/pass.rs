@@ -100,7 +100,6 @@ fn resolve_refs(module: &mut ir::Module) {
         agreed: &mut agreed,
     };
     collect_uses(module, &mut uses);
-    drop(uses);
 
     let mut rewritten = Vec::new();
     for (id, indices) in agreed {
@@ -278,8 +277,13 @@ struct Cx<'a> {
     /// to forget a site.
     collecting: bool,
     found: Vec<(u32, usize)>,
-    per_layer: Vec<(Vec<(u32, usize)>, Vec<ir::Effect>)>,
+    per_layer: Vec<LayerUses>,
 }
+
+/// What one layer's expressions reach: the property sites (`(layer table
+/// index, site)`) and the layer's effects, set aside while its properties
+/// are rewritten.
+type LayerUses = (Vec<(u32, usize)>, Vec<ir::Effect>);
 
 fn walk(layers: &mut [ir::Layer], cx: &mut Cx) {
     for layer in layers {
@@ -519,11 +523,7 @@ impl Site for ir::Property<ir::Scalar> {
 fn scalar_range(v: &ir::ValueSource<ir::Scalar>) -> Option<(f64, f64)> {
     match v {
         ir::ValueSource::Static(n) => Some((*n, *n)),
-        ir::ValueSource::Animated(kf) => span(
-            kf.frames
-                .iter()
-                .flat_map(|f| f.value.iter().copied().chain(f.end_value.iter().copied())),
-        ),
+        ir::ValueSource::Animated(kf) => span(kf.frames.iter().flat_map(|f| f.value.iter().copied())),
     }
 }
 

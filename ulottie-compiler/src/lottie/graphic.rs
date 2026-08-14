@@ -191,6 +191,39 @@ pub enum GraphicElement {
         m: Option<u8>,
     },
 
+    #[serde(rename = "rp")]
+    Repeater {
+        #[serde(rename = "nm")]
+        name: Option<String>,
+        #[serde(rename = "hd", default)]
+        hidden: bool,
+        /// Copy count.
+        c: Property,
+        /// Copy offset (how many applications the first copy starts at).
+        o: Property,
+        /// Order: 1 sequential, 2 simultaneous.
+        m: Option<u8>,
+        tr: RepeatTransform,
+    },
+
     #[serde(other)]
     Unknown,
+}
+
+/// The transform a repeater applies per copy — a layer transform plus the
+/// per-copy opacity ramp `so`/`eo`.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RepeatTransform {
+    #[serde(rename = "ty")]
+    pub ty: Option<String>,
+    #[serde(rename = "nm")]
+    pub name: Option<String>,
+    pub p: Option<Property>,
+    pub a: Option<Property>,
+    pub s: Option<Property>,
+    pub r: Option<Property>,
+    /// Start opacity of the copy ramp, percent.
+    pub so: Option<Property>,
+    /// End opacity of the copy ramp, percent.
+    pub eo: Option<Property>,
 }

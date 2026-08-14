@@ -343,12 +343,11 @@ impl Env<'_> {
         // `Math.*` and the Bodymovin arithmetic helpers, which are plain
         // functions over numbers.
         if let ast::Expression::StaticMemberExpression(m) = &c.callee {
-            if let ast::Expression::Identifier(id) = &m.object {
-                if id.name == "Math" {
+            if let ast::Expression::Identifier(id) = &m.object
+                && id.name == "Math" {
                     let args = self.args(c)?;
                     return math(m.property.name.as_str(), &args);
                 }
-            }
             // `thisProperty.propertyGroup(n)` — the group holding it.
             let name = m.property.name.as_str();
             let obj = self.eval(&m.object)?;

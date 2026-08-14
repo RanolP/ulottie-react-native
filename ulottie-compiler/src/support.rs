@@ -18,7 +18,13 @@ use serde_json::Value;
 /// A Lottie capability this compiler does not implement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Feature {
-    TextLayer,
+    TextNoChars,
+    TextAnimated,
+    TextAnimators,
+    TextBox,
+    TextStroke,
+    TextPath,
+    TextGlyphMissing,
     UnknownLayerType,
     TrackMatte,
     BlendMode,
@@ -50,7 +56,13 @@ impl Feature {
     pub fn name(self) -> &'static str {
         use Feature::*;
         match self {
-            TextLayer => "text-layer",
+            TextNoChars => "text-no-chars",
+            TextAnimated => "text-animated",
+            TextAnimators => "text-animators",
+            TextBox => "text-box",
+            TextStroke => "text-stroke",
+            TextPath => "text-path",
+            TextGlyphMissing => "text-glyph-missing",
             UnknownLayerType => "unknown-layer-type",
             TrackMatte => "track-matte",
             BlendMode => "blend-mode",
@@ -82,7 +94,13 @@ impl Feature {
     pub fn effect(self) -> &'static str {
         use Feature::*;
         match self {
-            TextLayer => "the text is not drawn",
+            TextNoChars => "the text is not drawn (no glyph outlines)",
+            TextAnimated => "the text is drawn as its first keyframe",
+            TextAnimators => "the text is drawn without its animators",
+            TextBox => "the text is drawn without wrapping to its box",
+            TextStroke => "the text is drawn without its stroke",
+            TextPath => "the text is drawn on a straight baseline",
+            TextGlyphMissing => "the text is not drawn (a character has no outline)",
             UnknownLayerType => "the layer is not drawn",
             TrackMatte => "the masked layer draws unmasked",
             BlendMode => "the layer composites normally",
@@ -113,7 +131,13 @@ impl Feature {
     pub fn from_name(s: &str) -> Option<Feature> {
         use Feature::*;
         const ALL: &[Feature] = &[
-            TextLayer,
+            TextNoChars,
+            TextAnimated,
+            TextAnimators,
+            TextBox,
+            TextStroke,
+            TextPath,
+            TextGlyphMissing,
             UnknownLayerType,
             TrackMatte,
             BlendMode,
@@ -180,8 +204,30 @@ const RENDERING_EFFECTS: &[u64] = &[
 /// Walk a Lottie document and report everything the compiler would ignore.
 pub fn scan(doc: &Value) -> Vec<Finding> {
     let mut out = Vec::new();
+    // Text layers lower against the document's glyph outlines; parse them
+    // once so every layer scan sees the same table the lowering will.
+    let chars: Vec<crate::lottie::GlyphChar> = doc
+        .get("chars")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|c| serde_json::from_value(c.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let fonts: Vec<crate::lottie::Font> = doc
+        .get("fonts")
+        .and_then(|f| f.get("list"))
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|f| serde_json::from_value(f.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let text_ctx = (chars, fonts);
     if let Some(layers) = doc.get("layers").and_then(Value::as_array) {
-        scan_layers(layers, "layers", &mut out);
+        scan_layers(layers, "layers", &mut out, &text_ctx);
     }
     for (i, asset) in doc
         .get("assets")
@@ -202,7 +248,7 @@ pub fn scan(doc: &Value) -> Vec<Finding> {
             push(&mut out, Feature::ImageAsset, &where_);
         }
         if let Some(layers) = asset.get("layers").and_then(Value::as_array) {
-            scan_layers(layers, &where_, &mut out);
+            scan_layers(layers, &where_, &mut out, &text_ctx);
         }
     }
     out.sort_by(|a, b| a.feature.cmp(&b.feature).then(a.location.cmp(&b.location)));
@@ -228,7 +274,12 @@ fn truthy(v: Option<&Value>) -> bool {
     }
 }
 
-fn scan_layers(layers: &[Value], where_: &str, out: &mut Vec<Finding>) {
+fn scan_layers(
+    layers: &[Value],
+    where_: &str,
+    out: &mut Vec<Finding>,
+    text: &(Vec<crate::lottie::GlyphChar>, Vec<crate::lottie::Font>),
+) {
     for (i, l) in layers.iter().enumerate() {
         let name = l.get("nm").and_then(Value::as_str).unwrap_or("");
         let at = if name.is_empty() {
@@ -239,19 +290,56 @@ fn scan_layers(layers: &[Value], where_: &str, out: &mut Vec<Finding>) {
 
         match l.get("ty").and_then(Value::as_u64) {
             Some(0) | Some(1) | Some(2) | Some(3) | Some(4) => {}
-            Some(5) => push(out, Feature::TextLayer, &at),
+            // Text layers are implemented for a static document against
+            // embedded glyph outlines; the same `text_shapes` call decides
+            // support here and in the lowering, so the two cannot disagree.
+            Some(5) => {
+                let t: Option<crate::lottie::TextData> = l
+                    .get("t")
+                    .and_then(|t| serde_json::from_value(t.clone()).ok());
+                match t {
+                    Some(t) => {
+                        if let Err(refusal) =
+                            crate::lottie::text_shapes(&t, &text.0, &text.1)
+                        {
+                            let feature = match refusal {
+                                crate::lottie::TextRefusal::NoChars => Feature::TextNoChars,
+                                crate::lottie::TextRefusal::AnimatedDocument => {
+                                    Feature::TextAnimated
+                                }
+                                crate::lottie::TextRefusal::Animators => Feature::TextAnimators,
+                                crate::lottie::TextRefusal::Box => Feature::TextBox,
+                                crate::lottie::TextRefusal::Stroke => Feature::TextStroke,
+                                crate::lottie::TextRefusal::Path => Feature::TextPath,
+                                crate::lottie::TextRefusal::GlyphMissing(_) => {
+                                    Feature::TextGlyphMissing
+                                }
+                            };
+                            push(out, feature, &at);
+                        }
+                    }
+                    None => push(out, Feature::TextNoChars, &at),
+                }
+            }
             _ => push(out, Feature::UnknownLayerType, &at),
         }
 
         // Track mattes are implemented for the four AE modes (alpha, alpha
         // inverted, luma, luma inverted). Anything outside that range would be
         // read and dropped, so it still counts as unsupported.
-        if let Some(tt) = l.get("tt").and_then(Value::as_u64) {
-            if !(1..=4).contains(&tt) {
+        if let Some(tt) = l.get("tt").and_then(Value::as_u64)
+            && !(1..=4).contains(&tt) {
                 push(out, Feature::TrackMatte, &at);
             }
-        }
-        if truthy(l.get("bm")) {
+        // Blend modes 1–15 are implemented (CSS `mix-blend-mode`, the same
+        // keywords lottie-web writes); `bm: 0` is normal and exports write it
+        // explicitly. Anything else on `bm` is read and dropped, which is
+        // what the refusal is for.
+        if l
+            .get("bm")
+            .and_then(Value::as_u64)
+            .is_some_and(|bm| bm > 15)
+        {
             push(out, Feature::BlendMode, &at);
         }
         if l.get("sr")
@@ -277,12 +365,11 @@ fn scan_layers(layers: &[Value], where_: &str, out: &mut Vec<Finding>) {
         if let Some(ks) = l.get("ks") {
             // A skew property that is present but zero is not a skew.
             for key in ["sk", "sa"] {
-                if let Some(p) = ks.get(key) {
-                    if property_is_nonzero(p) {
+                if let Some(p) = ks.get(key)
+                    && property_is_nonzero(p) {
                         push(out, Feature::Skew, &at);
                         break;
                     }
-                }
             }
             if ks.get("rx").is_some() || ks.get("ry").is_some() || ks.get("rz").is_some() {
                 push(out, Feature::ThreeD, &at);
@@ -309,11 +396,10 @@ fn scan_layers(layers: &[Value], where_: &str, out: &mut Vec<Finding>) {
             if truthy(m.get("inv")) {
                 push(out, Feature::MaskInverted, &at);
             }
-            if let Some(o) = m.get("o") {
-                if property_differs_from(o, 100.0) {
+            if let Some(o) = m.get("o")
+                && property_differs_from(o, 100.0) {
                     push(out, Feature::MaskOpacity, &at);
                 }
-            }
         }
 
         // Effects that draw. Most of an `ef` list is inert — sliders and
@@ -344,11 +430,26 @@ fn scan_layers(layers: &[Value], where_: &str, out: &mut Vec<Finding>) {
 }
 
 fn scan_shapes(shapes: &[Value], where_: &str, out: &mut Vec<Finding>) {
-    for s in shapes {
+    for (i, s) in shapes.iter().enumerate() {
         let ty = s.get("ty").and_then(Value::as_str).unwrap_or("");
         if !KNOWN_SHAPES.contains(&ty) {
             let feature = match ty {
-                "rp" => Feature::Repeater,
+                // A static repeater expands at lowering; the same `expand`
+                // decides here, so the gate and the compiler agree. Parsing
+                // the slice only when an `rp` is present keeps the common
+                // walk on raw JSON.
+                "rp" => {
+                    let parsed: Option<Vec<crate::lottie::GraphicElement>> =
+                        serde_json::from_value(serde_json::Value::Array(shapes.to_vec())).ok();
+                    let expandable = parsed
+                        .as_ref()
+                        .and_then(|items| crate::lottie::repeat::expand(items, i))
+                        .is_some();
+                    if expandable {
+                        continue;
+                    }
+                    Feature::Repeater
+                }
                 "mm" => Feature::MergePaths,
                 "rd" => Feature::RoundedCorners,
                 "op" => Feature::OffsetPath,
@@ -477,7 +578,7 @@ mod tests {
 
     #[test]
     fn a_finding_is_reported_with_its_layer() {
-        let doc = json!({ "layers": [{ "ty": 4, "nm": "O", "bm": 3, "ks": {} }] });
+        let doc = json!({ "layers": [{ "ty": 4, "nm": "O", "bm": 16, "ks": {} }] });
         let found = scan(&doc);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].feature, Feature::BlendMode);
@@ -525,7 +626,7 @@ mod tests {
 
     #[test]
     fn allowing_a_feature_stops_it_blocking() {
-        let doc = json!({ "layers": [{ "ty": 4, "bm": 3, "ks": {} }] });
+        let doc = json!({ "layers": [{ "ty": 4, "bm": 16, "ks": {} }] });
         let found = scan(&doc);
         assert!(reject(&found, &BTreeSet::new()).is_some());
         let allow = BTreeSet::from([Feature::BlendMode]);
@@ -534,7 +635,7 @@ mod tests {
 
     #[test]
     fn the_error_says_what_ignoring_it_would_do() {
-        let doc = json!({ "layers": [{ "ty": 4, "bm": 3, "ks": {} }] });
+        let doc = json!({ "layers": [{ "ty": 4, "bm": 16, "ks": {} }] });
         let msg = reject(&scan(&doc), &BTreeSet::new()).unwrap();
         assert!(msg.contains("blend-mode"), "{msg}");
         assert!(msg.contains("normal"), "{msg}");

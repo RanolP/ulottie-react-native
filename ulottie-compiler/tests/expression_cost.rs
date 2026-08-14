@@ -35,8 +35,8 @@ fn expression_machinery_cost() {
     names.sort();
 
     println!(
-        "\n{:<20} {:>8} {:>8} {:>8} {:>8} {:>9} {:>7}  {}",
-        "fixture", "module", "engine", "bodies", "strings", "overhead", "records", "strings are"
+        "\n{:<20} {:>8} {:>8} {:>8} {:>8} {:>9} {:>7}  strings are",
+        "fixture", "module", "engine", "bodies", "strings", "overhead", "records"
     );
 
     for name in names {
@@ -165,5 +165,5 @@ fn string_table(pretty: &str) -> Vec<String> {
     let Some(j) = rest.find("\n  ]") else {
         return Vec::new();
     };
-    serde_json::from_str::<Vec<String>>(&rest[..j + 4].trim()).unwrap_or_default()
+    serde_json::from_str::<Vec<String>>(rest[..j + 4].trim()).unwrap_or_default()
 }

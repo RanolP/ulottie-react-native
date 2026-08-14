@@ -1,0 +1,63 @@
+---
+source: ulottie-compiler/tests/frame_snapshot.rs
+expression: snap
+---
+=== sample t=0 frame=0 ===
+Frame frame=0.000000 composition=1080x1920 fr=15.000000
+  Layer #1 "Shape Layer 1" ty=4 opacity=1.000000 visible=true
+    transform=[1.000000 0.000000 0.000000 1.000000 540.000000 960.000000]
+    Group transform=[0.932900 0.000000 0.000000 2.194910 0.000000 0.000000] opacity=1.000000
+      Path d="M580.000000,-440.000000 L580.000000,440.000000 L-580.000000,440.000000 L-580.000000,-440.000000 L580.000000,-440.000000 Z"
+        Stroke color=rgba(0.996078,0.784314,0.145098,1.000000) opacity=100.000000 width=6.000000 lc=1 lj=1 ml=4.000000
+        GradientFill kind=linear rule=nonzero opacity=100.000000 start=(-430.769000,-404.573000) end=(374.412000,342.611000) stops=[(0.000000,rgba(0.000000,0.000000,0.000000,1.000000))]
+  Layer #2 "Deep Red Solid 1" ty=1 opacity=1.000000 visible=true
+    transform=[1.000000 0.000000 0.000000 1.000000 0.000000 0.000000]
+    Unsupported layer ty=1
+
+=== sample t=0.25 frame=38 ===
+Frame frame=38.000000 composition=1080x1920 fr=15.000000
+  Layer #1 "Shape Layer 1" ty=4 opacity=1.000000 visible=true
+    transform=[1.000000 0.000000 0.000000 1.000000 540.000000 960.000000]
+    Group transform=[0.932900 0.000000 0.000000 2.194910 0.000000 0.000000] opacity=1.000000
+      Path d="M580.000000,-440.000000 L580.000000,440.000000 L-580.000000,440.000000 L-580.000000,-440.000000 L580.000000,-440.000000 Z"
+        Stroke color=rgba(0.996078,0.784314,0.145098,1.000000) opacity=100.000000 width=6.000000 lc=1 lj=1 ml=4.000000
+        GradientFill kind=linear rule=nonzero opacity=100.000000 start=(91.159333,-361.913333) end=(-80.669733,364.845033) stops=[(0.000000,rgba(0.000000,0.000000,0.000000,1.000000))]
+  Layer #2 "Deep Red Solid 1" ty=1 opacity=1.000000 visible=true
+    transform=[1.000000 0.000000 0.000000 1.000000 0.000000 0.000000]
+    Unsupported layer ty=1
+
+=== sample t=0.5 frame=77 ===
+Frame frame=77.000000 composition=1080x1920 fr=15.000000
+  Layer #1 "Shape Layer 1" ty=4 opacity=1.000000 visible=true
+    transform=[1.000000 0.000000 0.000000 1.000000 540.000000 960.000000]
+    Group transform=[0.932900 0.000000 0.000000 2.194910 0.000000 0.000000] opacity=1.000000
+      Path d="M580.000000,-440.000000 L580.000000,440.000000 L-580.000000,440.000000 L-580.000000,-440.000000 L580.000000,-440.000000 Z"
+        Stroke color=rgba(0.996078,0.784314,0.145098,1.000000) opacity=100.000000 width=6.000000 lc=1 lj=1 ml=4.000000
+        GradientFill kind=linear rule=nonzero opacity=100.000000 start=(161.799600,-353.480000) end=(-169.169467,397.769467) stops=[(0.000000,rgba(0.000000,0.000000,0.000000,1.000000))]
+  Layer #2 "Deep Red Solid 1" ty=1 opacity=1.000000 visible=true
+    transform=[1.000000 0.000000 0.000000 1.000000 0.000000 0.000000]
+    Unsupported layer ty=1
+
+=== sample t=0.75 frame=116 ===
+Frame frame=116.000000 composition=1080x1920 fr=15.000000
+  Layer #1 "Shape Layer 1" ty=4 opacity=1.000000 visible=true
+    transform=[1.000000 0.000000 0.000000 1.000000 540.000000 960.000000]
+    Group transform=[0.932900 0.000000 0.000000 2.194910 0.000000 0.000000] opacity=1.000000
+      Path d="M580.000000,-440.000000 L580.000000,440.000000 L-580.000000,440.000000 L-580.000000,-440.000000 L580.000000,-440.000000 Z"
+        Stroke color=rgba(0.996078,0.784314,0.145098,1.000000) opacity=100.000000 width=6.000000 lc=1 lj=1 ml=4.000000
+        GradientFill kind=linear rule=nonzero opacity=100.000000 start=(-347.282552,-356.622241) end=(331.850103,370.010069) stops=[(0.000000,rgba(0.000000,0.000000,0.000000,1.000000))]
+  Layer #2 "Deep Red Solid 1" ty=1 opacity=1.000000 visible=true
+    transform=[1.000000 0.000000 0.000000 1.000000 0.000000 0.000000]
+    Unsupported layer ty=1
+
+=== sample t=0.99 frame=153 ===
+Frame frame=153.000000 composition=1080x1920 fr=15.000000
+  Layer #1 "Shape Layer 1" ty=4 opacity=1.000000 visible=true
+    transform=[1.000000 0.000000 0.000000 1.000000 540.000000 960.000000]
+    Group transform=[0.932900 0.000000 0.000000 2.194910 0.000000 0.000000] opacity=1.000000
+      Path d="M580.000000,-440.000000 L580.000000,440.000000 L-580.000000,440.000000 L-580.000000,-440.000000 L580.000000,-440.000000 Z"
+        Stroke color=rgba(0.996078,0.784314,0.145098,1.000000) opacity=100.000000 width=6.000000 lc=1 lj=1 ml=4.000000
+        GradientFill kind=linear rule=nonzero opacity=100.000000 start=(-407.606000,-357.125000) end=(376.797000,364.480000) stops=[(0.000000,rgba(0.000000,0.000000,0.000000,1.000000))]
+  Layer #2 "Deep Red Solid 1" ty=1 opacity=1.000000 visible=true
+    transform=[1.000000 0.000000 0.000000 1.000000 0.000000 0.000000]
+    Unsupported layer ty=1

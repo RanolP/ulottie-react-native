@@ -109,12 +109,11 @@ macro_rules! lower_test {
 
 // Sanity smoke tests with a minimum layer-count expectation so we'd notice if
 // lowering silently dropped layers.
-lower_test!(lower_bouncing_ball, "boucing-ball", 2);
-lower_test!(lower_bouncy_ball, "bouncy_ball", 1);
+lower_test!(lower_bouncing_ball, "boucing_ball", 2);
 lower_test!(lower_ellipse, "ellipse", 1);
 lower_test!(lower_fill, "fill", 1);
 lower_test!(lower_lights, "lights", 5);
-lower_test!(lower_lottie_logo, "lottie-logo", 5);
+lower_test!(lower_lottie_logo_1, "lottie_logo_1", 5);
 lower_test!(lower_precomp_star_circle, "precomp_star_circle", 1);
 lower_test!(lower_rectangle, "rectangle", 1);
 // Ripple has only 2 top-level layers; the rest live inside precomp assets.

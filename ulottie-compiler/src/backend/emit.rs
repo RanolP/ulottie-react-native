@@ -88,7 +88,7 @@ pub fn modules() -> &'static [Mod] {
 ///
 /// Which capability each one needs is [`scene::caps_for_op`], not a column
 /// here — the planner sets the same bits when it binds.
-const OPS: [(u8, &str, &str, &str); 16] = [
+const OPS: [(u8, &str, &str, &str); 17] = [
     (op::TRANSFORM, "bTransform", "oTransform", "ops/tx.js"),
     (op::TRANSLATE, "bTranslate", "oTranslate", "ops/txt.js"),
     (op::OPACITY, "bOpacity", "oOpacity", "ops/opacity.js"),
@@ -115,6 +115,12 @@ const OPS: [(u8, &str, &str, &str); 16] = [
         "ops/shape.js",
     ),
     (op::SHAPE_STAR, "bShapeStar", "oShapeStar", "ops/shape.js"),
+    (
+        op::SHAPE_MULTI,
+        "bShapeMulti",
+        "oShapeMulti",
+        "ops/shape.js",
+    ),
 ];
 
 /// An op's `(bind, apply)` pair. Every code in `scene::op` has one.
@@ -1006,6 +1012,7 @@ mod tests {
             op::SHAPE_RECT,
             op::SHAPE_ELLIPSE,
             op::SHAPE_STAR,
+            op::SHAPE_MULTI,
         ];
         assert_eq!(
             all.len(),

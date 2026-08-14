@@ -156,6 +156,25 @@ impl Planner<'_> {
                 self.bake_shape(b, f, out)
             }
 
+            // Several path properties into one element's `d`; no trim (a
+            // trimmed shape never lands in a bucket). Mirrors `oShapeMulti`.
+            op::SHAPE_MULTI => {
+                let Some(Arg::List(items)) = b.args.first() else {
+                    return;
+                };
+                let mut d = String::new();
+                for it in items {
+                    if let Arg::Prop(p) = it
+                        && let Prop::Path(fp) = self.value_at(p, f)
+                    {
+                        d.push_str(&fp.to_d());
+                    }
+                }
+                if !d.is_empty() {
+                    out.push(("d".into(), d));
+                }
+            }
+
             op::RECT => {
                 let s = self.vec2(prop(0), f, [0.0, 0.0]);
                 let p = self.vec2(prop(1), f, [0.0, 0.0]);
@@ -417,29 +436,24 @@ impl Planner<'_> {
         let mut u = (f - a.t[i]) / span;
         if let Some(ez) = &a.ez {
             let k = ez.get(i).copied().unwrap_or(0) as usize;
-            if k != 0 {
-                if let Some(e) = self.easings.get(k) {
+            if k != 0
+                && let Some(e) = self.easings.get(k) {
                     u = ease(e, u);
                 }
-            }
         }
 
         let start = at(i);
-        let end = match (&a.end, &a.end_paths) {
-            (Some(v), _) if a.kind != AnimKind::Path => key_value(a, v, &a.paths, i),
-            (_, Some(p)) if a.kind == AnimKind::Path => key_value(a, &a.v, p, i),
-            _ => at(i + 1),
-        };
+        let end = at(i + 1);
 
         // Spatial tangents bend the segment and re-pace it by arc length. The
         // runtime tests only the first two components before taking the slow
         // path, so this does too.
-        if a.kind == AnimKind::Vector {
-            if let (Some(to), Some(ti)) = (&a.to, &a.ti) {
+        if a.kind == AnimKind::Vector
+            && let (Some(to), Some(ti)) = (&a.to, &a.ti) {
                 let base = i * a.dim;
                 let live = |c: &[f64], k: usize| c.get(base + k).copied().unwrap_or(0.0) != 0.0;
-                if live(to, 0) || live(to, 1) || live(ti, 0) || live(ti, 1) {
-                    if let (Prop::Vector(p0), Prop::Vector(p1)) = (&start, &end) {
+                if (live(to, 0) || live(to, 1) || live(ti, 0) || live(ti, 1))
+                    && let (Prop::Vector(p0), Prop::Vector(p1)) = (&start, &end) {
                         let d = a.dim.min(p0.len()).min(p1.len());
                         return Prop::Vector(spatial(
                             &p0[..d],
@@ -449,9 +463,7 @@ impl Planner<'_> {
                             u,
                         ));
                     }
-                }
             }
-        }
 
         match (start, end) {
             (Prop::Scalar(x), Prop::Scalar(y)) => Prop::Scalar(x + (y - x) * u),
@@ -580,6 +592,9 @@ fn spatial(a: &[f64], b: &[f64], to: &[f64], ti: &[f64], u: f64) -> Vec<f64> {
     let mut pts = vec![0.0; (SP_SEG + 1) * d];
     let mut cum = vec![0.0; SP_SEG + 1];
     let mut total = 0.0;
+    // `k` addresses three buffers at once (`cum[k]`, this chunk, the chunk
+    // before it), so the index is the loop.
+    #[allow(clippy::needless_range_loop)]
     for k in 0..=SP_SEG {
         let t = k as f64 / SP_SEG as f64;
         let m = 1.0 - t;

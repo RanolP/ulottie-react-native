@@ -186,7 +186,6 @@ impl From<PathValue> for Value {
 pub struct Keyframes {
     pub t: Vec<f64>,
     pub v: Vec<Value>,
-    pub e: Option<Vec<Option<Value>>>,
     pub oi: Option<Vec<EasingPair>>,
     pub to: Option<Vec<Vec<f64>>>,
     pub ti: Option<Vec<Vec<f64>>>,
@@ -199,9 +198,6 @@ impl Serialize for Keyframes {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         let mut fields = 2;
-        if self.e.is_some() {
-            fields += 1;
-        }
         if self.oi.is_some() {
             fields += 1;
         }
@@ -218,9 +214,6 @@ impl Serialize for Keyframes {
         let qt: Vec<f64> = self.t.iter().map(|n| q(*n)).collect();
         st.serialize_field("t", &qt)?;
         st.serialize_field("v", &self.v)?;
-        if let Some(e) = &self.e {
-            st.serialize_field("e", e)?;
-        }
         if let Some(oi) = &self.oi {
             st.serialize_field("oi", oi)?;
         }
@@ -293,6 +286,9 @@ pub struct ExprProp {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "t")]
+// Written once at encode and read by reference thereafter; the size skew
+// between `Rect` and `PolyStar` is not worth boxing seven fields over.
+#[allow(clippy::large_enum_variant)]
 pub enum Shape {
     #[serde(rename = "r")]
     Rect {
@@ -338,6 +334,9 @@ pub enum Shape {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "t")]
+// Same deal as `Shape`: encode-time data, one materialization, the gradient
+// variants simply carry more.
+#[allow(clippy::large_enum_variant)]
 pub enum Style {
     #[serde(rename = "fl")]
     Fill { c: InlineProp, o: InlineProp },
@@ -416,6 +415,13 @@ pub struct Layer {
     /// This layer is a matte source: it is not drawn, it masks the next one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub td: Option<u8>,
+    /// Blend mode (`bm`), 1–15: multiply, screen, overlay, darken, lighten,
+    /// color-dodge, color-burn, hard-light, soft-light, difference,
+    /// exclusion, hue, saturation, color, luminosity. Emitted as CSS
+    /// `mix-blend-mode` on the layer group, the same spelling lottie-web
+    /// writes. 0 (normal) is absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bm: Option<u8>,
     #[serde(skip_serializing_if = "is_one_f64")]
     pub sr: f64,
 
@@ -496,7 +502,10 @@ pub struct EffectParam {
 #[serde(untagged)]
 pub enum ShapeRef {
     Prim(PrimRef),
-    Group(GroupRef),
+    /// Boxed: `GroupRef` is an order of magnitude larger than `PrimRef`, and
+    /// a `Vec<ShapeRef>` is cloned per scene plan — the indirection keeps
+    /// every `Prim` in it from paying for the groups.
+    Group(Box<GroupRef>),
 }
 
 #[derive(Debug, Clone, Serialize, Default)]

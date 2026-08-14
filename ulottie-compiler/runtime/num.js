@@ -10,12 +10,12 @@
 // byte-identical over 7434 real interpolated values, and measured 2.36× faster
 // in isolation — and it was still reverted:
 //
-//   • A CDP sampling profile puts `fmt` at 3.0% of frame time on `lottie-logo`
+//   • A CDP sampling profile puts `fmt` at 3.0% of frame time on `lottie_logo_1`
 //     (the most format-heavy fixture) and below the top twelve on `ripple`, so
 //     2.36× caps out at a 1.7% win.
 //   • End-to-end frame time, alternating four runs, showed no effect outside
 //     noise.
-//   • It cost +118 B gzipped on `lottie-logo`, +2.2% of the whole module.
+//   • It cost +118 B gzipped on `lottie_logo_1`, +2.2% of the whole module.
 //
 // The profile says the time is in path-string assembly (`pathD` + `pdPair` +
 // `pdSep`, 15% together) and in `setAttribute` and `evalExpr` — not here.

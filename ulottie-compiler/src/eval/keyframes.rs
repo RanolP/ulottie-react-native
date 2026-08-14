@@ -42,15 +42,14 @@ pub fn interpolate(kf: &Keyframes, frame: f64) -> Result<Value> {
         0.0
     };
     // Start value. Lottie's "hold-last" pattern sometimes leaves `v[i]` as
-    // an empty vector when this keyframe only exists to mark the end of the
-    // previous segment — in that case fall back to `e[i-1]` or `v[i-1]`.
+    // an empty vector when this keyframe only exists to mark the end of
+    // the previous segment — in that case fall back to `v[i-1]`. (The
+    // legacy `e` spelling of a segment's end was normalized into the next
+    // keyframe's start value at the parse boundary.)
     let v0_owned = resolve_start(kf, i);
     let v0: &Value = &v0_owned;
-    // End value: prefer Lottie's older `e[i]` if present, else next keyframe.
-    let v1_owned =
-        kf.e.as_ref()
-            .and_then(|e| e.get(i).and_then(|x| x.clone()))
-            .unwrap_or_else(|| resolve_start(kf, i + 1));
+    // End value: the next keyframe's start.
+    let v1_owned = resolve_start(kf, i + 1);
     let v1: &Value = &v1_owned;
 
     // A held keyframe keeps its value for the whole segment.
@@ -72,17 +71,15 @@ pub fn interpolate(kf: &Keyframes, frame: f64) -> Result<Value> {
 
     // Spatial bezier (cubic motion path in 2D/3D). Only when both `to` and
     // `ti` exist AND both endpoints are vectors of the same dimension.
-    if let (Some(to_arr), Some(ti_arr)) = (&kf.to, &kf.ti) {
-        if let (Value::Vector(a), Value::Vector(b)) = (v0, v1) {
-            if a.len() == b.len() && i < to_arr.len() && i < ti_arr.len() {
+    if let (Some(to_arr), Some(ti_arr)) = (&kf.to, &kf.ti)
+        && let (Value::Vector(a), Value::Vector(b)) = (v0, v1)
+            && a.len() == b.len() && i < to_arr.len() && i < ti_arr.len() {
                 let to = &to_arr[i];
                 let ti = &ti_arr[i];
                 if to.len() == a.len() && ti.len() == a.len() {
                     return Ok(Value::Vector(spatial_bezier(a, b, to, ti, u)));
                 }
             }
-        }
-    }
 
     Ok(lerp_value(v0, v1, u))
 }
@@ -97,8 +94,8 @@ fn find_segment(t: &[f64], frame: f64) -> usize {
 }
 
 /// Resolve the "real" value at keyframe `i`. Lottie sometimes stores empty
-/// vectors at hold-last keyframes — fall back through `e[i-1]` then `v[i-1]`
-/// to recover something meaningful. Mirrors driver.js behavior.
+/// vectors at hold-last keyframes — fall back to `v[i-1]` to recover something
+/// meaningful. Mirrors driver.js behavior.
 fn resolve_start(kf: &Keyframes, i: usize) -> Value {
     if i >= kf.v.len() {
         return last_valid(kf);
@@ -106,18 +103,8 @@ fn resolve_start(kf: &Keyframes, i: usize) -> Value {
     if !is_empty(&kf.v[i]) {
         return kf.v[i].clone();
     }
-    if i > 0 {
-        if let Some(e) =
-            kf.e.as_ref()
-                .and_then(|e| e.get(i - 1).and_then(|x| x.clone()))
-        {
-            if !is_empty(&e) {
-                return e;
-            }
-        }
-        if !is_empty(&kf.v[i - 1]) {
-            return kf.v[i - 1].clone();
-        }
+    if i > 0 && !is_empty(&kf.v[i - 1]) {
+        return kf.v[i - 1].clone();
     }
     kf.v[i].clone()
 }
@@ -132,22 +119,10 @@ fn first_valid(kf: &Keyframes) -> Value {
 }
 
 fn last_valid(kf: &Keyframes) -> Value {
-    // Walk backwards through v[], skipping holds-with-empty-vector. If the
-    // last non-empty value lives in e[i-1], that wins (the segment that ended
-    // *at* the last keyframe).
-    for i in (0..kf.v.len()).rev() {
-        if !is_empty(&kf.v[i]) {
-            return kf.v[i].clone();
-        }
-        if i > 0 {
-            if let Some(e) =
-                kf.e.as_ref()
-                    .and_then(|e| e.get(i - 1).and_then(|x| x.clone()))
-            {
-                if !is_empty(&e) {
-                    return e;
-                }
-            }
+    // Walk backwards through v[], skipping holds-with-empty-vector.
+    for v in kf.v.iter().rev() {
+        if !is_empty(v) {
+            return v.clone();
         }
     }
     kf.v[kf.v.len() - 1].clone()

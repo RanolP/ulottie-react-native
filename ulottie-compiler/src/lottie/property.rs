@@ -7,13 +7,41 @@ pub struct AnimatedProperty {
     #[serde(rename = "a")]
     pub animated: Option<u8>,
 
-    #[serde(rename = "k")]
+    /// The keyframes, with Lottie's legacy end-value form already normalized
+    /// away — see [`normalize_keyframes`].
+    #[serde(rename = "k", deserialize_with = "normalize_keyframes")]
     pub keyframes: Vec<Keyframe>,
 
     pub ix: Option<u32>,
 
     /// Lottie expression (After Effects expression pre-transpiled to JS by Bodymovin)
     pub x: Option<String>,
+}
+
+/// Fold the legacy keyframe form into the modern one, at the parse boundary.
+///
+/// Lottie's older encoding puts a segment's *destination* in `e` on the
+/// keyframe that starts it, and leaves the final keyframe a bare terminator
+/// with no `s`. The modern encoding gives every keyframe a start value and
+/// interpolates to the next one. The resolution — the one lottie-web applies
+/// as `nextKeyData.s || keyData.e` — is to fill a missing `s` from the
+/// previous keyframe's `e`, letting `s` win when both exist, and then `e` is
+/// dead. Normalizing here means nothing downstream (IR, wire, runtime) ever
+/// carries a second spelling of a segment's end value.
+fn normalize_keyframes<'de, D>(d: D) -> Result<Vec<Keyframe>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut kfs = Vec::<Keyframe>::deserialize(d)?;
+    for i in 1..kfs.len() {
+        if kfs[i].start_value.is_none() {
+            kfs[i].start_value = kfs[i - 1].end_value.take();
+        }
+    }
+    for kf in &mut kfs {
+        kf.end_value = None;
+    }
+    Ok(kfs)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -112,5 +140,46 @@ impl Property {
             Property::Split(s) => Some(s),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The legacy form's destination (`e` on the segment's first keyframe,
+    /// terminator with no `s`) folds into the next keyframe's start value, and
+    /// no `e` survives the parse. `next.s` wins when both exist — the
+    /// precedence lottie-web applies.
+    #[test]
+    fn legacy_end_values_fold_into_start_values() {
+        let p: AnimatedProperty = serde_json::from_str(
+            r#"{"a":1,"k":[
+                {"t":0,"s":[0],"e":[2.333],"o":{"x":0.3,"y":0},"i":{"x":0.7,"y":1}},
+                {"t":140}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(p.keyframes.len(), 2);
+        assert_eq!(p.keyframes[0].start_numbers().as_deref(), Some(&[0.0][..]));
+        assert_eq!(
+            p.keyframes[1].start_numbers().as_deref(),
+            Some(&[2.333][..]),
+            "the terminator inherits the previous keyframe's `e`"
+        );
+        assert!(p.keyframes.iter().all(|k| k.end_value.is_none()));
+    }
+
+    #[test]
+    fn an_explicit_next_start_beats_a_legacy_end() {
+        let p: AnimatedProperty = serde_json::from_str(
+            r#"{"a":1,"k":[
+                {"t":0,"s":[0],"e":[9]},
+                {"t":10,"s":[1]}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(p.keyframes[1].start_numbers().as_deref(), Some(&[1.0][..]));
+        assert!(p.keyframes.iter().all(|k| k.end_value.is_none()));
     }
 }

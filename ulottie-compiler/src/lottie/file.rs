@@ -34,6 +34,15 @@ pub struct Animation {
     #[serde(default)]
     pub assets: Vec<Asset>,
 
+    /// Glyph outlines for text layers, matched by character, style and
+    /// family. Text without these is refused (there is nothing to instance).
+    #[serde(default)]
+    pub chars: Vec<super::text::GlyphChar>,
+
+    /// Font metadata for text layers (name, family, style, ascent).
+    #[serde(default)]
+    pub fonts: Option<super::text::Fonts>,
+
     pub meta: Option<serde_json::Value>,
 
     #[serde(default)]
@@ -133,6 +142,10 @@ pub struct Layer {
     pub ao: Option<u8>,
 
     pub shapes: Option<Vec<GraphicElement>>,
+
+    /// Text layer (ty=5) document data. Lowered to shapes via
+    /// `lottie::text::text_shapes` against the composition's `chars`.
+    pub t: Option<super::text::TextData>,
 
     // Solid layer (ty=1) fields
     pub sw: Option<u32>,

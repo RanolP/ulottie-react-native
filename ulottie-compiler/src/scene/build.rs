@@ -37,6 +37,14 @@ pub enum TimeCtx {
     Inner { parent: u32, offset: f64 },
 }
 
+/// The classified transform properties of one record-backed layer.
+struct TxParts {
+    p: Option<Prop>,
+    a: Option<Prop>,
+    s: Option<Prop>,
+    r: Option<Prop>,
+}
+
 struct LayerNode {
     outer: usize,
     /// What the parent (or the root list) actually attaches. Normally `outer`;
@@ -98,6 +106,19 @@ impl Planner<'_> {
             // ruled out at compile time the way a root layer can.
             TimeCtx::Inner { .. } => vec![false; layers.len()],
         };
+        // A matte source keeps its subtree however transparent it is — the
+        // mask needs it. Everything else that is *statically* transparent
+        // draws nothing, and `inert` below is the transform-only treatment.
+        let matte_source_only = |i: usize| {
+            layers[i].td.is_some_and(|t| t != 0)
+                || layers.iter().any(|m| m.tp == Some(i as u32))
+        };
+        let transparent = |l: &data::Layer| {
+            matches!(
+                l.o.as_ref(),
+                Some(data::InlineProp::Static(data::Value::Scalar(0.0)))
+            )
+        };
         let nested = nesting_preserves_order(layers, &dead);
 
         // A null draws nothing: it is in the document only so its children can
@@ -105,7 +126,17 @@ impl Planner<'_> {
         // the null's own group would be an empty node writing a matrix nobody
         // reads — starfish parents thirteen layers to one. Suppressing the
         // transform leaves the group empty and unpinned, which pruning removes.
-        let inert = |i: usize| !nested && layers[i].ty == 3;
+        // `inert` marks a layer that will draw nothing and be inherited from
+        // by children only: a null, and a layer whose opacity is statically
+        // zero (`lottie_logo_2` parks nine white solids at `o: 0` purely as
+        // transform anchors — rendering them as `opacity="0"` rects matched
+        // pixels and nothing else, and carried geometry no gate could see).
+        // A matte source is content even when transparent, so it stays.
+        let inert = |i: usize| {
+            !nested
+                && (layers[i].ty == 3
+                    || (transparent(&layers[i]) && !matte_source_only(i)))
+        };
 
         let outer_scope = self.scope;
         self.scope = scope;
@@ -119,11 +150,10 @@ impl Planner<'_> {
         // whole composition has been walked.
         if self.has_exprs {
             for (i, l) in layers.iter().enumerate() {
-                if let (Some(pr), Some(rec)) = (l.pr, nodes[i].record) {
-                    if let Some(prec) = nodes.get(pr as usize).and_then(|n| n.record) {
+                if let (Some(pr), Some(rec)) = (l.pr, nodes[i].record)
+                    && let Some(prec) = nodes.get(pr as usize).and_then(|n| n.record) {
                         self.layers[rec as usize].pr = Some(prec);
                     }
-                }
             }
         }
         // Track mattes. A layer carrying `td` is a matte: it is never drawn on
@@ -254,16 +284,8 @@ impl Planner<'_> {
     /// A layer transform whose properties live in the expression layer table:
     /// baked into the markup when nothing about it can move, a reference to
     /// the table's record when something can.
-    fn emit_record_transform(
-        &mut self,
-        el: usize,
-        p: Option<Prop>,
-        a: Option<Prop>,
-        s: Option<Prop>,
-        r: Option<Prop>,
-        rec: u32,
-        slot: u32,
-    ) {
+    fn emit_record_transform(&mut self, el: usize, parts: TxParts, rec: u32, slot: u32) {
+        let TxParts { p, a, s, r } = parts;
         let dp = p.unwrap_or(Prop::Vector(vec![0.0, 0.0, 0.0]));
         let da = a.unwrap_or(Prop::Vector(vec![0.0, 0.0, 0.0]));
         let ds = s.unwrap_or(Prop::Vector(vec![100.0, 100.0, 100.0]));
@@ -300,7 +322,7 @@ impl Planner<'_> {
             Some(rec) => {
                 let e = &self.layers[rec as usize];
                 let (p, an, s, r) = (e.p.clone(), e.a.clone(), e.sc.clone(), e.r.clone());
-                self.emit_record_transform(el, p, an, s, r, rec, nodes[a].slot);
+                self.emit_record_transform(el, TxParts { p, a: an, s, r }, rec, nodes[a].slot);
             }
             None => self.emit_transform(
                 el,
@@ -441,6 +463,21 @@ impl Planner<'_> {
 
         let outer = self.el("g");
         let has_content = layer.ty != 3;
+        // Blend mode, the same spelling lottie-web writes
+        // (`setBlendMode`): CSS `mix-blend-mode` on the layer's own group —
+        // inside any matte wrapper, so the mode applies to the layer against
+        // what is underneath it, exactly as in AE. Only 1–15 exist; 0 is
+        // normal and never written.
+        if let Some(bm) = layer.bm {
+            const MODES: [&str; 16] = [
+                "", "multiply", "screen", "overlay", "darken", "lighten", "color-dodge",
+                "color-burn", "hard-light", "soft-light", "difference", "exclusion",
+                "hue", "saturation", "color", "luminosity",
+            ];
+            if let Some(mode) = MODES.get(bm as usize).filter(|m| !m.is_empty()) {
+                self.set(outer, "style", format!("mix-blend-mode:{mode}"));
+            }
+        }
         // A precomp layer is clipped to the composition it references.
         // lottie-web gives every `ty: 0` layer a `clipPath` of `w × h`, so
         // anything authored outside that frame does not draw; nothing here did,
@@ -511,10 +548,7 @@ impl Planner<'_> {
             if !inert {
                 self.emit_record_transform(
                     outer,
-                    pp.clone(),
-                    ap.clone(),
-                    sp.clone(),
-                    rp.clone(),
+                    TxParts { p: pp.clone(), a: ap.clone(), s: sp.clone(), r: rp.clone() },
                     rec,
                     slot,
                 );
@@ -895,10 +929,8 @@ impl Planner<'_> {
             if let Some(pr) = r.pr {
                 r.pr = Some(pr - delta);
             }
-            for p in [&mut r.p, &mut r.a, &mut r.sc, &mut r.r, &mut r.o, &mut r.h] {
-                if let Some(p) = p {
-                    rebase_prop(p, delta);
-                }
+            for p in [&mut r.p, &mut r.a, &mut r.sc, &mut r.r, &mut r.o, &mut r.h].into_iter().flatten() {
+                rebase_prop(p, delta);
             }
             for e in &mut r.ef {
                 for p in &mut e.ef {
@@ -909,11 +941,10 @@ impl Planner<'_> {
             }
         }
         for b in &mut bindings {
-            if b.op == op::LAYER_TX || b.op == op::LAYER_OP {
-                if let Some(Arg::Num(n)) = b.args.first_mut() {
+            if (b.op == op::LAYER_TX || b.op == op::LAYER_OP)
+                && let Some(Arg::Num(n)) = b.args.first_mut() {
                     *n -= delta as f64;
                 }
-            }
             for a in &mut b.args {
                 rebase_arg(a, delta);
             }
@@ -967,7 +998,7 @@ impl Planner<'_> {
     ///
     /// 1 = alpha, 2 = alpha inverted, 3 = luma, 4 = luma inverted. Alpha modes
     /// use `mask-type="alpha"` so the matte's own coverage is what shows
-    /// through — a stroked, trimmed matte like `lottie-logo`'s has no
+    /// through — a stroked, trimmed matte like `lottie_logo_1`'s has no
     /// luminance to speak of, only alpha.
     ///
     /// Inversion goes through a filter rather than the usual white-rect trick:
@@ -1275,6 +1306,130 @@ impl Planner<'_> {
     // Shapes
     // -----------------------------------------------------------------------
 
+    /// One style element per paint style for a group whose children are all
+    /// untrimmed bezier paths — see `build_shape_ref`. Returns false (having
+    /// emitted nothing) when the group does not qualify, so the caller falls
+    /// back to per-primitive emission.
+    fn try_style_buckets(&mut self, parent: usize, children: &[ShapeRef], slot: u32) -> Result<bool> {
+        // Every child must be an untrimmed path primitive with paint; a
+        // subgroup or a trimmed/generated shape keeps the per-primitive walk.
+        let mut prims = Vec::new();
+        for c in children {
+            let ShapeRef::Prim(prim) = c else { return Ok(false) };
+            let Some(shape) = self.payload.s.get(prim.s as usize) else {
+                return Ok(false);
+            };
+            if !matches!(shape, Shape::Path { .. }) || prim.tm.is_some() || prim.y.is_empty() {
+                return Ok(false);
+            }
+            prims.push(prim);
+        }
+        // Classify geometry up front — a bailing classification must happen
+        // before the first element is emitted. An expression-driven path is
+        // not bucketable: the multi op has no expression column.
+        let mut props = Vec::with_capacity(prims.len());
+        for prim in &prims {
+            let Shape::Path { pt, .. } = self.payload.s.get(prim.s as usize).unwrap() else {
+                unreachable!();
+            };
+            let p = self.classify(pt, 2);
+            if matches!(&p, Prop::Expr { .. }) {
+                return Ok(false);
+            }
+            if !p.is_static() {
+                self.caps |= Caps::PATH_KF;
+            }
+            props.push(p);
+        }
+        // Distinct paint styles, in walk-encounter order.
+        let mut fill_styles: Vec<u32> = Vec::new();
+        let mut stroke_styles: Vec<u32> = Vec::new();
+        for prim in &prims {
+            for id in prim.y.iter().rev() {
+                match self.payload.y.get(*id as usize) {
+                    Some(Style::Fill { .. } | Style::GradientFill { .. }) => {
+                        if !fill_styles.contains(id) {
+                            fill_styles.push(*id);
+                        }
+                    }
+                    Some(Style::Stroke { .. } | Style::GradientStroke { .. }) => {
+                        if !stroke_styles.contains(id) {
+                            stroke_styles.push(*id);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // One fill and one stroke, each painting at most one shape, is the
+        // combined-element case the per-primitive walk already handles (with
+        // `paint-order`). Anything more — a second style, or a style that
+        // paints several shapes — buckets: lottie-web concatenates every
+        // shape a style paints into that style's one element.
+        let mut multi = fill_styles.len() > 1 || stroke_styles.len() > 1;
+        if !multi {
+            'outer: for id in fill_styles.iter().chain(&stroke_styles) {
+                let mut n = 0;
+                for prim in &prims {
+                    if prim.y.contains(id) {
+                        n += 1;
+                        if n > 1 {
+                            multi = true;
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+        }
+        if !multi {
+            return Ok(false);
+        }
+        for (is_fill, ids) in [(true, &fill_styles), (false, &stroke_styles)] {
+            for id in ids {
+                let Some(st) = self.payload.y.get(*id as usize).cloned() else {
+                    continue;
+                };
+                let el = self.el("path");
+                self.els[parent].children.push(el);
+                // Every shape this style paints, in walk order; for one
+                // element the subpath order is irrelevant to the fill.
+                let mut bucket = Vec::new();
+                for (prim, p) in prims.iter().zip(&props) {
+                    if prim.y.contains(id) {
+                        bucket.push(p.clone());
+                    }
+                }
+                let all_static = bucket.iter().all(|p| p.is_static());
+                if all_static {
+                    let mut d = String::new();
+                    for p in &bucket {
+                        if let Prop::Path(fp) = p {
+                            d.push_str(&fp.to_d());
+                        }
+                    }
+                    if !d.is_empty() {
+                        self.set(el, "d", d);
+                    }
+                } else {
+                    let mut list = Vec::with_capacity(bucket.len() + 1);
+                    // A list section carries no count of its own (the trim
+                    // triple is fixed-length), so the count rides along as
+                    // the first raw element.
+                    list.push(Arg::Num(bucket.len() as f64));
+                    list.extend(bucket.into_iter().map(Arg::Prop));
+                    self.bind(op::SHAPE_MULTI, el, vec![Arg::List(list)], slot);
+                }
+                if is_fill {
+                    self.emit_fill(el, &st, slot);
+                } else {
+                    self.set(el, "fill", "none");
+                    self.emit_stroke(el, &st, slot);
+                }
+            }
+        }
+        Ok(true)
+    }
+
     fn build_shape_ref(&mut self, parent: usize, sr: &ShapeRef, slot: u32) -> Result<()> {
         match sr {
             ShapeRef::Group(g) => {
@@ -1289,6 +1444,19 @@ impl Planner<'_> {
                     slot,
                 );
                 self.emit_opacity(node, g.o.as_ref(), slot);
+                // lottie-web gives every style ONE element and writes each
+                // shape it paints into that element — so contours that share
+                // a style share a fill rule, and their windings interact.
+                // That is how a group with two fills over the same shapes
+                // composes (`[sh, sh, mm, fl, sh, fl, tr]` — bootymovin's
+                // heart), and it is also what makes a dropped `mm` modifier
+                // invisible on static shapes. One fill and one stroke stay
+                // the combined single element with `paint-order`, which is
+                // the measured equivalent; more than that, or more than one
+                // shape per style, buckets per style.
+                if self.try_style_buckets(node, &g.c, slot)? {
+                    return Ok(());
+                }
                 for child in &g.c {
                     self.build_shape_ref(node, child, slot)?;
                 }
@@ -1311,6 +1479,70 @@ impl Planner<'_> {
                 let trim = prim
                     .tm
                     .and_then(|id| self.payload.y.get(id as usize).cloned());
+                // lottie-web's `setElementStyles` draws a shape into *every*
+                // style element open below it in the walk — a shape between
+                // two fills lands in both, duplicated, the lower style's
+                // element first. A group like `[sh, sh, mm, fl, sh, fl, tr]`
+                // relies on it: its two upper contours appear in
+                // both the dark and the pink element, and their winding
+                // interacts *within* each. Collapsing to the first fill per
+                // kind — an equivalence that holds only while the top paint is
+                // opaque and unholed — is what one-element emission did.
+                //
+                // More than one fill-ish or more than one stroke-ish style:
+                // one element per paint, in the walk's encounter order
+                // (deepest first), geometry duplicated. The single-fill +
+                // single-stroke shape keeps its one element and its
+                // `paint-order`, which is the measured equivalent of
+                // lottie-web's two.
+                let fill_count = prim
+                    .y
+                    .iter()
+                    .filter(|id| {
+                        matches!(
+                            self.payload.y.get(**id as usize),
+                            Some(Style::Fill { .. } | Style::GradientFill { .. })
+                        )
+                    })
+                    .count();
+                let stroke_count = prim
+                    .y
+                    .iter()
+                    .filter(|id| {
+                        matches!(
+                            self.payload.y.get(**id as usize),
+                            Some(Style::Stroke { .. } | Style::GradientStroke { .. })
+                        )
+                    })
+                    .count();
+                if fill_count > 1 || stroke_count > 1 {
+                    for id in prim.y.iter().rev() {
+                        let Some(st) = self.payload.y.get(*id as usize).cloned() else {
+                            continue;
+                        };
+                        let is_fill =
+                            matches!(st, Style::Fill { .. } | Style::GradientFill { .. });
+                        let is_stroke = !is_fill
+                            && matches!(
+                                st,
+                                Style::Stroke { .. } | Style::GradientStroke { .. }
+                            );
+                        if !is_fill && !is_stroke {
+                            continue;
+                        }
+                        let Some(node) = self.build_primitive(&shape, trim.as_ref(), slot) else {
+                            continue;
+                        };
+                        self.els[parent].children.push(node);
+                        if is_fill {
+                            self.emit_fill(node, &st, slot);
+                        } else {
+                            self.set(node, "fill", "none");
+                            self.emit_stroke(node, &st, slot);
+                        }
+                    }
+                    return Ok(());
+                }
                 let node = self.build_primitive(&shape, trim.as_ref(), slot);
                 let Some(node) = node else { return Ok(()) };
                 self.els[parent].children.push(node);
@@ -1952,7 +2184,7 @@ impl Planner<'_> {
             let flags: Vec<u8> = (0..segments)
                 .map(|i| h.get(i).copied().unwrap_or(false) as u8)
                 .collect();
-            flags.iter().any(|f| *f == 1).then_some(flags)
+            flags.contains(&1).then_some(flags)
         });
         if holds.is_some() {
             self.caps |= Caps::HOLD;
@@ -1969,40 +2201,9 @@ impl Planner<'_> {
             ),
         };
 
-        // Legacy `e` end-values only need shipping when they disagree with the
-        // following keyframe's start value.
-        let mut end: Option<Vec<f64>> = None;
-        let mut end_paths: Option<Vec<FlatPath>> = None;
-        if let Some(e) = &kf.e {
-            let differs = (0..segments).any(|i| match e.get(i).and_then(|x| x.as_ref()) {
-                Some(ev) => !value_eq(ev, &values[i + 1]),
-                None => false,
-            });
-            if differs {
-                match kind {
-                    AnimKind::Path => {
-                        end_paths = Some(
-                            (0..segments)
-                                .map(|i| match e.get(i).and_then(|x| x.as_ref()) {
-                                    Some(ev) => path_of(ev),
-                                    None => path_of(&values[i + 1]),
-                                })
-                                .collect(),
-                        );
-                    }
-                    _ => {
-                        end = Some(
-                            (0..segments)
-                                .flat_map(|i| match e.get(i).and_then(|x| x.as_ref()) {
-                                    Some(ev) => flatten(ev, dim),
-                                    None => flatten(&values[i + 1], dim),
-                                })
-                                .collect(),
-                        );
-                    }
-                }
-            }
-        }
+        // (Legacy `e` end-values were normalized into the following
+        // keyframe's start value at the parse boundary; a segment's
+        // destination is always the next keyframe's start.)
 
         let mut to = None;
         let mut ti = None;
@@ -2024,8 +2225,6 @@ impl Planner<'_> {
             t: kf.t.clone(),
             v,
             paths,
-            end,
-            end_paths,
             ez: if any_easing { Some(ez) } else { None },
             hold: holds,
             to,
@@ -2073,7 +2272,6 @@ fn ramp_prop(ramp: &crate::eval::gradient::AnimatedRamp, values: &[[f64; 4]]) ->
     InlineProp::Animated(Keyframes {
         t: ramp.times.clone(),
         v: values.iter().map(|v| Value::Vector(v.to_vec())).collect(),
-        e: None,
         oi: (!linear).then(|| {
             ramp.easing
                 .iter()
@@ -2288,17 +2486,8 @@ fn resolve_at(kf: &data::Keyframes, i: usize) -> Value {
     if !is_value_empty(&kf.v[i]) {
         return kf.v[i].clone();
     }
-    if i > 0 {
-        if let Some(e) =
-            kf.e.as_ref()
-                .and_then(|e| e.get(i - 1).and_then(|x| x.clone()))
-            && !is_value_empty(&e)
-        {
-            return e;
-        }
-        if !is_value_empty(&kf.v[i - 1]) {
-            return kf.v[i - 1].clone();
-        }
+    if i > 0 && !is_value_empty(&kf.v[i - 1]) {
+        return kf.v[i - 1].clone();
     }
     for j in i + 1..n {
         if !is_value_empty(&kf.v[j]) {
