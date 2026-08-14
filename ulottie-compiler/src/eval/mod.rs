@@ -140,7 +140,9 @@ fn render_shape_ref(payload: &Payload, sr: &ShapeRef, frame: f64) -> Result<Shap
                     .ok_or_else(|| anyhow!("style ref {} out of range", yid))?;
                 styles.push(build_style(style, frame)?);
             }
-            if let Some(tm) = prim.tm {
+            // The whole chain, in application order — a shape under a group
+            // trim and a layer trim reports both.
+            for &tm in &prim.tm {
                 let style = payload
                     .y
                     .get(tm as usize)

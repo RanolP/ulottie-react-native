@@ -327,22 +327,30 @@ impl Planner<'_> {
             _ => return,
         };
 
-        // The trim triple is always the last argument, and `Null` when absent.
+        // The trim chain is always the last argument, and `Null` when absent:
+        // `[count, (s, e, o, mode) × count]`, steps in application order.
         let Some(Arg::List(t)) = b.args.last() else {
             out.push(("d".into(), path.to_d()));
             return;
+        };
+        let count = match t.first() {
+            Some(Arg::Num(n)) => *n as usize,
+            _ => 0,
         };
         let tp = |i: usize| match t.get(i) {
             Some(Arg::Prop(p)) => self.value_at(p, f).as_scalar().unwrap_or(0.0),
             _ => 0.0,
         };
+        let steps: Vec<(f64, f64, f64)> = (0..count)
+            .map(|j| (tp(1 + j * 4), tp(2 + j * 4), tp(3 + j * 4)))
+            .collect();
         let src = crate::eval::trim::Flat {
             v: path.v.clone(),
             i: path.i.clone(),
             o: path.o.clone(),
             c: path.c,
         };
-        match crate::eval::trim::trim(&src, tp(0), tp(1), tp(2)) {
+        match crate::eval::trim::trim_chain(&src, &steps) {
             crate::eval::trim::Trimmed::Whole => out.push(("d".into(), path.to_d())),
             crate::eval::trim::Trimmed::Empty => out.push(hidden()),
             crate::eval::trim::Trimmed::Path(p) => out.push((

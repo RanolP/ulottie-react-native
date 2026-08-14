@@ -143,6 +143,10 @@ bitflags! {
         /// and sharing one would ship the multi loop with every ordinary
         /// shape animation.
         const SHAPE_MULTI  = 1 << 32;
+        /// A shape under more than one live trim (a group trim nested inside
+        /// a layer trim). Its own bit, not `TRIM`'s: the composing helpers
+        /// would otherwise ship with every ordinarily-trimmed animation.
+        const TRIM_CHAIN   = 1 << 33;
     }
 }
 

@@ -87,6 +87,48 @@ pub enum Trimmed {
     Path(Flat),
 }
 
+/// Collapse sequential trim steps `(start%, end%, offset°)` into one
+/// arc-fraction window `(start, length)` over the source path.
+///
+/// Sequential trims compose exactly in fraction space: a sub-range of a
+/// trimmed path is a sub-range of the original, because an arc-length
+/// parametrization restricted to a window is still arc-length. The first
+/// step works on the source, so its offset may wrap a closed contour — the
+/// final cut resolves that. Every later step works on the *open* result of
+/// the one before, where a window outside `[0,1]` clamps (the same
+/// convention a single trim uses for an offset on an open path).
+pub fn compose(steps: &[(f64, f64, f64)]) -> (f64, f64) {
+    let (s, e, o) = steps[0];
+    let (s, e) = (s / 100.0, e / 100.0);
+    let (lo, hi) = if s < e { (s, e) } else { (e, s) };
+    let mut a = lo + o / 360.0;
+    let mut l = hi - lo;
+    for &(s2, e2, o2) in &steps[1..] {
+        let (s2, e2) = (s2 / 100.0, e2 / 100.0);
+        let (lo2, hi2) = if s2 < e2 { (s2, e2) } else { (e2, s2) };
+        let lo2 = (lo2 + o2 / 360.0).clamp(0.0, 1.0);
+        let hi2 = (hi2 + o2 / 360.0).clamp(0.0, 1.0);
+        a += l * lo2;
+        l *= hi2 - lo2;
+    }
+    (a, l)
+}
+
+/// A chain of trims applied inner-first, as one cut.
+///
+/// One step goes through [`trim`] directly so a single trim keeps its exact
+/// arithmetic; a longer chain composes first and cuts once.
+pub fn trim_chain(path: &Flat, steps: &[(f64, f64, f64)]) -> Trimmed {
+    match steps {
+        [] => Trimmed::Whole,
+        [(s, e, o)] => trim(path, *s, *e, *o),
+        _ => {
+            let (a, l) = compose(steps);
+            trim(path, a * 100.0, (a + l) * 100.0, 0.0)
+        }
+    }
+}
+
 /// Trim `path` to `[start, end]` (percent) rotated by `offset` (degrees),
 /// using the same normalization as the runtime's shape binder.
 pub fn trim(path: &Flat, start: f64, end: f64, offset: f64) -> Trimmed {

@@ -119,7 +119,7 @@
       </g>
       <g style="display:none">
         <g transform="translate(277.7,247.26)">
-          <path d="M1.681-29.992L-1.681,29.992" fill="none" stroke-linecap="round" stroke-miterlimit="10" stroke="#00d1c2" stroke-width="9.194"/>
+          <path fill="none" stroke-linecap="round" stroke-miterlimit="10" stroke="#00d1c2" stroke-width="9.194"/>
         </g>
       </g>
       <g transform="matrix(1.0059,0,0,1.0059,-212.56,-189.98)" style="display:none">
@@ -183,12 +183,12 @@
       </g>
       <g style="display:none">
         <g transform="translate(344.67,261.88)">
-          <path d="M-13.664-.145L75.663,.29" fill="none" stroke-linecap="round" stroke-miterlimit="10" stroke="#00d1c2" stroke-width="9.6"/>
+          <path d="M-13.664-.145C-13.664-.145-1.129-.084,14.55-.008" fill="none" stroke-linecap="round" stroke-miterlimit="10" stroke="#00d1c2" stroke-width="9.6"/>
         </g>
       </g>
       <g style="display:none">
         <g transform="translate(344.67,261.88)">
-          <path d="M-13.664-.145L75.663,.29" fill="none" stroke-linecap="round" stroke-miterlimit="10" stroke="#007a87" stroke-width="9.562"/>
+          <path d="M-13.664-.145C-13.664-.145-1.129-.084,14.55-.008" fill="none" stroke-linecap="round" stroke-miterlimit="10" stroke="#007a87" stroke-width="9.562"/>
         </g>
       </g>
       <g style="display:none">
@@ -301,7 +301,7 @@
       </g>
       <g transform="matrix(1.0059,0,0,1.0059,-212.56,-189.98)" style="display:none">
         <g transform="translate(277.7,247.26)">
-          <path d="M1.681-29.992L-1.681,29.992" fill="none" stroke-linecap="square" stroke-miterlimit="10" stroke="#007a87" stroke-width="9.194"/>
+          <path fill="none" stroke-linecap="square" stroke-miterlimit="10" stroke="#007a87" stroke-width="9.194"/>
         </g>
       </g>
       <g transform="matrix(1.0059,0,0,1.0059,-212.56,-189.98)" style="display:none">
@@ -311,7 +311,7 @@
       </g>
       <g transform="matrix(1.0059,0,0,1.0059,-212.56,-189.98)" style="display:none">
         <g transform="translate(242.76,265.58)">
-          <path d="M1.768-25.966L-1.768,25.966" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#00d1c2" stroke-width="9.194"/>
+          <path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#00d1c2" stroke-width="9.194"/>
         </g>
       </g>
       <g transform="matrix(1.0059,0,0,1.0059,-212.56,-189.98)" style="display:none">

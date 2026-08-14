@@ -374,7 +374,7 @@ impl Encoder {
         shapes: &[ir::ShapeNode],
         out: &mut Vec<ShapeRef>,
     ) -> Result<()> {
-        self.encode_shape_tree_with(shapes, out, &[], None)
+        self.encode_shape_tree_with(shapes, out, &[], &[])
     }
 
     /// Encode one group's item list.
@@ -397,7 +397,7 @@ impl Encoder {
         shapes: &[ir::ShapeNode],
         out: &mut Vec<ShapeRef>,
         inherited_styles: &[u32],
-        inherited_trim: Option<u32>,
+        inherited_trims: &[u32],
     ) -> Result<()> {
         // The transform applies to the group as a whole wherever it sits in the
         // list, so it is the one item that has to be known before the walk.
@@ -414,7 +414,13 @@ impl Encoder {
         };
 
         let mut own_styles: Vec<u32> = Vec::new();
-        let mut current_trim: Option<u32> = inherited_trim;
+        // Trims accumulate — a group trim does not replace a layer trim above
+        // it, both apply. Kept in discovery order (outermost first, since the
+        // reversed walk meets the lower/outer one before recursing); a prim
+        // stores the reverse, which is lottie-web's application order.
+        let mut current_trims: Vec<u32> = inherited_trims.to_vec();
+        let trim_chain =
+            |trims: &[u32]| -> Vec<u32> { trims.iter().rev().copied().collect() };
 
         for s in shapes.iter().rev() {
             match s {
@@ -542,11 +548,11 @@ impl Encoder {
                             ir::TrimMultipleShapes::Individually => 2,
                         },
                     });
-                    current_trim = Some(id);
+                    current_trims.push(id);
                 }
                 ir::ShapeNode::Group { items, .. } => {
                     let styles = styles_at(&own_styles, inherited_styles);
-                    self.encode_shape_tree_with(items, target, &styles, current_trim)?;
+                    self.encode_shape_tree_with(items, target, &styles, &current_trims)?;
                 }
                 ir::ShapeNode::Rectangle {
                     size,
@@ -567,7 +573,7 @@ impl Encoder {
                     target.push(ShapeRef::Prim(PrimRef {
                         s: sid,
                         y: styles_at(&own_styles, inherited_styles),
-                        tm: current_trim,
+                        tm: trim_chain(&current_trims),
                     }));
                 }
                 ir::ShapeNode::Ellipse { size, position, .. } => {
@@ -578,7 +584,7 @@ impl Encoder {
                     target.push(ShapeRef::Prim(PrimRef {
                         s: sid,
                         y: styles_at(&own_styles, inherited_styles),
-                        tm: current_trim,
+                        tm: trim_chain(&current_trims),
                     }));
                 }
                 ir::ShapeNode::Path { ks, .. } => {
@@ -588,7 +594,7 @@ impl Encoder {
                     target.push(ShapeRef::Prim(PrimRef {
                         s: sid,
                         y: styles_at(&own_styles, inherited_styles),
-                        tm: current_trim,
+                        tm: trim_chain(&current_trims),
                     }));
                 }
                 ir::ShapeNode::PolyStar {
@@ -636,7 +642,7 @@ impl Encoder {
                     target.push(ShapeRef::Prim(PrimRef {
                         s: sid,
                         y: styles_at(&own_styles, inherited_styles),
-                        tm: current_trim,
+                        tm: trim_chain(&current_trims),
                     }));
                 }
                 _ => {}

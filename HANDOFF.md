@@ -26,8 +26,8 @@ this file's git history.
 ## Gates
 
 ```
-cargo nextest run --features eval                     # 182 tests: unit, frame snapshots, size budgets, output hygiene
-cd ulottie-dev-server && yarn test                    # 397 tests: output snapshots, coverage gate, pixel+geometry diff, perf
+cargo nextest run --features eval                     # 181 tests: unit, frame snapshots, size budgets, output hygiene
+yarn workspace ulottie-dev-server test                # 395 tests: output snapshots, coverage gate, pixel+geometry diff, perf
 node ulottie-dev-server/tools/census.mjs --coverage   # what the fixtures do not exercise
 cargo run --release --bin ulottie-dev-server -- sizes # size report over the fixtures
 node ulottie-dev-server/tools/compare.mjs <any.json> --dom   # any file, vs lottie-web
@@ -187,7 +187,10 @@ mounted animation holds is `apply`, handed to the shared player
   `oShapeStar` are separate ops sharing `Caps::GEOM_*` with the generator each
   calls, so an animation that only draws bezier paths ships neither the
   polystar generator nor a branch past it. The trim modifier stays a shared
-  column rather than doubling the op count.
+  column rather than doubling the op count; a *chain* of trims (a group's
+  under a layer's) rides the same column as a counted section, and the
+  composing helpers are their own capability (`TRIM_CHAIN`) so ordinarily
+  trimmed animations do not carry them.
 - **Gate and clock reads have no branches.** Gate 0 is pinned on and slot 0 is
   the composition clock, so a loop reads `ON[G[i]]` and `T[L[i]]`
   unconditionally.
@@ -695,7 +698,8 @@ a plain Add+Subtract pair renders wrong; the open mask-semantics bug),
 at 0.000%), `Tests_WeAcceptInlineImage` 35.5%, `Tests_hd` 30.3%,
 `Tests_LayerBlend_0`
 25.5%, `hardware` 22.6%, `birds` 19.1%, `Tests_Rect6` 12.9%,
-`Tests_TrimPathsInsideAndOutsideGroup` 9.4%, `Tests_Rect4` 7.1%,
+`Tests_TrimPathsInsideAndOutsideGroup` 4.7% (was 9.4% — trim chains landed;
+the rest is modifier scope, see *What is left*), `Tests_Rect4` 7.1%,
 `Tests_MiterLimit` 6.5%, `Tests_Remap` 5.2%,
 `Tests_TriangleLargeStroke` 4.5%, ~~`Tests_dalek` 8.0%~~ (fixed — legacy
 0–255 colours; 0.04% now), `Tests_NullEndShape` 3.8%,
@@ -788,6 +792,21 @@ Hard-won facts about the format and about lottie-web, each of which cost a bug:
   and keeps the layer-level trim, so each repeated shape is trimmed twice —
   `fireworks` measures its arc at exactly e² of the property. AE (and this
   compiler) trim once and repeat.
+- **A shape can sit under several trims — one inside its group, one at the
+  layer level — and every one applies, sequentially, nearest first**
+  (lottie-web pushes each `tm` it meets into one modifier list and
+  `renderModifiers` runs it in reverse). Bodymovin routinely leaves a static
+  `(0, 100)` no-op inside the group with the live trim at the layer level, so
+  keeping only the nearest one is invisible until the live one animates —
+  `lottie_logo_3`'s lettermark shipped a fully-drawn stem that way, at ~3.9%
+  in a window the pixel gate never sampled, and the recorded diagnosis blamed
+  a transform wrapper. Sequential trims compose exactly in arc-fraction space
+  (a sub-range of a trimmed path is a sub-range of the original), which is how
+  a chain is applied as one cut everywhere: planner fold, runtime, codegen and
+  bake. One scope difference remains: lottie-web's modifier list is
+  *element-global*, so a trim also reaches shapes of sibling groups walked
+  after it, where this compiler scopes a trim to its group and descendants —
+  that is `Tests_TrimPathsInsideAndOutsideGroup`'s remaining 4.7%.
 - **Parenting contributes a transform and nothing else** — it must not change
   paint order. `scene::build` nests a child only when that preserves order, and
   otherwise wraps it in its ancestors' transforms at its own position
@@ -888,9 +907,12 @@ Ordered by value.
    element-count mismatches and native `<rect>` spellings.
 7. **Rect geometry cluster**: `Tests_Rect4/6/7` (3.8–12.9%), plus stroke joins
    (`Tests_MiterLimit`, `Tests_TriangleLargeStroke`).
-8. **Trim**: `Tests_TrimPathsInsideAndOutsideGroup` 9.4% and `Tests_TrimPaths`
-   0.8% are open; nonzero offsets on open paths clamp where lottie-web wraps
-   (no fixture covers it); `m=2` (individually) is ignored and tracked in
+8. **Trim**: `Tests_TrimPathsInsideAndOutsideGroup` is 4.7% (was 9.4% before
+   trim chains landed) — what is left is modifier *scope*: lottie-web's list
+   is element-global, so an earlier-discovered trim also reaches sibling
+   groups' shapes (see *Lottie semantics*). `Tests_TrimPaths` is 0.28% now.
+   Nonzero offsets on open paths clamp where lottie-web wraps (no fixture
+   covers it); `m=2` (individually) is ignored and tracked in
    `coverage.json`.
 9. **Close the remaining coverage gap** — the implemented-but-untested class
     is empty now; what is left is 4 not-implemented and 17 refusals.

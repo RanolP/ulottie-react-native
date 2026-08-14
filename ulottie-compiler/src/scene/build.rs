@@ -1319,7 +1319,7 @@ impl Planner<'_> {
             let Some(shape) = self.payload.s.get(prim.s as usize) else {
                 return Ok(false);
             };
-            if !matches!(shape, Shape::Path { .. }) || prim.tm.is_some() || prim.y.is_empty() {
+            if !matches!(shape, Shape::Path { .. }) || !prim.tm.is_empty() || prim.y.is_empty() {
                 return Ok(false);
             }
             prims.push(prim);
@@ -1476,9 +1476,20 @@ impl Planner<'_> {
                 if !self.paints(&prim.y) {
                     return Ok(());
                 }
-                let trim = prim
+                // The trim chain, in application order, with the steps that
+                // statically cover the whole path dropped — a full window
+                // rotated by any offset is still the full window, and this
+                // fixture pattern is common: bodymovin leaves a `(0, 100)`
+                // trim inside the group while the live one sits at the layer
+                // level (`lottie_logo_3`'s lettermark).
+                let trim: Vec<Style> = prim
                     .tm
-                    .and_then(|id| self.payload.y.get(id as usize).cloned());
+                    .iter()
+                    .filter_map(|id| self.payload.y.get(*id as usize).cloned())
+                    .filter(|st| {
+                        !static_trim_range(st).is_some_and(|(s, e, _)| (s - e).abs() >= 100.0)
+                    })
+                    .collect();
                 // lottie-web's `setElementStyles` draws a shape into *every*
                 // style element open below it in the walk — a shape between
                 // two fills lands in both, duplicated, the lower style's
@@ -1530,7 +1541,7 @@ impl Planner<'_> {
                         if !is_fill && !is_stroke {
                             continue;
                         }
-                        let Some(node) = self.build_primitive(&shape, trim.as_ref(), slot) else {
+                        let Some(node) = self.build_primitive(&shape, &trim, slot) else {
                             continue;
                         };
                         self.els[parent].children.push(node);
@@ -1543,7 +1554,7 @@ impl Planner<'_> {
                     }
                     return Ok(());
                 }
-                let node = self.build_primitive(&shape, trim.as_ref(), slot);
+                let node = self.build_primitive(&shape, &trim, slot);
                 let Some(node) = node else { return Ok(()) };
                 self.els[parent].children.push(node);
                 self.emit_styles(node, &prim.y, slot);
@@ -1554,8 +1565,11 @@ impl Planner<'_> {
 
     /// Emit the element for one shape primitive, baking its geometry when
     /// every input is static.
-    fn build_primitive(&mut self, shape: &Shape, trim: Option<&Style>, slot: u32) -> Option<usize> {
-        let trimmed = trim.is_some();
+    ///
+    /// `trim` is the modifier chain in application order — usually empty or
+    /// one step; a shape under a group trim *and* a layer trim carries both.
+    fn build_primitive(&mut self, shape: &Shape, trim: &[Style], slot: u32) -> Option<usize> {
+        let trimmed = !trim.is_empty();
 
         // A trimmed shape always renders through <path>, since trimming turns
         // any primitive into an arbitrary open curve.
@@ -1613,24 +1627,27 @@ impl Planner<'_> {
                 let el = self.el("path");
                 let (geo_op, g) = self.geo_descriptor(shape);
                 let baked = self.bake_geometry(shape, &g);
-                match (baked, trim) {
+                match baked {
                     // Fully static and untrimmed: the `d` is a literal.
-                    (Some(path), None) => {
+                    Some(path) if !trimmed => {
                         self.set(el, "d", path.to_d());
                     }
-                    // Static source under a trim. If the trim range is static
-                    // too, the trimmed outline itself is frame-invariant — so
-                    // evaluate it here and the animation needs no trim code, no
-                    // path serializer and no binding at all.
-                    (Some(path), Some(t)) => {
-                        if let Some(fixed) = static_trim_range(t) {
+                    // Static source under trims. If every step's range is
+                    // static too, the trimmed outline itself is
+                    // frame-invariant — so evaluate the chain here and the
+                    // animation needs no trim code, no path serializer and no
+                    // binding at all.
+                    Some(path) => {
+                        let fixed: Option<Vec<(f64, f64, f64)>> =
+                            trim.iter().map(static_trim_range).collect();
+                        if let Some(steps) = fixed {
                             let flat = crate::eval::trim::Flat {
                                 v: path.v.clone(),
                                 i: path.i.clone(),
                                 o: path.o.clone(),
                                 c: path.c,
                             };
-                            match crate::eval::trim::trim(&flat, fixed.0, fixed.1, fixed.2) {
+                            match crate::eval::trim::trim_chain(&flat, &steps) {
                                 crate::eval::trim::Trimmed::Whole => {
                                     self.set(el, "d", path.to_d());
                                 }
@@ -1650,7 +1667,7 @@ impl Planner<'_> {
                         // Range varies: ship the resolved source path so the
                         // runtime builds its arc-length table exactly once.
                         self.caps |= Caps::TRIM | Caps::PATH_D;
-                        let trim_arg = self.trim_descriptor(t, slot);
+                        let trim_arg = self.trim_descriptor(trim);
                         self.bind(
                             op::SHAPE,
                             el,
@@ -1658,16 +1675,15 @@ impl Planner<'_> {
                             slot,
                         );
                     }
-                    (None, t) => {
+                    None => {
                         // Only here does the runtime have to *build* geometry;
                         // a baked shape needs no generator.
                         self.caps |= Caps::PATH_D | runtime_geometry(shape);
-                        let trim_arg = match t {
-                            Some(t) => {
-                                self.caps |= Caps::TRIM;
-                                self.trim_descriptor(t, slot)
-                            }
-                            None => Arg::Null,
+                        let trim_arg = if trimmed {
+                            self.caps |= Caps::TRIM;
+                            self.trim_descriptor(trim)
+                        } else {
+                            Arg::Null
                         };
                         let mut args = g;
                         args.push(trim_arg);
@@ -1791,21 +1807,31 @@ impl Planner<'_> {
         ))
     }
 
-    fn trim_descriptor(&mut self, style: &Style, _slot: u32) -> Arg {
-        match style {
-            Style::TrimPath { s, e, o, m } => {
-                let s = self.classify(s, 1);
-                let e = self.classify(e, 1);
-                let o = self.classify(o, 1);
-                Arg::List(vec![
-                    Arg::Prop(s),
-                    Arg::Prop(e),
-                    Arg::Prop(o),
-                    Arg::Num(*m as f64),
-                ])
-            }
-            _ => Arg::Null,
+    /// The trim chain as a list section: `[count, (s, e, o, mode) × count]`,
+    /// steps in application order. The count rides in the section because a
+    /// list carries no length of its own — same convention as `SHAPE_MULTI`.
+    fn trim_descriptor(&mut self, chain: &[Style]) -> Arg {
+        let mut items = Vec::with_capacity(1 + chain.len() * 4);
+        items.push(Arg::Num(0.0));
+        let mut count = 0u32;
+        for style in chain {
+            let Style::TrimPath { s, e, o, m } = style else {
+                continue;
+            };
+            items.push(Arg::Prop(self.classify(s, 1)));
+            items.push(Arg::Prop(self.classify(e, 1)));
+            items.push(Arg::Prop(self.classify(o, 1)));
+            items.push(Arg::Num(*m as f64));
+            count += 1;
         }
+        if count == 0 {
+            return Arg::Null;
+        }
+        if count > 1 {
+            self.caps |= Caps::TRIM_CHAIN;
+        }
+        items[0] = Arg::Num(count as f64);
+        Arg::List(items)
     }
 
     // -----------------------------------------------------------------------

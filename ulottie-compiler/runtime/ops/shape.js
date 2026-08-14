@@ -13,8 +13,8 @@
 // The trim modifier stays a column rather than doubling the op count. It is
 // shared, and a batch that has none never enters it.
 
-import { xv, xvv, pvp, mkPath, T_PATH } from '../pv.js';
-import { xcol } from '../kf.js';
+import { xv, xvv, pv, pvp, mkPath, T_PATH, T_EXPR } from '../pv.js';
+import { xcol, resolve } from '../kf.js';
 import { pathD } from '../path.js';
 import { rectPath, ellipsePath, starPath } from '../geom.js';
 import { trimTable, trimApply } from '../trim.js';
@@ -28,23 +28,85 @@ function hasTrim(TM, n) {
 }
 
 /**
- * The trim triple as columns, plus the arc-length table of every source path
+ * The extra steps of one binding's trim chain: property offsets, cursors and
+ * — when an engine is present — expression handles, per binding.
+ *
+ * Its own declaration, cut by `TRIM_CHAIN`: a chain is rare (a group trim
+ * nested inside a layer trim), and an ordinarily-trimmed animation should not
+ * carry the composing machinery. The call site guards on the wire's own step
+ * count, which a module without the capability never exceeds.
+ */
+function trimChainCols(x, R, n, i, m, at) {
+  const S = x.S, k = S[m];
+  if (!R) R = { r: new Array(n), c: new Array(n), h: null, w: [0, 0] };
+  const r = new Int32Array((k - 1) * 3);
+  for (let j = 1; j < k; j++) {
+    r[(j - 1) * 3] = S[m + 1 + j * 4];
+    r[(j - 1) * 3 + 1] = S[m + 2 + j * 4];
+    r[(j - 1) * 3 + 2] = S[m + 3 + j * 4];
+  }
+  R.r[i] = r;
+  R.c[i] = new Int32Array(r.length);
+  if (x.expr) {
+    for (let q = 0; q < r.length; q++) {
+      if (r[q] && (S[r[q]] & 7) === T_EXPR) {
+        if (!R.h) R.h = new Array(n);
+        (R.h[i] || (R.h[i] = new Array(r.length).fill(null)))[q] = resolve(r[q], x, at);
+      }
+    }
+  }
+  return R;
+}
+
+/**
+ * Fold a chain's later steps over the window `[A, A+L)`, in source fractions.
+ *
+ * Sequential trims compose exactly in arc-fraction space, since a sub-range
+ * of a trimmed path is a sub-range of the original. Every later step works on
+ * the *open* result of the first, so its window clamps to `[0,1]`; only the
+ * first step's offset can wrap a closed contour, which the final cut resolves.
+ */
+function trimChainWin(x, R, i, t, A, L) {
+  const r = R.r[i], H = R.h && R.h[i], C = R.c[i], w = R.w;
+  for (let j = 0; j < r.length; j += 3) {
+    const a = (H && H[j] ? H[j](t) : pv(x, r[j], t, C, j)) / 100;
+    const z = (H && H[j + 1] ? H[j + 1](t) : pv(x, r[j + 1], t, C, j + 1)) / 100;
+    const o = (H && H[j + 2] ? H[j + 2](t) : pv(x, r[j + 2], t, C, j + 2)) / 360;
+    let lo = (a < z ? a : z) + o, hi = (a < z ? z : a) + o;
+    lo = lo < 0 ? 0 : lo > 1 ? 1 : lo;
+    hi = hi < 0 ? 0 : hi > 1 ? 1 : hi;
+    A += L * lo;
+    L *= hi - lo;
+  }
+  w[0] = A;
+  w[1] = A + L;
+  return w;
+}
+
+/**
+ * The trim chain as columns, plus the arc-length table of every source path
  * the compiler already resolved — those are frame-invariant, so measuring one
  * per frame would be the single most expensive thing a trimmed shape does.
+ *
+ * A binding's section is `[count, (s, e, o, mode) × count]`, steps in
+ * application order. The first step is the common case and stays in the flat
+ * `M`/`M2`/`M3` columns; the rare extra steps ride per binding in `R`.
  */
 function trimCols(x, TM, P, n, at) {
   const S = x.S;
   const M = new Int32Array(n), M2 = new Int32Array(n), M3 = new Int32Array(n);
   const B = new Array(n);
+  let R = null;
   for (let i = 0; i < n; i++) {
     const m = TM[i];
     if (!m) continue;
-    M[i] = S[m]; M2[i] = S[m + 1]; M3[i] = S[m + 2];
+    M[i] = S[m + 1]; M2[i] = S[m + 2]; M3[i] = S[m + 3];
+    if (S[m] > 1) R = trimChainCols(x, R, n, i, m, at);
     // A keyframed or expression-driven shape is not a static path.
     if (P && P[i] && (S[P[i]] & 7) === T_PATH) B[i] = trimTable(mkPath(S, P[i]));
   }
   return {
-    M, M2, M3, B,
+    M, M2, M3, B, R,
     X: x.expr ? xcol(x, M, n, at) : null,
     X2: x.expr ? xcol(x, M2, n, at) : null,
     X3: x.expr ? xcol(x, M3, n, at) : null,
@@ -67,12 +129,18 @@ function trimCols(x, TM, P, n, at) {
 function trim(x, m, i, t, src, el) {
   const a = xv(x, m.X, m.M, i, t, m.C) / 100;
   const z = xv(x, m.X2, m.M2, i, t, m.C2) / 100;
-  const lo = a < z ? a : z, hi = a < z ? z : a, vis = hi - lo;
+  let lo = a < z ? a : z, hi = a < z ? z : a;
+  let off = xv(x, m.X3, m.M3, i, t, m.C3) / 360;
+  if (m.R && m.R.r[i]) {
+    const w = trimChainWin(x, m.R, i, t, lo + off, hi - lo);
+    lo = w[0]; hi = w[1]; off = 0;
+  }
+  const vis = hi - lo;
   let out = null, hide = false;
   if (vis <= 0) {
     hide = true;
   } else if (vis < 1) {
-    out = trimApply(m.B[i] || trimTable(src), lo, hi, xv(x, m.X3, m.M3, i, t, m.C3) / 360);
+    out = trimApply(m.B[i] || trimTable(src), lo, hi, off);
     if (out && !out.v.length) hide = true;
   }
   if (hide !== m.W[i]) { m.W[i] = hide; el.style.display = hide ? 'none' : ''; }

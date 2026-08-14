@@ -1143,14 +1143,20 @@ fn emit_binding(
             g.need("pathD");
             let sl = slot(slots, "d");
             match b.args.last() {
-                Some(Arg::List(tm)) if tm.len() >= 3 => {
+                // `[count, (s, e, o, mode) × count]`, steps in application
+                // order — see `trim_descriptor`.
+                Some(Arg::List(tm)) if tm.len() >= 5 => {
+                    let count = match tm.first() {
+                        Some(Arg::Num(n)) => *n as usize,
+                        _ => return None,
+                    };
                     let getp = |i: usize| match tm.get(i) {
                         Some(Arg::Prop(p)) => Some(p),
                         _ => None,
                     };
-                    let ts = g.prop(getp(0)?, 1, easings);
-                    let te = g.prop(getp(1)?, 1, easings);
-                    let to = g.prop(getp(2)?, 1, easings);
+                    let ts = g.prop(getp(1)?, 1, easings);
+                    let te = g.prop(getp(2)?, 1, easings);
+                    let to = g.prop(getp(3)?, 1, easings);
                     g.need("trimTable");
                     g.need("trimApply");
                     // A static source path has one arc-length table for the
@@ -1168,19 +1174,54 @@ fn emit_binding(
                     let hide = slot(slots, "h");
                     let name = g.name();
                     writeln!(g.body, "const {name}={src};").ok()?;
-                    writeln!(
-                        g.body,
-                        "{{const a={}/100,b={}/100,lo=a<b?a:b,hi=a<b?b:a,vis=hi-lo;\
+                    if count <= 1 {
+                        writeln!(
+                            g.body,
+                            "{{const a={}/100,b={}/100,lo=a<b?a:b,hi=a<b?b:a,vis=hi-lo;\
 let out=null,hide=false;\
 if(vis<=0)hide=true;else if(vis<1){{out=trimApply({},lo,hi,{}/360);if(out&&!out.v.length)hide=true}}\
 if(hide!=={hide}){{{hide}=hide;e{el}.style.display=hide?'none':''}}\
 if(!hide){{const w=pathD(out||{name});if(w!=={sl}){{{sl}=w;e{el}.setAttribute('d',w)}}}}}}",
-                        ts[0].js(),
-                        te[0].js(),
-                        if fixed { tab } else { format!("trimTable({name})") },
-                        to[0].js()
-                    )
-                    .ok()?;
+                            ts[0].js(),
+                            te[0].js(),
+                            if fixed { tab } else { format!("trimTable({name})") },
+                            to[0].js()
+                        )
+                        .ok()?;
+                    } else {
+                        // The chain folds into one cut in arc-fraction space —
+                        // the same composition the interpreter's `trim` does.
+                        let mut chain = String::new();
+                        for j in 1..count {
+                            let s2 = g.prop(getp(1 + j * 4)?, 1, easings);
+                            let e2 = g.prop(getp(2 + j * 4)?, 1, easings);
+                            let o2 = g.prop(getp(3 + j * 4)?, 1, easings);
+                            write!(
+                                chain,
+                                "{{const a2={}/100,b2={}/100,o2={}/360;\
+let l2=(a2<b2?a2:b2)+o2,h2=(a2<b2?b2:a2)+o2;\
+l2=l2<0?0:l2>1?1:l2;h2=h2<0?0:h2>1?1:h2;A+=L*l2;L*=h2-l2}}",
+                                s2[0].js(),
+                                e2[0].js(),
+                                o2[0].js()
+                            )
+                            .ok()?;
+                        }
+                        writeln!(
+                            g.body,
+                            "{{const a={}/100,b={}/100,lo=a<b?a:b,hi=a<b?b:a;\
+let A=lo+{}/360,L=hi-lo;{chain}\
+let out=null,hide=false;\
+if(L<=0)hide=true;else if(L<1){{out=trimApply({},A,A+L,0);if(out&&!out.v.length)hide=true}}\
+if(hide!=={hide}){{{hide}=hide;e{el}.style.display=hide?'none':''}}\
+if(!hide){{const w=pathD(out||{name});if(w!=={sl}){{{sl}=w;e{el}.setAttribute('d',w)}}}}}}",
+                            ts[0].js(),
+                            te[0].js(),
+                            to[0].js(),
+                            if fixed { tab } else { format!("trimTable({name})") },
+                        )
+                        .ok()?;
+                    }
                 }
                 _ => {
                     let value = format!("pathD({src})");

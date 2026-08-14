@@ -513,8 +513,12 @@ pub struct PrimRef {
     pub s: u32,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub y: Vec<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tm: Option<u32>,
+    /// Trim modifiers in scope, **in application order** — the nearest one
+    /// first, exactly the order lottie-web's `renderModifiers` runs them in
+    /// (reverse of discovery). A shape under a group trim *and* a layer trim
+    /// is trimmed twice, sequentially.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tm: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]

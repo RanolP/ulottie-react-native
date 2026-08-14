@@ -56,6 +56,12 @@ const GATED: &[(&str, Caps)] = &[
     ("trimApply", Caps::TRIM),
     ("trimCols", Caps::TRIM),
     ("trim", Caps::TRIM),
+    // The chain composers, reached only when a binding's wire section carries
+    // more than one trim step — which the planner accompanies with this bit.
+    // Their `resolve` reference would otherwise drag the keyframe-handle
+    // surface into every ordinarily-trimmed animation.
+    ("trimChainCols", Caps::TRIM_CHAIN),
+    ("trimChainWin", Caps::TRIM_CHAIN),
     ("expand", Caps::TEMPLATES),
     // Every op names `xcol` to pick up the expression-driven bindings in one of
     // its columns, and calls it only when there is an engine to hand them to.
