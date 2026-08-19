@@ -76,16 +76,22 @@ fn describe(
     instanced: bool,
     exprs: Option<&layers::Exprs>,
 ) -> Report {
-    let caps: Vec<String> = scene
+    let mut caps: Vec<String> = scene
         .caps
         .iter_names()
         .map(|(n, _)| n.to_string())
         .collect();
-    let modules = if scene.is_static() {
+    let mut modules = if scene.is_static() {
         Vec::new()
     } else {
         emit::imported_modules(scene.caps)
     };
+
+    // Note: `iter_names()` and `imported_modules()` report in bit and emission order,
+    // which carries meaning for the compiler but reads as arbitrary in the panel that lists them.
+    caps.sort_unstable();
+    modules.sort_unstable();
+
     let replays: usize = scene
         .data
         .uses
