@@ -12,10 +12,10 @@ pub struct Animation {
     pub name: Option<String>,
 
     #[serde(rename = "w")]
-    pub width: u32,
+    pub width: f64,
 
     #[serde(rename = "h")]
-    pub height: u32,
+    pub height: f64,
 
     #[serde(rename = "fr")]
     pub frame_rate: f64,
@@ -65,8 +65,8 @@ pub struct Asset {
     pub path: Option<String>,
     #[serde(rename = "p")]
     pub filename: Option<String>,
-    pub w: Option<u32>,
-    pub h: Option<u32>,
+    pub w: Option<f64>,
+    pub h: Option<f64>,
     pub e: Option<u8>,
 }
 
@@ -148,8 +148,8 @@ pub struct Layer {
     pub t: Option<super::text::TextData>,
 
     // Solid layer (ty=1) fields
-    pub sw: Option<u32>,
-    pub sh: Option<u32>,
+    pub sw: Option<f64>,
+    pub sh: Option<f64>,
     pub sc: Option<String>,
 
     // Precomp layer (ty=0) fields
@@ -157,16 +157,18 @@ pub struct Layer {
     pub ref_id: Option<String>,
     /// Precomp width (reuses w for precomp, sw for solid)
     #[serde(rename = "w")]
-    pub width: Option<u32>,
+    pub width: Option<f64>,
     /// Precomp height
     #[serde(rename = "h")]
-    pub height: Option<u32>,
+    pub height: Option<f64>,
 
     // Parent-child linking
     pub parent: Option<u32>,
 
-    pub ip: f64,
-    pub op: f64,
+    /// Optional: a Telegram-sticker export leaves them off entirely, meaning
+    /// the layer spans the whole composition.
+    pub ip: Option<f64>,
+    pub op: Option<f64>,
     pub st: Option<f64>,
     pub bm: Option<u8>,
 
@@ -203,4 +205,8 @@ pub struct MaskProperty {
     pub pt: Property,
     /// Mask opacity (optional, defaults to 100).
     pub o: Option<Property>,
+    /// Pre-4.4.18 closed flag, on the mask rather than in the path values —
+    /// the same legacy spelling shapes carry in `closed`.
+    #[serde(default)]
+    pub cl: Option<bool>,
 }

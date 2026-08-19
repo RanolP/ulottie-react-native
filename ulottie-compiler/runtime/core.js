@@ -156,7 +156,7 @@ export function mount(M, D, P, A, container, opt, ext) {
     ctx.frame = f;
     T[0] = f;
     for (let i = 0; i < nTl; i++) {
-      const e = tRows + i * 4;
+      const e = tRows + i * 5;
       // Named `remap`, not `r`: reachability is resolved on bare names across
       // the whole runtime, and a local `r` reads as a reference to num.js's
       // coordinate formatter — which then ships with every module.
@@ -172,7 +172,7 @@ export function mount(M, D, P, A, container, opt, ext) {
       // bounds. Looping it back instead — which this did while a precomp's
       // layers had no in/out handling of their own — showed every frame of an
       // image sequence at once, each one wrapped to its first.
-      T[i + 1] = T[S[e]] - S[e + 1] * tScale;
+      T[i + 1] = (T[S[e]] - S[e + 1] * tScale) / (S[e + 2] / 1000);
     }
     for (let i = 0; i < nGates; i++) {
       const g = gRows + i * 2;

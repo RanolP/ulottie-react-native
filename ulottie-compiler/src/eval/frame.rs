@@ -15,8 +15,8 @@ pub struct Frame {
 
 #[derive(Debug, Clone, Copy)]
 pub struct FrameComposition {
-    pub width: u32,
-    pub height: u32,
+    pub width: f64,
+    pub height: f64,
     pub frame_rate: f64,
     pub frame: f64,
 }
@@ -97,6 +97,7 @@ pub enum RenderedStyle {
         linecap: u8,
         linejoin: u8,
         miter_limit: Option<f64>,
+        dash: Option<RenderedDash>,
     },
     GradientStroke {
         kind: GradientKind,
@@ -108,6 +109,7 @@ pub enum RenderedStyle {
         linecap: u8,
         linejoin: u8,
         miter_limit: Option<f64>,
+        dash: Option<RenderedDash>,
     },
     TrimPath {
         start: f64,
@@ -118,11 +120,19 @@ pub enum RenderedStyle {
     Unsupported(&'static str),
 }
 
+/// A dash pattern at one frame: lengths in draw order, plus the offset.
+#[derive(Debug, Clone)]
+pub struct RenderedDash {
+    pub lengths: Vec<f64>,
+    pub offset: f64,
+}
+
 #[derive(Debug, Clone)]
 pub enum Paint {
     Solid {
         color: Color,
         opacity: f64,
+        rule: FillRule,
     },
     Gradient {
         kind: GradientKind,
@@ -302,13 +312,19 @@ fn write_shape(w: &mut fmt::Formatter<'_>, tree: &ShapeTree, depth: usize) -> fm
 
 fn write_style(w: &mut fmt::Formatter<'_>, style: &RenderedStyle) -> fmt::Result {
     match style {
-        RenderedStyle::Paint(Paint::Solid { color, opacity }) => {
+        RenderedStyle::Paint(Paint::Solid { color, opacity, rule }) => {
             write!(
                 w,
                 "Fill color={} opacity={}",
                 fmt_color(*color),
                 f(*opacity)
-            )
+            )?;
+            // Only the non-default rule is written, so every nonzero fill's
+            // snapshot line stays untouched.
+            if *rule == FillRule::EvenOdd {
+                write!(w, " rule=evenodd")?;
+            }
+            Ok(())
         }
         RenderedStyle::Paint(Paint::Gradient {
             kind,
@@ -335,6 +351,7 @@ fn write_style(w: &mut fmt::Formatter<'_>, style: &RenderedStyle) -> fmt::Result
             color,
             opacity,
             width,
+            dash,
             linecap,
             linejoin,
             miter_limit,
@@ -351,11 +368,13 @@ fn write_style(w: &mut fmt::Formatter<'_>, style: &RenderedStyle) -> fmt::Result
             if let Some(ml) = miter_limit {
                 write!(w, " ml={}", f(*ml))?;
             }
+            write_dash(w, dash)?;
             Ok(())
         }
         RenderedStyle::GradientStroke {
             kind,
             stops,
+            dash,
             start,
             end,
             opacity,
@@ -381,6 +400,7 @@ fn write_style(w: &mut fmt::Formatter<'_>, style: &RenderedStyle) -> fmt::Result
             if let Some(ml) = miter_limit {
                 write!(w, " ml={}", f(*ml))?;
             }
+            write_dash(w, dash)?;
             Ok(())
         }
         RenderedStyle::TrimPath {
@@ -400,6 +420,19 @@ fn write_style(w: &mut fmt::Formatter<'_>, style: &RenderedStyle) -> fmt::Result
         }
         RenderedStyle::Unsupported(label) => write!(w, "Unsupported style {label}"),
     }
+}
+
+/// Written only when a dash exists, so solid strokes' lines stay untouched.
+fn write_dash(w: &mut fmt::Formatter<'_>, dash: &Option<RenderedDash>) -> fmt::Result {
+    if let Some(d) = dash {
+        write!(
+            w,
+            " dash=[{}] do={}",
+            d.lengths.iter().map(|v| f(*v)).collect::<Vec<_>>().join(","),
+            f(d.offset)
+        )?;
+    }
+    Ok(())
 }
 
 fn fmt_kind(k: GradientKind) -> &'static str {

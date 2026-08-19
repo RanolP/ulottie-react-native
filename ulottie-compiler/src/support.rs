@@ -28,14 +28,11 @@ pub enum Feature {
     UnknownLayerType,
     TrackMatte,
     BlendMode,
-    TimeStretch,
     TimeRemap,
     AutoOrient,
     ThreeD,
-    Skew,
     MaskMode,
     MaskInverted,
-    MaskOpacity,
     Repeater,
     MergePaths,
     RoundedCorners,
@@ -43,9 +40,6 @@ pub enum Feature {
     PuckerBloat,
     ZigZag,
     UnknownShape,
-    ReversedDirection,
-    EvenOddFill,
-    StrokeDash,
     AnimatedGradient,
     ImageAsset,
     LayerEffect,
@@ -66,14 +60,11 @@ impl Feature {
             UnknownLayerType => "unknown-layer-type",
             TrackMatte => "track-matte",
             BlendMode => "blend-mode",
-            TimeStretch => "time-stretch",
             TimeRemap => "time-remap",
             AutoOrient => "auto-orient",
             ThreeD => "3d",
-            Skew => "skew",
             MaskMode => "mask-mode",
             MaskInverted => "mask-inverted",
-            MaskOpacity => "mask-opacity",
             Repeater => "repeater",
             MergePaths => "merge-paths",
             RoundedCorners => "rounded-corners",
@@ -81,9 +72,6 @@ impl Feature {
             PuckerBloat => "pucker-bloat",
             ZigZag => "zig-zag",
             UnknownShape => "unknown-shape",
-            ReversedDirection => "reversed-direction",
-            EvenOddFill => "even-odd-fill",
-            StrokeDash => "stroke-dash",
             AnimatedGradient => "animated-gradient",
             ImageAsset => "image-asset",
             LayerEffect => "layer-effect",
@@ -104,14 +92,11 @@ impl Feature {
             UnknownLayerType => "the layer is not drawn",
             TrackMatte => "the masked layer draws unmasked",
             BlendMode => "the layer composites normally",
-            TimeStretch => "the layer plays at composition speed",
             TimeRemap => "the time remap is ignored and the layer plays linearly",
             AutoOrient => "the layer keeps its authored rotation",
             ThreeD => "the layer is drawn flat",
-            Skew => "the skew is not applied",
             MaskMode => "the mask is treated as Add",
             MaskInverted => "the inversion is approximated by subtracting",
-            MaskOpacity => "the mask is fully opaque",
             Repeater => "only the original copy is drawn",
             MergePaths => "the paths are drawn separately",
             RoundedCorners => "corners stay sharp",
@@ -119,9 +104,6 @@ impl Feature {
             PuckerBloat => "the distortion is not applied",
             ZigZag => "the path is not zig-zagged",
             UnknownShape => "the shape is not drawn",
-            StrokeDash => "the stroke is drawn solid",
-            ReversedDirection => "winding is unchanged, which can alter holes",
-            EvenOddFill => "the fill uses the non-zero rule",
             AnimatedGradient => "the gradient ramp is read as static and may render as NaN",
             ImageAsset => "the image has no source to draw from",
             LayerEffect => "the layer is drawn without the effect",
@@ -141,24 +123,18 @@ impl Feature {
             UnknownLayerType,
             TrackMatte,
             BlendMode,
-            TimeStretch,
             TimeRemap,
             AutoOrient,
             ThreeD,
-            Skew,
             MaskMode,
             MaskInverted,
-            MaskOpacity,
-            Repeater,
+                    Repeater,
             MergePaths,
             RoundedCorners,
-            StrokeDash,
             OffsetPath,
             PuckerBloat,
             ZigZag,
             UnknownShape,
-            ReversedDirection,
-            EvenOddFill,
             AnimatedGradient,
             ImageAsset,
             LayerEffect,
@@ -290,6 +266,9 @@ fn scan_layers(
 
         match l.get("ty").and_then(Value::as_u64) {
             Some(0) | Some(1) | Some(2) | Some(3) | Some(4) => {}
+            // Audio (9) has nothing to draw; not drawing it is the correct
+            // render, not a degradation.
+            Some(9) => {}
             // Text layers are implemented for a static document against
             // embedded glyph outlines; the same `text_shapes` call decides
             // support here and in the lowering, so the two cannot disagree.
@@ -325,30 +304,25 @@ fn scan_layers(
         }
 
         // Track mattes are implemented for the four AE modes (alpha, alpha
-        // inverted, luma, luma inverted). Anything outside that range would be
-        // read and dropped, so it still counts as unsupported.
+        // inverted, luma, luma inverted). `tt: 0` is "no matte", written
+        // explicitly by some exporters; anything past 4 would be read and
+        // dropped, so it still counts as unsupported.
         if let Some(tt) = l.get("tt").and_then(Value::as_u64)
-            && !(1..=4).contains(&tt) {
+            && tt > 4 {
                 push(out, Feature::TrackMatte, &at);
             }
         // Blend modes 1–15 are implemented (CSS `mix-blend-mode`, the same
         // keywords lottie-web writes); `bm: 0` is normal and exports write it
         // explicitly. Anything else on `bm` is read and dropped, which is
         // what the refusal is for.
-        if l
-            .get("bm")
-            .and_then(Value::as_u64)
-            .is_some_and(|bm| bm > 15)
-        {
-            push(out, Feature::BlendMode, &at);
-        }
-        if l.get("sr")
-            .and_then(Value::as_f64)
-            .map(|s| s != 1.0)
-            .unwrap_or(false)
-        {
-            push(out, Feature::TimeStretch, &at);
-        }
+        // A blend mode past 15 has no CSS keyword; lottie-web's
+        // `blendModeEnums[mode] || ''` composites it normally, and so does
+        // the emitter here.
+        // `sr` is not scanned: lottie-web applies time-stretch only at the
+        // precomp boundary (`renderedFrame = num / sr` in `CompElement`) —
+        // bodymovin exports every other layer's keyframes already stretched
+        // into composition time. The precomp case is implemented (the clock
+        // row divides by its rate); everywhere else the field is inert.
         if truthy(l.get("ao")) {
             push(out, Feature::AutoOrient, &at);
         }
@@ -363,14 +337,6 @@ fn scan_layers(
         }
 
         if let Some(ks) = l.get("ks") {
-            // A skew property that is present but zero is not a skew.
-            for key in ["sk", "sa"] {
-                if let Some(p) = ks.get(key)
-                    && property_is_nonzero(p) {
-                        push(out, Feature::Skew, &at);
-                        break;
-                    }
-            }
             if ks.get("rx").is_some() || ks.get("ry").is_some() || ks.get("rz").is_some() {
                 push(out, Feature::ThreeD, &at);
             }
@@ -382,24 +348,28 @@ fn scan_layers(
             .map(Vec::as_slice)
             .unwrap_or(&[])
         {
-            // Add and Subtract are implemented. `n` (None) is *not*: the IR
-            // lowers every unrecognised mode to Add, so a mask that should have
-            // no effect gets drawn as one — `Tests_MaskNone` is 25% wrong and
-            // said nothing. Inversion is not implemented either: it is
-            // approximated by painting the mask black, which is right for a
-            // lone inverted Add and wrong in combination — every inverted mask
-            // in the lottie-flutter corpus renders wrong, 3 files out of 3.
+            // The combination now mirrors lottie-web's `MaskElement`: `a`
+            // adds, `s` subtracts, `i` intersects, `n` draws nothing, and
+            // every other mode paints white the way lottie-web's untested
+            // branch does — so only a mode outside that set is worth a word.
+            // Inversion is the composition rect plus the contour in one `d`,
+            // which needs the contour at compile time: only an *animated*
+            // inverted path is still a refusal. Mask opacity rides the
+            // colourless fill op.
             match m.get("mode").and_then(Value::as_str) {
-                Some("a") | Some("s") | None => {}
+                Some("a") | Some("s") | Some("i") | Some("n") | Some("f") | None => {}
                 Some(_) => push(out, Feature::MaskMode, &at),
             }
-            if truthy(m.get("inv")) {
+            if truthy(m.get("inv"))
+                && m
+                    .get("pt")
+                    .and_then(|p| p.get("a"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    == 1
+            {
                 push(out, Feature::MaskInverted, &at);
             }
-            if let Some(o) = m.get("o")
-                && property_differs_from(o, 100.0) {
-                    push(out, Feature::MaskOpacity, &at);
-                }
         }
 
         // Effects that draw. Most of an `ef` list is inert — sliders and
@@ -416,7 +386,10 @@ fn scan_layers(
             let Some(ty) = e.get("ty").and_then(Value::as_u64) else {
                 continue;
             };
-            if !RENDERING_EFFECTS.contains(&ty) || ty == 21 {
+            // 20 tint, 21 fill, 25 drop shadow and 29 gaussian blur are
+            // implemented; anything lottie-web never registered is skipped
+            // the way the reference skips it.
+            if !RENDERING_EFFECTS.contains(&ty) || matches!(ty, 20 | 21 | 25 | 29) {
                 continue;
             }
             let nm = e.get("nm").and_then(Value::as_str).unwrap_or("");
@@ -450,6 +423,14 @@ fn scan_shapes(shapes: &[Value], where_: &str, out: &mut Vec<Finding>) {
                     }
                     Feature::Repeater
                 }
+                // Merge mode 1 is plain concatenation into one composite
+                // path — which is already how shapes render: every contour a
+                // style paints lands in that style's one element, so their
+                // windings interact exactly as the composite's would. The
+                // boolean modes (2 add, 3 subtract, 4 intersect, 5 exclude)
+                // change geometry and stay refusals — lottie-web does not
+                // render them either.
+                "mm" if s.get("mm").and_then(Value::as_u64).unwrap_or(1) == 1 => continue,
                 "mm" => Feature::MergePaths,
                 "rd" => Feature::RoundedCorners,
                 "op" => Feature::OffsetPath,
@@ -458,36 +439,6 @@ fn scan_shapes(shapes: &[Value], where_: &str, out: &mut Vec<Finding>) {
                 _ => Feature::UnknownShape,
             };
             push(out, feature, &format!("{where_} shape `{ty}`"));
-        }
-        if s.get("d").and_then(Value::as_u64) == Some(3) {
-            push(out, Feature::ReversedDirection, where_);
-        }
-        if ty == "fl" && s.get("r").and_then(Value::as_u64) == Some(2) {
-            push(out, Feature::EvenOddFill, where_);
-        }
-        // A dashed stroke carries `d`: a list of `{n: "d"|"g"|"o"}` lengths.
-        // Nothing in the compiler modelled it, so eight files in the
-        // lottie-flutter corpus drew a solid line and said nothing. SVG spells
-        // it `stroke-dasharray`, so this is a rejection waiting to become an
-        // implementation rather than a limit of the format.
-        if (ty == "st" || ty == "gs")
-            && s.get("d").and_then(Value::as_array).is_some_and(|d| !d.is_empty())
-        {
-            push(out, Feature::StrokeDash, where_);
-        }
-        // A group transform skews too, and the layer-transform check above
-        // cannot see it. `Tests_Skew` and `Tests_StarSkew` both put the skew
-        // here, compiled without a word, and rendered 18% and 6% wrong — which
-        // is the whole thing this scan exists to prevent.
-        if ty == "tr" {
-            for key in ["sk", "sa"] {
-                if let Some(v) = s.get(key)
-                    && property_is_nonzero(v)
-                {
-                    push(out, Feature::Skew, &format!("{where_} group transform"));
-                    break;
-                }
-            }
         }
         // A keyframed colour ramp is planned as one binding per `<stop>`.
         // What that cannot represent is a ramp that also carries alpha stops:
@@ -507,34 +458,7 @@ fn scan_shapes(shapes: &[Value], where_: &str, out: &mut Vec<Finding>) {
     }
 }
 
-/// A static property whose value is not zero, or any animated one.
-fn property_is_nonzero(p: &Value) -> bool {
-    if p.get("a").and_then(Value::as_u64) == Some(1) {
-        return true;
-    }
-    match p.get("k") {
-        Some(Value::Number(n)) => n.as_f64().map(|v| v != 0.0).unwrap_or(false),
-        Some(Value::Array(a)) => a
-            .iter()
-            .any(|v| v.as_f64().map(|x| x != 0.0).unwrap_or(false)),
-        _ => false,
-    }
-}
 
-fn property_differs_from(p: &Value, expect: f64) -> bool {
-    if p.get("a").and_then(Value::as_u64) == Some(1) {
-        return true;
-    }
-    match p.get("k") {
-        Some(Value::Number(n)) => n.as_f64().map(|v| v != expect).unwrap_or(false),
-        Some(Value::Array(a)) => a
-            .first()
-            .and_then(Value::as_f64)
-            .map(|v| v != expect)
-            .unwrap_or(false),
-        _ => false,
-    }
-}
 
 /// Findings not covered by `allow`, formatted as a build error.
 pub fn reject(findings: &[Finding], allow: &BTreeSet<Feature>) -> Option<String> {
@@ -578,10 +502,10 @@ mod tests {
 
     #[test]
     fn a_finding_is_reported_with_its_layer() {
-        let doc = json!({ "layers": [{ "ty": 4, "nm": "O", "bm": 16, "ks": {} }] });
+        let doc = json!({ "layers": [{ "ty": 4, "nm": "O", "ddd": 1, "ks": {} }] });
         let found = scan(&doc);
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].feature, Feature::BlendMode);
+        assert_eq!(found[0].feature, Feature::ThreeD);
         assert!(found[0].location.contains("`O`"), "{}", found[0].location);
     }
 
@@ -617,28 +541,20 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_skew_is_not_a_skew() {
-        let doc = json!({ "layers": [{ "ty": 4, "ks": { "sk": { "a": 0, "k": 0 } } }] });
-        assert!(scan(&doc).is_empty());
-        let doc = json!({ "layers": [{ "ty": 4, "ks": { "sk": { "a": 0, "k": 12 } } }] });
-        assert_eq!(scan(&doc)[0].feature, Feature::Skew);
-    }
-
-    #[test]
     fn allowing_a_feature_stops_it_blocking() {
-        let doc = json!({ "layers": [{ "ty": 4, "bm": 16, "ks": {} }] });
+        let doc = json!({ "layers": [{ "ty": 4, "ddd": 1, "ks": {} }] });
         let found = scan(&doc);
         assert!(reject(&found, &BTreeSet::new()).is_some());
-        let allow = BTreeSet::from([Feature::BlendMode]);
+        let allow = BTreeSet::from([Feature::ThreeD]);
         assert!(reject(&found, &allow).is_none());
     }
 
     #[test]
     fn the_error_says_what_ignoring_it_would_do() {
-        let doc = json!({ "layers": [{ "ty": 4, "bm": 16, "ks": {} }] });
+        let doc = json!({ "layers": [{ "ty": 4, "ddd": 1, "ks": {} }] });
         let msg = reject(&scan(&doc), &BTreeSet::new()).unwrap();
-        assert!(msg.contains("blend-mode"), "{msg}");
-        assert!(msg.contains("normal"), "{msg}");
-        assert!(msg.contains("--allow blend-mode"), "{msg}");
+        assert!(msg.contains("3d"), "{msg}");
+        assert!(msg.contains("flat"), "{msg}");
+        assert!(msg.contains("--allow 3d"), "{msg}");
     }
 }

@@ -73,6 +73,20 @@ pub mod op {
     /// so same-style contours share a fill rule and interact. The one
     /// argument is a list section of property offsets.
     pub const SHAPE_MULTI: u8 = 16;
+    /// Write `stroke-dasharray`/`stroke-dashoffset` from an animated dash
+    /// pattern. The one argument is `[count, length…, offset]`.
+    pub const DASH: u8 = 17;
+    /// `TRANSFORM` with a live skew — its own op so the skew factor costs
+    /// nothing on the overwhelmingly skewless majority.
+    pub const TRANSFORM_SKEW: u8 = 18;
+    /// Animated effect parameters, each one small attribute write:
+    /// a gaussian blur's `stdDeviation` (sigma × 0.3, one axis zeroed by the
+    /// dimensions tag), a scaled scalar (`stdDeviation`, `flood-opacity`),
+    /// and a drop shadow's polar `dx`/`dy`.
+    pub const FX_BLUR: u8 = 19;
+    pub const FX_STD: u8 = 20;
+    pub const FX_FLOOD_O: u8 = 21;
+    pub const FX_OFFSET: u8 = 22;
 }
 
 bitflags! {
@@ -147,6 +161,12 @@ bitflags! {
         /// a layer trim). Its own bit, not `TRIM`'s: the composing helpers
         /// would otherwise ship with every ordinarily-trimmed animation.
         const TRIM_CHAIN   = 1 << 33;
+        /// An animated stroke dash pattern.
+        const DASH         = 1 << 34;
+        /// An animated transform with a live skew.
+        const TRANSFORM_SKEW = 1 << 35;
+        /// Animated layer-effect parameters (blur sigma, shadow offset…).
+        const FX           = 1 << 36;
     }
 }
 
@@ -272,7 +292,7 @@ pub struct SceneData {
     pub uses_clone_ids: bool,
     pub easings: Vec<Easing>,
     /// `[parentSlot, offset, loopIp, loopOp]`; slot 0 is the root clock.
-    pub timelines: Vec<[f64; 4]>,
+    pub timelines: Vec<[f64; 5]>,
     /// Timeline slot per binding; all-zero arrays are dropped on the wire.
     pub slots: Vec<u32>,
     /// `[ip, op)` visibility windows. A binding inside a layer that is off at
@@ -515,6 +535,9 @@ pub fn caps_for_op(op: u8) -> Caps {
         op::SHAPE_ELLIPSE => Caps::GEOM_ELLIPSE,
         op::SHAPE_STAR => Caps::GEOM_STAR,
         op::RAMP => Caps::RAMP,
+        op::DASH => Caps::DASH,
+        op::TRANSFORM_SKEW => Caps::TRANSFORM_SKEW,
+        op::FX_BLUR | op::FX_STD | op::FX_FLOOD_O | op::FX_OFFSET => Caps::FX,
         op::SHAPE_MULTI => Caps::SHAPE_MULTI,
         _ => Caps::empty(),
     }
@@ -913,7 +936,7 @@ pub(crate) struct Planner<'a> {
     pub(crate) has_exprs: bool,
     easings: Vec<Easing>,
     easing_index: HashMap<[u64; 4], u32>,
-    timelines: Vec<[f64; 4]>,
+    timelines: Vec<[f64; 5]>,
     /// Precomps, planned once each.
     pub(crate) assets: Vec<AssetPlan>,
     pub(crate) asset_index: HashMap<String, u32>,
@@ -1284,23 +1307,42 @@ impl<'a> Planner<'a> {
         // element bases were assigned by the inline walk.
         for n in top {
             let el_base = self.el_base_of(n.node);
-            self.expand_one(n.asset, el_base, n.parent_slot, n.offset);
+            self.expand_one(n.asset, el_base, n.parent_slot, n.offset, n.rate);
         }
     }
 
-    fn expand_one(&mut self, asset: u32, el_base: u32, parent_slot: u32, offset: f64) {
+    fn expand_one(
+        &mut self,
+        asset: u32,
+        el_base: u32,
+        parent_slot: u32,
+        offset: f64,
+        rate: f64,
+    ) {
+        // An unstretched use folds its start time into each first-level row;
+        // a stretched one needs a clock of its own, because
+        // `(parent − offset) / rate` does not distribute over the rows'
+        // subtractions.
+        let instance_slot = if rate != 1.0 {
+            self.timelines
+                .push([parent_slot as f64, offset, rate, -1e6, 1e6]);
+            self.timelines.len() as u32
+        } else {
+            parent_slot
+        };
+        let fold = if rate != 1.0 { 0.0 } else { offset };
         let slot_base = self.timelines.len() as u32;
 
         let specs = self.assets[asset as usize].timelines.clone();
         for spec in &specs {
             // A local parent of 0 is this instance's own clock.
             let parent = if spec[0] == 0.0 {
-                parent_slot as f64
+                instance_slot as f64
             } else {
                 slot_base as f64 + spec[0]
             };
             self.timelines
-                .push([parent, spec[1] + offset, spec[2], spec[3]]);
+                .push([parent, spec[1] + fold, spec[2], spec[3], spec[4]]);
         }
 
         self.uses.push(instance::Use {
@@ -1317,7 +1359,7 @@ impl<'a> Planner<'a> {
             } else {
                 slot_base + n.parent_slot
             };
-            self.expand_one(n.asset, el_base + n.el_base, inner_parent, n.offset);
+            self.expand_one(n.asset, el_base + n.el_base, inner_parent, n.offset, n.rate);
         }
         self.assets[asset as usize].nested = nested;
     }

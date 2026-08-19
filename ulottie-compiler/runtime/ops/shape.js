@@ -226,14 +226,14 @@ export function oShapeMulti(x, s) {
 // --- generated outlines ----------------------------------------------------
 
 export function bShapeRect(x, base, eb, sb, ps, at) {
-  const b = open(x, base, eb, sb, ps, 4);
+  const b = open(x, base, eb, sb, ps, 5);
   const n = b.n;
   return {
-    n, E: b.E, G: b.G, L: b.L, Z: b.A[0], P: b.A[1], R: b.A[2],
+    n, E: b.E, G: b.G, L: b.L, Z: b.A[0], P: b.A[1], R: b.A[2], D: b.A[3],
     XZ: x.expr ? xcol(x, b.A[0], n, at) : null,
     XP: x.expr ? xcol(x, b.A[1], n, at) : null,
     XR: x.expr ? xcol(x, b.A[2], n, at) : null,
-    TM: hasTrim(b.A[3], n) ? trimCols(x, b.A[3], null, n, at) : null,
+    TM: hasTrim(b.A[4], n) ? trimCols(x, b.A[4], null, n, at) : null,
     CZ: new Int32Array(n), CP: new Int32Array(n), CR: new Int32Array(n),
     VZ: [0, 0, 0], VP: [0, 0, 0], O: outlines(n), W: new Array(n),
   };
@@ -242,27 +242,27 @@ export function bShapeRect(x, base, eb, sb, ps, at) {
 export function oShapeRect(x, s) {
   const n = s.n, E = s.E, G = s.G, L = s.L, TM = s.TM, TB = TM && TM.M;
   const T = x.T, ON = x.ON;
-  const Z = s.Z, P = s.P, R = s.R, XZ = s.XZ, XP = s.XP, XR = s.XR;
+  const Z = s.Z, P = s.P, R = s.R, D = s.D, XZ = s.XZ, XP = s.XP, XR = s.XR;
   const CZ = s.CZ, CP = s.CP, CR = s.CR, VZ = s.VZ, VP = s.VP, O = s.O, W = s.W;
   for (let i = 0; i < n; i++) {
     if (!ON[G[i]]) continue;
     const t = T[L[i]], el = E[i];
     const z = xvv(x, XZ, Z, i, t, CZ, VZ);
     const p = xvv(x, XP, P, i, t, CP, VP);
-    let src = rectPath(O[i], p[0], p[1], z[0], z[1], xv(x, XR, R, i, t, CR));
+    let src = rectPath(O[i], p[0], p[1], z[0], z[1], xv(x, XR, R, i, t, CR), D[i]);
     if (TB && TB[i]) src = trim(x, TM, i, t, src, el);
     if (src) put(el, 'd', pathD(src), W, i);
   }
 }
 
 export function bShapeEllipse(x, base, eb, sb, ps, at) {
-  const b = open(x, base, eb, sb, ps, 3);
+  const b = open(x, base, eb, sb, ps, 4);
   const n = b.n;
   return {
-    n, E: b.E, G: b.G, L: b.L, Z: b.A[0], P: b.A[1],
+    n, E: b.E, G: b.G, L: b.L, Z: b.A[0], P: b.A[1], D: b.A[2],
     XZ: x.expr ? xcol(x, b.A[0], n, at) : null,
     XP: x.expr ? xcol(x, b.A[1], n, at) : null,
-    TM: hasTrim(b.A[2], n) ? trimCols(x, b.A[2], null, n, at) : null,
+    TM: hasTrim(b.A[3], n) ? trimCols(x, b.A[3], null, n, at) : null,
     CZ: new Int32Array(n), CP: new Int32Array(n),
     VZ: [0, 0, 0], VP: [0, 0, 0], O: outlines(n), W: new Array(n),
   };
@@ -271,33 +271,37 @@ export function bShapeEllipse(x, base, eb, sb, ps, at) {
 export function oShapeEllipse(x, s) {
   const n = s.n, E = s.E, G = s.G, L = s.L, TM = s.TM, TB = TM && TM.M;
   const T = x.T, ON = x.ON;
-  const Z = s.Z, P = s.P, XZ = s.XZ, XP = s.XP, CZ = s.CZ, CP = s.CP;
+  const Z = s.Z, P = s.P, D = s.D, XZ = s.XZ, XP = s.XP, CZ = s.CZ, CP = s.CP;
   const VZ = s.VZ, VP = s.VP, O = s.O, W = s.W;
   for (let i = 0; i < n; i++) {
     if (!ON[G[i]]) continue;
     const t = T[L[i]], el = E[i];
     const z = xvv(x, XZ, Z, i, t, CZ, VZ);
     const p = xvv(x, XP, P, i, t, CP, VP);
-    let src = ellipsePath(O[i], p[0], p[1], z[0] / 2, z[1] / 2);
+    let src = ellipsePath(O[i], p[0], p[1], z[0] / 2, z[1] / 2, D[i]);
     if (TB && TB[i]) src = trim(x, TM, i, t, src, el);
     if (src) put(el, 'd', pathD(src), W, i);
   }
 }
 
 export function bShapeStar(x, base, eb, sb, ps, at) {
-  const b = open(x, base, eb, sb, ps, 7);
+  const b = open(x, base, eb, sb, ps, 10);
   const n = b.n;
   return {
     n, E: b.E, G: b.G, L: b.L,
     Y: b.A[0], K: b.A[1], P: b.A[2], Z: b.A[3], I: b.A[4], R: b.A[5],
+    OS: b.A[6], IS: b.A[7], D: b.A[8],
     XK: x.expr ? xcol(x, b.A[1], n, at) : null,
     XP: x.expr ? xcol(x, b.A[2], n, at) : null,
     XZ: x.expr ? xcol(x, b.A[3], n, at) : null,
     XI: x.expr ? xcol(x, b.A[4], n, at) : null,
     XR: x.expr ? xcol(x, b.A[5], n, at) : null,
-    TM: hasTrim(b.A[6], n) ? trimCols(x, b.A[6], null, n, at) : null,
+    XO: x.expr ? xcol(x, b.A[6], n, at) : null,
+    XS: x.expr ? xcol(x, b.A[7], n, at) : null,
+    TM: hasTrim(b.A[9], n) ? trimCols(x, b.A[9], null, n, at) : null,
     CK: new Int32Array(n), CP: new Int32Array(n), CZ: new Int32Array(n),
     CI: new Int32Array(n), CR: new Int32Array(n),
+    CO: new Int32Array(n), CS: new Int32Array(n),
     VP: [0, 0, 0], O: outlines(n), W: new Array(n),
   };
 }
@@ -305,16 +309,17 @@ export function bShapeStar(x, base, eb, sb, ps, at) {
 export function oShapeStar(x, s) {
   const n = s.n, E = s.E, G = s.G, L = s.L, Y = s.Y, TM = s.TM, TB = TM && TM.M;
   const T = x.T, ON = x.ON;
-  const K = s.K, P = s.P, Z = s.Z, I = s.I, R = s.R;
-  const XK = s.XK, XP = s.XP, XZ = s.XZ, XI = s.XI, XR = s.XR;
-  const CK = s.CK, CP = s.CP, CZ = s.CZ, CI = s.CI, CR = s.CR;
+  const K = s.K, P = s.P, Z = s.Z, I = s.I, R = s.R, OS = s.OS, IS = s.IS, D = s.D;
+  const XK = s.XK, XP = s.XP, XZ = s.XZ, XI = s.XI, XR = s.XR, XO = s.XO, XS = s.XS;
+  const CK = s.CK, CP = s.CP, CZ = s.CZ, CI = s.CI, CR = s.CR, CO = s.CO, CS = s.CS;
   const VP = s.VP, O = s.O, W = s.W;
   for (let i = 0; i < n; i++) {
     if (!ON[G[i]]) continue;
     const t = T[L[i]], el = E[i];
     const p = xvv(x, XP, P, i, t, CP, VP);
     let src = starPath(O[i], Y[i], xv(x, XK, K, i, t, CK), p[0], p[1],
-      xv(x, XZ, Z, i, t, CZ), xv(x, XI, I, i, t, CI), xv(x, XR, R, i, t, CR));
+      xv(x, XZ, Z, i, t, CZ), xv(x, XI, I, i, t, CI), xv(x, XR, R, i, t, CR),
+      xv(x, XO, OS, i, t, CO), xv(x, XS, IS, i, t, CS), D[i]);
     if (TB && TB[i]) src = trim(x, TM, i, t, src, el);
     if (src) put(el, 'd', pathD(src), W, i);
   }

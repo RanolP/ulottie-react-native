@@ -40,9 +40,9 @@ pub struct AssetPlan {
     /// exists so the layer resolver can answer `thisComp.layer('x')` inside an
     /// asset the same way it does in the document.
     pub scopes: Vec<u32>,
-    /// `[parentSlot, offset, loopIp, loopOp]`, with `parentSlot` 0 meaning the
+    /// `[parentSlot, offset, rate, loopIp, loopOp]`, with `parentSlot` 0 meaning the
     /// instance's own clock and `n` meaning this asset's local slot `n - 1`.
-    pub timelines: Vec<[f64; 4]>,
+    pub timelines: Vec<[f64; 5]>,
     /// Precomps used *inside* this one, with offsets local to it. Both real
     /// fixtures nest — ripple's outer comp holds 23 uses of the inner one — so
     /// expansion has to recurse.
@@ -61,6 +61,8 @@ pub struct Nested {
     pub parent_slot: u32,
     /// The precomp layer's start time.
     pub offset: f64,
+    /// The precomp layer's time stretch — the instance clock divides by it.
+    pub rate: f64,
 }
 
 /// One instantiation in the finished scene: an asset plus where its elements

@@ -750,12 +750,16 @@ pub fn try_emit(scene: &Scene) -> Option<Generated> {
         }
 
         let off = q(t[1]);
-        let (lo, hi) = (q(t[2]), q(t[3]));
-        let shifted = if off == 0.0 {
+        let rate = q(t[2]);
+        let (lo, hi) = (q(t[3]), q(t[4]));
+        let mut shifted = if off == 0.0 {
             src
         } else {
             format!("{src}-{}", fmt_num(off))
         };
+        if rate != 1.0 {
+            shifted = format!("({shifted})/{}", fmt_num(rate));
+        }
         writeln!(g.body, "let t{}={shifted};", i + 1).ok()?;
         if hi - lo > 0.0 {
             writeln!(
@@ -1080,6 +1084,13 @@ fn emit_binding(
                 }
             };
 
+            // A `Tag` argument's literal value — the star kind, the direction.
+            let tag = |i: usize| -> Option<u32> {
+                match list.get(i) {
+                    Some(Arg::Tag(t)) => Some(*t),
+                    _ => None,
+                }
+            };
             // The geometry generators write into one scratch object per
             // binding, so a steady-state frame allocates nothing.
             let src = match b.op {
@@ -1091,12 +1102,13 @@ fn emit_binding(
                     let ps = g.prop(arg(1)?, 2, easings);
                     let rd = g.prop(arg(2)?, 1, easings);
                     format!(
-                        "rectPath({scratch},{},{},{},{},{})",
+                        "rectPath({scratch},{},{},{},{},{},{})",
                         ps[0].js(),
                         ps[1].js(),
                         sz[0].js(),
                         sz[1].js(),
-                        rd[0].js()
+                        rd[0].js(),
+                        tag(3)?
                     )
                 }
                 op::SHAPE_ELLIPSE => {
@@ -1105,34 +1117,37 @@ fn emit_binding(
                     let sz = g.prop(arg(0)?, 2, easings);
                     let ps = g.prop(arg(1)?, 2, easings);
                     format!(
-                        "ellipsePath({scratch},{},{},{},{})",
+                        "ellipsePath({scratch},{},{},{},{},{})",
                         ps[0].js(),
                         ps[1].js(),
                         mul(&sz[0], &Val::Lit(0.5)).js(),
-                        mul(&sz[1], &Val::Lit(0.5)).js()
+                        mul(&sz[1], &Val::Lit(0.5)).js(),
+                        tag(2)?
                     )
                 }
                 op::SHAPE_STAR => {
                     g.need("starPath");
                     let scratch = g.scratch(bi);
-                    let sy = match list.first() {
-                        Some(Arg::Tag(t)) => *t as f64,
-                        _ => return None,
-                    };
+                    let sy = tag(0)? as f64;
                     let pt = g.prop(arg(1)?, 1, easings);
                     let ps = g.prop(arg(2)?, 2, easings);
                     let or = g.prop(arg(3)?, 1, easings);
                     let ir = g.prop(arg(4)?, 1, easings);
                     let rt = g.prop(arg(5)?, 1, easings);
+                    let os = g.prop(arg(6)?, 1, easings);
+                    let is = g.prop(arg(7)?, 1, easings);
                     format!(
-                        "starPath({scratch},{},{},{},{},{},{},{})",
+                        "starPath({scratch},{},{},{},{},{},{},{},{},{},{})",
                         fmt_num(sy),
                         pt[0].js(),
                         ps[0].js(),
                         ps[1].js(),
                         or[0].js(),
                         ir[0].js(),
-                        rt[0].js()
+                        rt[0].js(),
+                        os[0].js(),
+                        is[0].js(),
+                        tag(8)?
                     )
                 }
                 // Named rather than a catch-all: a new geometry op would

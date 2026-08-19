@@ -19,8 +19,8 @@ const M =
     '</svg>' +
     '<defs>' +
       '<mask id="m0--u" mask-type="luminance">' +
-        '<rect width="500" height="500" fill="#fff"/>' +
-        '<path fill="#000" fill-rule="evenodd"/>' +
+        '<rect width="500" height="500" fill="#ffffff"/>' +
+        '<path fill="#000"/>' +
       '</mask>' +
     '</defs>' +
   '</svg>';

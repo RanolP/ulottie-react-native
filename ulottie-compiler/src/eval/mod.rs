@@ -80,7 +80,8 @@ fn render_layer(payload: &Payload, layer: &data::Layer, frame: f64) -> Result<Re
                 .as_ref()
                 .and_then(|a| a.get(refid))
                 .ok_or_else(|| anyhow!("precomp ref `{}` not found", refid))?;
-            let inner_frame = frame - layer.st.unwrap_or(0.0);
+            let rate = if layer.sr == 0.0 { 1.0 } else { layer.sr };
+            let inner_frame = (frame - layer.st.unwrap_or(0.0)) / rate;
             let inner_layers = match asset {
                 data::Asset::Precomp { l } => l,
                 _ => return Err(anyhow!("layer ty=0 references non-precomp asset")),
@@ -168,16 +169,25 @@ fn render_shape_ref(payload: &Payload, sr: &ShapeRef, frame: f64) -> Result<Shap
 
 fn build_geometry(shape: &Shape, frame: f64) -> Result<Geometry> {
     match shape {
-        Shape::Rect { sz, ps, rd, .. } => {
+        Shape::Rect { sz, ps, rd, rv, .. } => {
             let size = property::eval_vec2(sz, frame)?;
             let pos = property::eval_vec2(ps, frame)?;
             let r = property::eval_scalar(rd, frame)?;
-            Ok(Geometry::Path(geometry::rect_to_path(pos, size, r)))
+            Ok(Geometry::Path(geometry::rect_to_path(
+                pos,
+                size,
+                r,
+                *rv != 0,
+            )))
         }
-        Shape::Ellipse { sz, ps, .. } => {
+        Shape::Ellipse { sz, ps, rv, .. } => {
             let size = property::eval_vec2(sz, frame)?;
             let pos = property::eval_vec2(ps, frame)?;
-            Ok(Geometry::Path(geometry::ellipse_to_path(pos, size)))
+            Ok(Geometry::Path(geometry::ellipse_to_path(
+                pos,
+                size,
+                *rv != 0,
+            )))
         }
         Shape::Path { pt, .. } => {
             let path = property::eval_path(pt, frame)?;
@@ -190,6 +200,9 @@ fn build_geometry(shape: &Shape, frame: f64) -> Result<Geometry> {
             or,
             ir,
             rt,
+            os,
+            is,
+            rv,
             ..
         } => {
             let points = property::eval_scalar(pt, frame)?;
@@ -197,8 +210,16 @@ fn build_geometry(shape: &Shape, frame: f64) -> Result<Geometry> {
             let outer = property::eval_scalar(or, frame)?;
             let inner = property::eval_scalar(ir, frame)?;
             let rot = property::eval_scalar(rt, frame)?;
+            let osr = match os {
+                Some(p) => property::eval_scalar(p, frame)?,
+                None => 0.0,
+            };
+            let isr = match is {
+                Some(p) => property::eval_scalar(p, frame)?,
+                None => 0.0,
+            };
             Ok(Geometry::Path(geometry::polystar_to_path(
-                *sy, pos, points, outer, inner, rot,
+                *sy, pos, points, outer, inner, rot, osr, isr, *rv != 0,
             )))
         }
     }
@@ -206,10 +227,15 @@ fn build_geometry(shape: &Shape, frame: f64) -> Result<Geometry> {
 
 fn build_style(style: &Style, frame: f64) -> Result<RenderedStyle> {
     match style {
-        Style::Fill { c, o } => {
+        Style::Fill { c, o, fr } => {
             let color = property::eval_color(c, frame)?;
             let opacity = property::eval_scalar(o, frame)?;
-            Ok(RenderedStyle::Paint(Paint::Solid { color, opacity }))
+            let rule = if *fr == 2 {
+                FillRule::EvenOdd
+            } else {
+                FillRule::NonZero
+            };
+            Ok(RenderedStyle::Paint(Paint::Solid { color, opacity, rule }))
         }
         Style::Stroke {
             c,
@@ -218,6 +244,8 @@ fn build_style(style: &Style, frame: f64) -> Result<RenderedStyle> {
             lc,
             lj,
             ml,
+            dl,
+            dof,
         } => {
             let color = property::eval_color(c, frame)?;
             let opacity = property::eval_scalar(o, frame)?;
@@ -229,6 +257,7 @@ fn build_style(style: &Style, frame: f64) -> Result<RenderedStyle> {
                 linecap: *lc,
                 linejoin: *lj,
                 miter_limit: *ml,
+                dash: eval_dash(dl, dof, frame)?,
             })
         }
         Style::TrimPath { s, e, o, m } => {
@@ -272,6 +301,8 @@ fn build_style(style: &Style, frame: f64) -> Result<RenderedStyle> {
             lc,
             lj,
             ml,
+            dl,
+            dof,
         } => {
             let stops = gradient::resolve_stops(g)?;
             let opacity = property::eval_scalar(o, frame)?;
@@ -294,7 +325,29 @@ fn build_style(style: &Style, frame: f64) -> Result<RenderedStyle> {
                 linecap: *lc,
                 linejoin: *lj,
                 miter_limit: *ml,
+                dash: eval_dash(dl, dof, frame)?,
             })
         }
     }
+}
+
+/// A dash pattern at one frame: the lengths in draw order plus the offset,
+/// `None` for a solid stroke.
+fn eval_dash(
+    dl: &[crate::data::InlineProp],
+    dof: &Option<crate::data::InlineProp>,
+    frame: f64,
+) -> Result<Option<frame::RenderedDash>> {
+    if dl.is_empty() {
+        return Ok(None);
+    }
+    let mut lengths = Vec::with_capacity(dl.len());
+    for p in dl {
+        lengths.push(property::eval_scalar(p, frame)?);
+    }
+    let offset = match dof {
+        Some(p) => property::eval_scalar(p, frame)?,
+        None => 0.0,
+    };
+    Ok(Some(frame::RenderedDash { lengths, offset }))
 }

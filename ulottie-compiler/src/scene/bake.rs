@@ -90,7 +90,7 @@ impl Planner<'_> {
                 t.push(secs * self.payload.c.fr);
                 continue;
             }
-            t.push(parent - row[1]);
+            t.push((parent - row[1]) / row[2]);
         }
         t
     }
@@ -116,6 +116,18 @@ impl Planner<'_> {
                 self.vec2(prop(1), f, [0.0, 0.0]),
                 self.vec2(prop(2), f, [100.0, 100.0]),
                 self.scalar(prop(3), f, 0.0),
+                0.0,
+                0.0,
+            )),
+
+            // Mirrors `oTransformSkew`.
+            op::TRANSFORM_SKEW => out.push(matrix_attr(
+                self.vec2(prop(0), f, [0.0, 0.0]),
+                self.vec2(prop(1), f, [0.0, 0.0]),
+                self.vec2(prop(2), f, [100.0, 100.0]),
+                self.scalar(prop(3), f, 0.0),
+                self.scalar(prop(4), f, 0.0),
+                self.scalar(prop(5), f, 0.0),
             )),
 
             // The linear part is a constant string the compiler already built;
@@ -154,6 +166,52 @@ impl Planner<'_> {
 
             op::SHAPE | op::SHAPE_RECT | op::SHAPE_ELLIPSE | op::SHAPE_STAR => {
                 self.bake_shape(b, f, out)
+            }
+
+            // Animated effect parameters, mirroring `ops/fx.js` write for
+            // write.
+            op::FX_BLUR => {
+                let s = self.scalar(prop(0), f, 0.0) * 0.3;
+                let d = num(1) as u32;
+                let sx = if d == 3 { 0.0 } else { s };
+                let sy = if d == 2 { 0.0 } else { s };
+                out.push(("stdDeviation".into(), format!("{sx} {sy}")));
+            }
+            op::FX_STD => {
+                out.push(("stdDeviation".into(), format!("{}", self.scalar(prop(0), f, 0.0) / 4.0)));
+            }
+            op::FX_FLOOD_O => {
+                out.push((
+                    "flood-opacity".into(),
+                    format!("{}", self.scalar(prop(0), f, 0.0) / 255.0),
+                ));
+            }
+            op::FX_OFFSET => {
+                let rad = (self.scalar(prop(0), f, 0.0) - 90.0).to_radians();
+                let d = self.scalar(prop(1), f, 0.0);
+                out.push(("dx".into(), format!("{}", d * rad.cos())));
+                out.push(("dy".into(), format!("{}", d * rad.sin())));
+            }
+
+            // Mirrors `oDash`: `[count, length…, offset]`, the same raw
+            // space-joined numbers.
+            op::DASH => {
+                if let Some(Arg::List(items)) = b.args.first() {
+                    let count = match items.first() {
+                        Some(Arg::Num(n)) => *n as usize,
+                        _ => 0,
+                    };
+                    let at = |i: usize| match items.get(i) {
+                        Some(Arg::Prop(p)) => self.scalar(Some(p), f, 0.0),
+                        _ => 0.0,
+                    };
+                    let arr = (0..count)
+                        .map(|j| svg::n(at(1 + j)))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    out.push(("stroke-dasharray".into(), arr));
+                    out.push(("stroke-dashoffset".into(), svg::n(at(1 + count))));
+                }
             }
 
             // Several path properties into one element's `d`; no trim (a
@@ -268,6 +326,8 @@ impl Planner<'_> {
                     self.vec2(rec.a.as_ref(), f, [0.0, 0.0]),
                     self.vec2(rec.sc.as_ref(), f, [100.0, 100.0]),
                     self.scalar(rec.r.as_ref(), f, 0.0),
+                    0.0,
+                    0.0,
                 ));
             }
 
@@ -287,6 +347,13 @@ impl Planner<'_> {
 
     /// Geometry, optionally trimmed, as a `d`. Mirrors `bShape`.
     fn bake_shape(&self, b: &Binding, f: f64, out: &mut Vec<(String, String)>) {
+        /// A `Tag` argument's value — an enumeration, absent reads as zero.
+        fn tag(g: &[Arg], i: usize) -> u32 {
+            match g.get(i) {
+                Some(Arg::Tag(t)) => *t,
+                _ => 0,
+            }
+        }
         // The generator is the op; the arguments are the descriptor, minus the
         // tag that used to lead it.
         let g = &b.args;
@@ -311,18 +378,27 @@ impl Planner<'_> {
                 Some(Prop::Path(p)) => p,
                 _ => return,
             },
-            op::SHAPE_RECT => flat(crate::eval::geometry::rect_to_path(v2(1), v2(0), n1(2))),
-            op::SHAPE_ELLIPSE => flat(crate::eval::geometry::ellipse_to_path(v2(1), v2(0))),
+            op::SHAPE_RECT => flat(crate::eval::geometry::rect_to_path(
+                v2(1),
+                v2(0),
+                n1(2),
+                tag(g, 3) != 0,
+            )),
+            op::SHAPE_ELLIPSE => flat(crate::eval::geometry::ellipse_to_path(
+                v2(1),
+                v2(0),
+                tag(g, 2) != 0,
+            )),
             op::SHAPE_STAR => flat(crate::eval::geometry::polystar_to_path(
-                match g.first() {
-                    Some(Arg::Tag(t)) => *t as u8,
-                    _ => 1,
-                },
+                tag(g, 0) as u8,
                 v2(2),
                 n1(1),
                 n1(3),
                 n1(4),
                 n1(5),
+                n1(6),
+                n1(7),
+                tag(g, 8) != 0,
             )),
             _ => return,
         };
@@ -504,10 +580,34 @@ fn key_value(a: &Anim, v: &[f64], paths: &[FlatPath], i: usize) -> Prop {
 
 /// `translate(p) rotate(r) scale(s) translate(-a)`, folded to one `matrix()`.
 /// The same composition — and the same per-role precision — as `bTransform`.
-fn matrix_attr(p: [f64; 2], a: [f64; 2], s: [f64; 2], r: f64) -> (String, String) {
+fn matrix_attr(
+    p: [f64; 2],
+    a: [f64; 2],
+    s: [f64; 2],
+    r: f64,
+    sk: f64,
+    sa: f64,
+) -> (String, String) {
     let (sn, cs) = r.to_radians().sin_cos();
     let (sx, sy) = (s[0] / 100.0, s[1] / 100.0);
-    let (m0, m1, m2, m3) = (cs * sx, sn * sx, -sn * sy, cs * sy);
+    let (mut m0, mut m1, mut m2, mut m3) = (cs * sx, sn * sx, -sn * sy, cs * sy);
+    if sk != 0.0 {
+        // The same factor `TransformSpec::to_matrix` folds in.
+        let t = (-sk.to_radians()).tan();
+        let (s2, c2) = sa.to_radians().sin_cos();
+        let (f0, f1, f2, f3) = (
+            1.0 + t * s2 * c2,
+            t * c2 * c2,
+            -t * s2 * s2,
+            1.0 - t * s2 * c2,
+        );
+        let (g0, g1) = (cs * f0 - sn * f2, sn * f0 + cs * f2);
+        let (g2, g3) = (cs * f1 - sn * f3, sn * f1 + cs * f3);
+        m0 = g0 * sx;
+        m1 = g1 * sx;
+        m2 = g2 * sy;
+        m3 = g3 * sy;
+    }
     (
         "transform".into(),
         svg::matrix_str(&[

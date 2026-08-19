@@ -244,6 +244,14 @@ impl Encoder {
             a: Some(self.inline_vec3(&layer.transform.anchor)?),
             sc: Some(self.inline_vec3(&layer.transform.scale)?),
             r: Some(self.inline_scalar(&layer.transform.rotation)?),
+            sk: match &layer.transform.skew {
+                Some(p) => Some(self.inline_scalar(p)?),
+                None => None,
+            },
+            sa: match &layer.transform.skew_axis {
+                Some(p) => Some(self.inline_scalar(p)?),
+                None => None,
+            },
             o: Some(self.inline_scalar(&layer.transform.opacity)?),
             ..Default::default()
         };
@@ -272,6 +280,9 @@ impl Encoder {
                 let mode = match m.mode {
                     ir::MaskMode::Add => "a",
                     ir::MaskMode::Subtract => "s",
+                    ir::MaskMode::Intersect => "i",
+                    ir::MaskMode::None => "n",
+                    // lottie-web's untested branch paints these white — Add.
                     ir::MaskMode::Other => "a",
                 };
                 let pt = self.inline_path(&m.shape)?;
@@ -351,10 +362,10 @@ impl Encoder {
                 height,
             } => {
                 out.rf = Some(asset.clone());
-                if *width != 0 {
+                if *width != 0.0 {
                     out.sw = Some(*width);
                 }
-                if *height != 0 {
+                if *height != 0.0 {
                     out.sh = Some(*height);
                 }
             }
@@ -424,11 +435,18 @@ impl Encoder {
 
         for s in shapes.iter().rev() {
             match s {
-                ir::ShapeNode::Fill { color, opacity, .. } => {
+                ir::ShapeNode::Fill { color, opacity, rule, .. } => {
                     let c = self.inline_color(color)?;
                     let o = self.inline_scalar(opacity)?;
                     let id = self.payload.y.len() as u32;
-                    self.payload.y.push(Style::Fill { c, o });
+                    self.payload.y.push(Style::Fill {
+                        c,
+                        o,
+                        fr: match rule {
+                            ir::FillRule::NonZero => 1,
+                            ir::FillRule::EvenOdd => 2,
+                        },
+                    });
                     own_styles.insert(0, id);
                 }
                 ir::ShapeNode::Stroke {
@@ -438,11 +456,13 @@ impl Encoder {
                     linecap,
                     linejoin,
                     miter_limit,
+                    dash,
                     ..
                 } => {
                     let c = self.inline_color(color)?;
                     let o = self.inline_scalar(opacity)?;
                     let w = self.inline_scalar(width)?;
+                    let (dl, dof) = self.inline_dash(dash)?;
                     let id = self.payload.y.len() as u32;
                     self.payload.y.push(Style::Stroke {
                         c,
@@ -451,6 +471,8 @@ impl Encoder {
                         lc: linecap_num(*linecap),
                         lj: linejoin_num(*linejoin),
                         ml: *miter_limit,
+                        dl,
+                        dof,
                     });
                     own_styles.insert(0, id);
                 }
@@ -464,10 +486,12 @@ impl Encoder {
                     linecap,
                     linejoin,
                     miter_limit,
+                    dash,
                     ..
                 } => {
                     let w = self.inline_scalar(width)?;
                     let o = self.inline_scalar(opacity)?;
+                    let (dl, dof) = self.inline_dash(dash)?;
                     let s = match start {
                         Some(p) => Some(self.inline_vec2(p)?),
                         None => None,
@@ -490,6 +514,8 @@ impl Encoder {
                         lc: linecap_num(*linecap),
                         lj: linejoin_num(*linejoin),
                         ml: *miter_limit,
+                        dl,
+                        dof,
                     });
                     own_styles.insert(0, id);
                 }
@@ -558,6 +584,7 @@ impl Encoder {
                     size,
                     position,
                     radius,
+                    direction,
                     ..
                 } => {
                     let sz = self.inline_vec2(size)?;
@@ -568,6 +595,7 @@ impl Encoder {
                         sz,
                         ps,
                         rd,
+                        rv: (*direction == ir::ShapeDirection::Reversed) as u8,
                         nm: None,
                     });
                     target.push(ShapeRef::Prim(PrimRef {
@@ -576,11 +604,16 @@ impl Encoder {
                         tm: trim_chain(&current_trims),
                     }));
                 }
-                ir::ShapeNode::Ellipse { size, position, .. } => {
+                ir::ShapeNode::Ellipse { size, position, direction, .. } => {
                     let sz = self.inline_vec2(size)?;
                     let ps = self.inline_vec2(position)?;
                     let sid = self.payload.s.len() as u32;
-                    self.payload.s.push(Shape::Ellipse { sz, ps, nm: None });
+                    self.payload.s.push(Shape::Ellipse {
+                        sz,
+                        ps,
+                        rv: (*direction == ir::ShapeDirection::Reversed) as u8,
+                        nm: None,
+                    });
                     target.push(ShapeRef::Prim(PrimRef {
                         s: sid,
                         y: styles_at(&own_styles, inherited_styles),
@@ -606,6 +639,7 @@ impl Encoder {
                     inner_radius,
                     outer_roundness,
                     inner_roundness,
+                    direction,
                     ..
                 } => {
                     let pt = self.inline_scalar(points)?;
@@ -637,6 +671,7 @@ impl Encoder {
                         rt,
                         os,
                         is,
+                        rv: (*direction == ir::ShapeDirection::Reversed) as u8,
                         nm: None,
                     });
                     target.push(ShapeRef::Prim(PrimRef {
@@ -654,6 +689,14 @@ impl Encoder {
             let group = GroupRef {
                 c: emitted,
                 p: Some(self.inline_vec3(&tr.position)?),
+                sk: match &tr.skew {
+                    Some(p) => Some(self.inline_scalar(p)?),
+                    None => None,
+                },
+                sa: match &tr.skew_axis {
+                    Some(p) => Some(self.inline_scalar(p)?),
+                    None => None,
+                },
                 a: Some(self.inline_vec3(&tr.anchor)?),
                 sc: Some(self.inline_vec3(&tr.scale)?),
                 r: Some(self.inline_scalar(&tr.rotation)?),
@@ -665,6 +708,24 @@ impl Encoder {
     }
 
     // -- Inline property converters -----------------------------------------
+
+    /// A stroke's dash pattern: lengths in draw order, offset separate.
+    fn inline_dash(
+        &self,
+        dash: &[ir::DashStop],
+    ) -> Result<(Vec<InlineProp>, Option<InlineProp>)> {
+        let mut dl = Vec::new();
+        let mut dof = None;
+        for stop in dash {
+            let p = self.inline_scalar(&stop.value)?;
+            if stop.offset {
+                dof = Some(p);
+            } else {
+                dl.push(p);
+            }
+        }
+        Ok((dl, dof))
+    }
 
     fn inline_scalar(&self, p: &ir::Property<f64>) -> Result<InlineProp> {
         Ok(match p {

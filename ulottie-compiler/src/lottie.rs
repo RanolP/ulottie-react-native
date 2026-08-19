@@ -9,7 +9,7 @@ pub mod text;
 pub mod value;
 
 pub use file::{Animation, Asset, Layer, MaskProperty, TransformBlock};
-pub use graphic::GraphicElement;
+pub use graphic::{DashElement, GraphicElement};
 pub use keyframes::Keyframe;
 pub use property::Property;
 pub use text::{Font, GlyphChar, TextData, TextRefusal, text_shapes};

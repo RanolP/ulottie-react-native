@@ -223,6 +223,8 @@ pub enum ShapeNode {
         linecap: LineCap,
         linejoin: LineJoin,
         miter_limit: Option<f64>,
+        /// Dash pattern in draw order; empty means solid.
+        dash: Vec<DashStop>,
         hidden: bool,
     },
     GradientStroke {
@@ -236,6 +238,8 @@ pub enum ShapeNode {
         linecap: LineCap,
         linejoin: LineJoin,
         miter_limit: Option<f64>,
+        /// Dash pattern in draw order; empty means solid.
+        dash: Vec<DashStop>,
         hidden: bool,
     },
     GradientFill {
@@ -256,6 +260,15 @@ pub enum ShapeNode {
         multiple_shapes: TrimMultipleShapes,
         hidden: bool,
     },
+}
+
+/// One entry of a stroke's dash pattern. Lengths keep their authored order —
+/// lottie-web joins them into `stroke-dasharray` as they come — and the
+/// offset feeds `stroke-dashoffset`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DashStop {
+    pub offset: bool,
+    pub value: Property<Scalar>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -396,8 +409,13 @@ pub enum MaskMode {
     Add,
     /// "s" — area inside the mask is hidden.
     Subtract,
-    /// "i", "d", "f", "l" — less common modes; we render them like Add for
-    /// now and document the gap when needed.
+    /// "i" — everything so far, seen through this path.
+    Intersect,
+    /// "n" — the path is carried but draws nothing (lottie-web parks it in
+    /// defs).
+    None,
+    /// "d", "f", "l" — modes lottie-web's untested branch paints white, so
+    /// they render as Add there and here.
     Other,
 }
 
@@ -406,14 +424,14 @@ pub enum LayerKind {
     /// Type 0: instance of a precomposition asset.
     Precomp {
         asset: String,
-        width: u32,
-        height: u32,
+        width: f64,
+        height: f64,
     },
     /// Type 1: solid color.
     Solid {
         color: String,
-        width: u32,
-        height: u32,
+        width: f64,
+        height: f64,
     },
     /// Type 2: image asset.
     Image { asset: String },
@@ -592,8 +610,8 @@ pub enum AssetKind {
     Image {
         path: Option<String>,
         filename: Option<String>,
-        width: u32,
-        height: u32,
+        width: f64,
+        height: f64,
         embedded: bool,
     },
 }
@@ -605,8 +623,8 @@ pub enum AssetKind {
 #[derive(Debug, Clone)]
 pub struct Composition {
     pub name: Option<String>,
-    pub width: u32,
-    pub height: u32,
+    pub width: f64,
+    pub height: f64,
     pub frame_rate: f64,
     pub in_point: f64,
     pub out_point: f64,

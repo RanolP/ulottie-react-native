@@ -25,6 +25,10 @@ pub enum GraphicElement {
         hidden: bool,
         d: Option<u8>,
         ks: Property,
+        /// Pre-4.4.18 bodymovin puts the closed flag here, on the element,
+        /// with no `c` inside the path values — lottie-web's `checkShapes`
+        /// migrates it in at load, and so does the lowering.
+        closed: Option<bool>,
     },
 
     #[serde(rename = "rc")]
@@ -83,17 +87,20 @@ pub enum GraphicElement {
         match_name: Option<String>,
     },
 
+    // Every field is optional: old bodymovin omits what is at its default,
+    // down to `{"ty":"tr","nm":"Transform"}` with nothing in it at all
+    // (`Tests_catrim_converted`, `sticker`).
     #[serde(rename = "tr")]
     Transform {
         #[serde(rename = "nm")]
         name: Option<String>,
         #[serde(rename = "hd", default)]
         hidden: bool,
-        p: Property,
-        a: Property,
-        s: Property,
-        r: Property,
-        o: Property,
+        p: Option<Property>,
+        a: Option<Property>,
+        s: Option<Property>,
+        r: Option<Property>,
+        o: Option<Property>,
         sk: Option<Property>,
         sa: Option<Property>,
     },
@@ -106,7 +113,7 @@ pub enum GraphicElement {
         #[serde(rename = "hd", default)]
         hidden: bool,
         c: Property,
-        o: Property,
+        o: Option<Property>,
         r: Option<u8>,
         bm: Option<u8>,
 
@@ -122,8 +129,8 @@ pub enum GraphicElement {
         hidden: bool,
         /// Gradient definition (with stops in `g.k`).
         g: Option<serde_json::Value>,
-        /// Opacity (0-100).
-        o: Property,
+        /// Opacity (0-100). A Telegram-sticker export omits it.
+        o: Option<Property>,
         /// Gradient start point.
         s: Option<Property>,
         /// Gradient end point.
@@ -143,9 +150,9 @@ pub enum GraphicElement {
         /// Gradient definition (with stops in `g.k`).
         g: Option<serde_json::Value>,
         /// Stroke width.
-        w: Property,
+        w: Option<Property>,
         /// Opacity (0-100).
-        o: Property,
+        o: Option<Property>,
         /// Gradient start point.
         s: Option<Property>,
         /// Gradient end point.
@@ -158,6 +165,8 @@ pub enum GraphicElement {
         lj: Option<u8>,
         /// Miter limit.
         ml: Option<f64>,
+        /// Dash pattern: `d`/`g` lengths in order, `o` the offset.
+        d: Option<Vec<DashElement>>,
     },
 
     #[serde(rename = "st")]
@@ -167,12 +176,14 @@ pub enum GraphicElement {
         #[serde(rename = "hd", default)]
         hidden: bool,
         c: Property,
-        o: Property,
-        w: Property,
+        o: Option<Property>,
+        w: Option<Property>,
         lc: Option<u8>,
         lj: Option<u8>,
         ml: Option<f64>,
         bm: Option<u8>,
+        /// Dash pattern: `d`/`g` lengths in order, `o` the offset.
+        d: Option<Vec<DashElement>>,
 
         #[serde(rename = "mn")]
         match_name: Option<String>,
@@ -185,9 +196,9 @@ pub enum GraphicElement {
         name: Option<String>,
         #[serde(rename = "hd", default)]
         hidden: bool,
-        s: Property,
-        e: Property,
-        o: Property,
+        s: Option<Property>,
+        e: Option<Property>,
+        o: Option<Property>,
         m: Option<u8>,
     },
 
@@ -208,6 +219,14 @@ pub enum GraphicElement {
 
     #[serde(other)]
     Unknown,
+}
+
+/// One entry of a stroke's dash pattern: `n` is `"d"` (dash) or `"g"` (gap)
+/// for a length in draw order, `"o"` for the offset.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DashElement {
+    pub n: Option<String>,
+    pub v: Property,
 }
 
 /// The transform a repeater applies per copy — a layer transform plus the

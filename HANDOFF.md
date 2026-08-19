@@ -18,15 +18,17 @@ this file's git history.
 - `ulottie-dev-server/tools/` — `compare.mjs`, `census.mjs`, `probe.mjs`
 - `_fixtures/animations/` — 28 Lottie fixtures (`PROVENANCE.md` says where each
   came from and why); `__snapshots__/` the review artifacts;
-  `allowances.json` (two deliberate merge-paths entries, both invisible in
-  the render) and `coverage.json` the two feature ledgers
+  `allowances.json` (**empty** — merge-paths mode 1 turned out to be
+  implemented by the style-ownership architecture) and `coverage.json` the
+  two feature ledgers
 - `_fixtures/animations/tmp/` — external corpora, gitignored:
-  `jlottie/` (34), `rlottie/` (93), `krrt/` (4), `flutter/` (432)
+  `jlottie/` (34), `rlottie/` (93), `krrt/` (4), `flutter/` (446 — the full
+  lottie-flutter repo: example assets, Tests, Mobilo, weather, test/data)
 
 ## Gates
 
 ```
-cargo nextest run --features eval                     # 181 tests: unit, frame snapshots, size budgets, output hygiene
+cargo nextest run --features eval                     # 180 tests: unit, frame snapshots, size budgets, output hygiene
 yarn workspace ulottie-dev-server test                # 395 tests: output snapshots, coverage gate, pixel+geometry diff, perf
 node ulottie-dev-server/tools/census.mjs --coverage   # what the fixtures do not exercise
 cargo run --release --bin ulottie-dev-server -- sizes # size report over the fixtures
@@ -39,8 +41,7 @@ parity fixture matches lottie-web within the default 0.5% pixel budget.
 lottie-web is the one that is wrong: it cannot render `tt:4` at all, and its
 repeater trims every copy twice (see *Lottie semantics* and PROVENANCE).
 Their gates are the structural assertions in `tests/track_matte.rs` and the
-Rust reference render. `bodymoovin` renders at 0.05% but carries a
-merge-paths allowance, so it stays out of the parity table.) The fixtures
+Rust reference render.) The fixtures
 are the gate; `compare.mjs` is how you find out what an unfamiliar file does,
 and it is where most of the correctness fixes have come from.
 
@@ -241,7 +242,9 @@ folds them and the shaker drops unread ones — an object of constants shipped
 whole in every module).
 
 Header slots: `FR IP OP FLAGS EASINGS TIMELINES GATES PROGRAM LAYERS ASSETS
-USES REMAPS`. An asset row is `[template, program, timelines, records]`
+USES REMAPS`. A timeline row is `[parent, offset, rate, ip, op]` — `rate` is the
+precomp layer's time-stretch, ×1000 fixed where the frame fields share the
+section's own scale. An asset row is `[template, program, timelines, records]`
 (`A_*`), a use row `[asset, elementBase, slotBase, parentSlot]` (`U_*`).
 A program is `[count, batchOffset × count]`; a batch is:
 
@@ -532,11 +535,14 @@ is the closed list of findings, each with its visible effect
 - **The dev server does not reject** — it is a viewer. It compiles whatever it
   is handed and returns every finding in the response, so the degradation shows
   next to the render. The strict gate is the CLI.
-- Scan lessons that are now invariants: a skew can live on a shape group's
-  `tr`, not just `l.ks`; Lottie spells flags inconsistently (`inv` is a JSON
-  boolean where `ddd`/`bm` are numbers — `truthy()` accepts both); a mask mode
-  outside Add/Subtract, an inverted mask, and a dashed stroke are all refusals
-  because rendering them was measurably wrong wherever a corpus file used them.
+- Scan lessons that are now invariants: Lottie spells flags inconsistently
+  (`inv` is a JSON boolean where `ddd`/`bm` are numbers — `truthy()` accepts
+  both); a mask mode outside Add/Subtract and an inverted mask are refusals
+  because rendering them was measurably wrong wherever a corpus file used
+  them. Old exports omit anything at its default — a shape-group `tr` can be
+  `{"ty":"tr"}` with nothing in it, style opacities and stroke widths can be
+  absent, a Telegram-sticker layer has no `ip`/`op` at all — so the AST makes
+  those optional and the lowering supplies the AE defaults.
 
 ### Where it stands
 
@@ -571,6 +577,75 @@ the original layer-level trim, trimming each repeated shape **twice** — its
 arc measures exactly e² of the property value. AE trims once and repeats;
 this compiler does too (`fireworks` is the fixture, pinned by the reference
 render, not pixels).
+
+**Stroke dashes are implemented**: static patterns bake to
+`stroke-dasharray`/`stroke-dashoffset` (the same raw space-joined numbers
+lottie-web's `DashProperty` writes); an animated pattern binds `op::DASH`,
+whose one list argument is `[count, length…, offset]`. A dashed shape always
+takes the `<path>` spelling — the pattern walks the contour from its start
+point, and a native `<ellipse>` starts at 3 o'clock where lottie-web's
+outline starts at 12.
+
+**Skew is implemented**: lottie-web's `skewFromAxis(-sk, sa)` folds between
+scale and rotation — statically into the baked `matrix()` (one shared
+`TransformSpec::to_matrix`), animated through `op::TRANSFORM_SKEW`, its own
+op so the skewless majority never reads two dead columns. On record-backed
+layers a live skew takes the direct-prop op; the record table does not carry
+skew and no expression reads it.
+
+**Shape direction is implemented**: `d: 3` reverses the generated contour
+(and for a *rect*, so does an absent `d` — lottie-web tests
+`d === 1 || d === 2` and reverses otherwise). Every reversed form is exactly
+the cyclic reversal of its normal form, so one `reverse` covers rect and
+ellipse, and the polystar folds `dir` into its loop as the original does.
+The generators are exact transcriptions of lottie-web's — including its
+`roundCorner = 0.5519` (not the true circle kappa), the star's `os`/`is`
+roundness tangents this compiler used to drop, and a scrambled rounded-rect
+corner-tangent bug the transcription flushed out.
+
+**Merge paths mode 1 (Merge) is accepted**: it concatenates every shape
+above it into one composite path — which is already how shapes render, since
+every contour a style paints lands in that style's one element and their
+windings interact exactly as the composite's would. The boolean modes
+(2 add, 3 subtract, 4 intersect, 5 exclude) stay refusals: they need real
+curve boolean algebra, and lottie-web renders none of them either, so there
+is no reference to verify against.
+
+**Time-stretch is implemented**: lottie-web applies `sr` only at the precomp
+boundary (`renderedFrame = num / sr` in `CompElement`) — bodymovin exports
+every other layer's keyframes already stretched into composition time — so a
+timeline row is `[parent, offset, rate, ip, op]` and the clock divides. A
+stretched instanced use gets a clock row of its own; an unstretched one
+keeps folding its start time into its rows.
+
+**Even-odd fills are implemented** (`fl.r == 2` → `fill-rule="evenodd"`, a
+static attribute; Lottie has no animated fill rule).
+
+**Layer effects are implemented for fill, tint, drop shadow and gaussian
+blur**: one `<filter>` per layer chains every supported effect's primitives,
+the shape lottie-web's `SVGEffects` builds — including the drop shadow's
+default `0%/100%` region, which clips it to the element's own box, because
+the reference clips there too. Static parameters bake into the filter
+markup; animated ones are four small ops (`FX_BLUR` writes `stdDeviation`
+as sigma × 0.3 with the dimensions switch, `FX_STD`/`FX_FLOOD_O` scaled
+scalars, `FX_OFFSET` the shadow's polar `dx`/`dy`), behind one `FX`
+capability. Effect types lottie-web never registered — Bulge, Warp,
+expression sliders — are skipped without a finding, because the reference
+skips them identically. Still refused: stroke (22), tritone (23), levels
+(24), matte3 (28) — one corpus file between them.
+
+**Masks mirror lottie-web's `MaskElement` decision for decision**: the
+full-frame white rect exists only when the *first counted* mask is Subtract
+or Intersect (adding it under a leading Add was the `Tests_MaskInv` bug —
+"A minus S" became "everything minus S", 71.6% wrong); a Subtract paints
+black and every other counted mode paints white, `f` included; `n` masks
+draw nothing, and a layer whose masks are all `n` gets **no** mask
+attribute (an empty `<clipPath>` clips everything away — `Tests_MaskNone`);
+Intersect wraps everything accumulated in an alpha-masked `<g>`; an
+inverted mask is the composition rect plus the contour in one `d` (winding
+inversion, their `createLayerSolidPath`); mask opacity rides `fill-opacity`,
+animated through the colourless fill op. The one remaining refusal is an
+inverted *animated* path.
 
 **Layer blend modes are implemented**: `bm` 1–15 become CSS
 `mix-blend-mode` on the layer group — the same keywords lottie-web writes.
@@ -678,19 +753,30 @@ Corpus standings:
 
 | corpus | files | state |
 |---|---|---|
-| jlottie demo list | 34 | all match; 25 at exactly 0.000%, worst residual 0.09% |
+| jlottie demo list | 34 | all match; worst residual 0.07% |
 | Karrot production | 3 | all within tolerance; one *deliberate* divergence (below) |
 | rlottie examples | 93 | screening source for fixtures (42 render exactly; 4 adopted so far) |
-| lottie-flutter | 432 | 208 compile clean; of 207 comparable, **168 pixel-exact**, 39 diverge |
+| lottie-flutter | 446 | **354 compile clean** (was 208 of 432); rendered with `--allow` retries, **335 sit inside the 0.5% budget, 274 pixel-exact**; 85 diverge (mostly allowed degradations of the refusals below), 26 error (expression `content()` chains, files lottie-web itself cannot load) |
 
-The flutter refusals are the demand ranking for unimplemented features:
-merge-paths 54, ~~blend-mode 22~~ (implemented — CSS `mix-blend-mode`),
-~~text 22~~ (implemented — the static glyph-outlined case), time-stretch 13,
-stroke-dash 10, layer-effect 10, mask-mode 7, ~~repeater 6~~ (implemented —
-the static case expands), 3D 6, even-odd-fill 5, rounded-corners 5, skew 5,
-reversed-direction 4 (plus combinations and 3 parse errors).
+The flutter refusals are the demand ranking for unimplemented features
+(per-file, current corpus): merge-paths boolean modes 35, 3D 12,
+rounded-corners 9, text-box 9, text-animators 8, auto-orient 3,
+animated-gradient 3, animated repeater 3, text-no-chars 2, layer-effect 2,
+text-stroke 1 — and 9 files that refuse on expression `content('…')`
+shape-property chains the resolver cannot reach yet. Implemented this pass
+(all verified against lottie-web): ~~time-stretch 16~~, ~~stroke-dash 16~~,
+~~mask-mode/inverted/opacity 14~~, ~~layer effects 18 of 20~~, ~~skew 7~~,
+~~even-odd-fill 6~~, ~~reversed-direction 5~~, ~~merge-paths mode 1 (50
+files)~~, ~~blend>15 / tt:0 / audio layers~~ — along with the panic and
+every parse error the corpus surfaced.
 
-The 39 divergences are each a named construct, worst first: `Tests_RGBMarker`
+The worst divergences after this pass: `Tests_RGB` 100% and
+`Tests_GradientColorKeyframeAnimation` 64.1% (animated-gradient
+degradations), the **layer-blend backdrop cluster**
+(`Tests_LayerBlend_1…17`, ~25–34% — see *What is left*),
+`Tests_Repeater` 31.4% (animated repeater), `Tests_WeAcceptInlineImage`
+36.1%, `Tests_hd` 30.3%, and the long-standing compositing items:
+`Tests_RGBMarker`
 76.6%, `Tests_MaskInv` 71.6% (despite the name it contains *no* inverted mask —
 a plain Add+Subtract pair renders wrong; the open mask-semantics bug),
 `Tests_MattWithParentAlpha` 55.4%, ~~`gradient_animated_background` 43.7%~~
@@ -753,6 +839,16 @@ Hard-won facts about the format and about lottie-web, each of which cost a bug:
 - **Both easing handles live on the keyframe a segment starts at** (`o` leaving
   it, `i` arriving at the next). Reading `i` off the following keyframe finds
   nothing and silently interpolates linearly.
+- **Files older than 4.4.18 put the closed flag on the *element*** —
+  `closed` on a `sh`, `cl` on a mask — with no `c` inside the path values.
+  lottie-web's `checkShapes` migrates it in at load; the lowering applies the
+  same default wherever a path value has no `c` of its own. Reading only the
+  value-level flag leaves every legacy contour open, and an open contour
+  still *fills* — the fill's implicit straight close cuts a chamfer where
+  the closing curve belongs. `bodymoovin`'s morphing wordmark 'o' wore flat
+  corners through every gate for exactly this reason: the file is v3.1.6,
+  the divergence peaked mid-morph at 0.03%, and the pixel budget never
+  noticed.
 - **Files older than 4.1.9 write shape colours 0–255**; newer ones 0–1.
   lottie-web's `checkColors` rescales at load, and the threshold is
   `[4, 1, 9]` compared major/minor/patch — *not* "before 4.9": the whole
@@ -788,6 +884,27 @@ Hard-won facts about the format and about lottie-web, each of which cost a bug:
   children, matte subtree if it is a matte source, and no content of its own.
   `lottie_logo_2` parks nine white solids at `o: 0` as transform anchors;
   rendering them as `opacity="0"` rects matched pixels and nothing else.
+- **lottie-web's player frame 0 is `Math.round(ip)`** — a composition with a
+  fractional in-point starts its clock just *before* a layer authored to
+  begin exactly at `ip`, so the first frame renders blank
+  (`loading_indicator`). The compiler rounds the root in-point to match, and
+  ships display/gate bounds as their decision boundary at wire precision
+  (ceil at 1/1000) so the ×1000 quantization cannot collapse the strict
+  comparison.
+- **`sr` (time-stretch) does nothing outside a precomp.** lottie-web divides
+  only the clock a `CompElement` hands its children; every other layer's
+  keyframes were exported already stretched. Implementing it "properly" on
+  ordinary layers would double-apply it.
+- **`tt: 0` is "no matte"**, written explicitly by some exporters — reading
+  presence instead of value builds a mode-0 matte and blanks the layer. Same
+  family: audio layers (`ty: 9`) have nothing to draw, so not drawing them
+  is the correct render, and a blend mode past 15 composites normally
+  (lottie-web's `blendModeEnums[mode] || ''`).
+- **lottie-web's circles are 0.5519 circles.** Its `roundCorner` constant is
+  0.5519, not the true quarter-arc kappa 0.55228 — matching the reference
+  digit for digit means using its constant, and the native `<ellipse>`
+  spelling (a true arc) survives only because the difference is ~0.02% of
+  the radius.
 - **lottie-web's repeater double-trims.** It clones the trim into every copy
   and keeps the layer-level trim, so each repeated shape is trimmed twice —
   `fireworks` measures its arc at exactly e² of the property. AE (and this
@@ -887,42 +1004,59 @@ Ordered by value.
    arithmetic; `pointOnPath` is a kernel over resolved inputs. This also makes
    the baked document exact for expression-driven properties, and removes the
    runtime's last two closures.
-2. **The mask-combination bug.** `Tests_MaskInv` — a plain Add + Subtract pair,
-   no inversion — renders 71.6% wrong. Whatever the real combination semantics
-   are, the inverted/None modes stay refusals until this is understood.
+2. **The layer-blend backdrop cluster.** Every `Tests_LayerBlend_*` renders
+   ~25–34% wrong even though `mix-blend-mode` is written with lottie-web's
+   own keywords. The suspect is scope: lottie-web's layers are flat siblings
+   in one `<svg>`, so a blended layer sees every earlier layer as backdrop,
+   where this compiler's shared ancestor-transform wrappers group siblings —
+   and a group can isolate. Needs a live-DOM investigation, not more theory.
 3. **Matte/blend compositing cluster**: `Tests_RGBMarker` 76.6%,
-   `Tests_MattWithParentAlpha` 55.4%, `Tests_LayerBlend_0` 25.5% — and
-   blend-mode is the #2 refusal in the flutter corpus (22 files).
-4. **The rest of the layer effects.** `ADBE Fill` is implemented (the one
-   `feColorMatrix` lottie-web writes); tint, stroke, tritone, levels, drop
-   shadow, blur and transform are reported as `layer-effect`. Each is one
-   filter primitive in lottie-web; `emit_effects` is the place. Animated effect
-   parameters are left off the wire rather than frozen.
-5. **Dashed strokes** (`Feature::StrokeDash`, 10 flutter refusals): SVG spells
-   it `stroke-dasharray` — a refusal waiting to become an implementation.
-6. **The legacy end-value tail**: `Tests_MissingEndValue` diverges at the last
+   `Tests_MattWithParentAlpha` 55.4%, `Tests_LayerBlend_0` 25.5%.
+4. **Merge-paths boolean modes** (35 flutter files — the #1 refusal): modes
+   2–5 need real curve boolean algebra, computed at compile time for static
+   operands. lottie-web renders none of them (it draws the shapes unmerged),
+   so there is no automated referee — verification means AE ground truth or
+   hand inspection, the `fireworks` situation again. Mode 1 already passes
+   through as concatenation.
+5. **Expression `content()` chains** (9 flutter files refuse):
+   `content('Group').content('Path 1').path` / `.size` — shape-tree property
+   access from expressions. The layer-reference resolver stops at layer
+   scope; reaching into the shape tree is the same slot-table pattern one
+   level deeper.
+6. **Rounded corners** (9 files): the `rd` modifier wants the repeater
+   treatment — a shared expand at the parse boundary for the static case
+   (port of lottie-web's `RoundCornersModifier.processPath`, which is
+   transcribed in this file's history), a runtime kernel like trim's only if
+   an animated radius ever matters (2 files).
+7. **The last layer effects**: stroke (22), tritone (23), levels (24) and
+   matte3 (28) — one corpus file between them; `emit_effects` is the place.
+8. **The legacy end-value tail**: `Tests_MissingEndValue` diverges at the last
    frame only; `Tests_NullEndShape` a constant 3.8%. Not the `e`/terminator
    reader (that is normalized at the parse boundary now, and the animated
    gradient it broke is a fixture at 0.000%) — a *different* cluster:
    element-count mismatches and native `<rect>` spellings.
-7. **Rect geometry cluster**: `Tests_Rect4/6/7` (3.8–12.9%), plus stroke joins
-   (`Tests_MiterLimit`, `Tests_TriangleLargeStroke`).
-8. **Trim**: `Tests_TrimPathsInsideAndOutsideGroup` is 4.7% (was 9.4% before
+9. **Rect geometry cluster**: `Tests_Rect4/6/7` (3.8–12.9%), plus stroke joins
+   (`Tests_MiterLimit`, `Tests_TriangleLargeStroke`) — the rounded-rect
+   corner-tangent fix and 0.5519 landed; re-measure these before digging.
+10. **Trim**: `Tests_TrimPathsInsideAndOutsideGroup` is 4.7% (was 9.4% before
    trim chains landed) — what is left is modifier *scope*: lottie-web's list
    is element-global, so an earlier-discovered trim also reaches sibling
    groups' shapes (see *Lottie semantics*). `Tests_TrimPaths` is 0.28% now.
    Nonzero offsets on open paths clamp where lottie-web wraps (no fixture
    covers it); `m=2` (individually) is ignored and tracked in
    `coverage.json`.
-9. **Close the remaining coverage gap** — the implemented-but-untested class
-    is empty now; what is left is 4 not-implemented and 17 refusals.
-10. **Explain instancing's 5× frame cost**, which is what keeps
+11. **Close the remaining coverage gap** — this pass implemented several
+    features with no fixture of their own yet (even-odd fill, dashes, skew,
+    direction, time-stretch, trim chains): adopt corpus files as fixtures so
+    the implemented-but-untested class goes back to empty, and re-derive
+    `coverage.json` against the census vocabulary.
+12. **Explain instancing's 5× frame cost**, which is what keeps
     `Instancing::Auto` declining `ripple`'s −56% payload.
-11. **Const-fold frame-invariant expressions** (`clamp(value, 0, 100)` over a
+13. **Const-fold frame-invariant expressions** (`clamp(value, 0, 100)` over a
     static source) — needs an evaluator, or a wire flag for evaluate-once.
-12. **Pause when offscreen** — no IntersectionObserver / `visibilitychange`
+14. **Pause when offscreen** — no IntersectionObserver / `visibilitychange`
     gating yet.
-13. **`lottie_logo_1` is 0.9×** — the profile puts path-string assembly at 15%
+15. **`lottie_logo_1` is 0.9×** — the profile puts path-string assembly at 15%
     of its frame.
 
 ## Notes for whoever picks this up

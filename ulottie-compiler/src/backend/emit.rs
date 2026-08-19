@@ -69,6 +69,8 @@ const MODS: &[Mod] = modules![
     "ops/stroke.js"   => "../../runtime/ops/stroke.js",
     "ops/grad.js"     => "../../runtime/ops/grad.js",
     "ops/ramp.js"     => "../../runtime/ops/ramp.js",
+    "ops/dash.js"     => "../../runtime/ops/dash.js",
+    "ops/fx.js"       => "../../runtime/ops/fx.js",
     "ops/layer.js"    => "../../runtime/ops/layer.js",
     "core.js"    => "../../runtime/core.js",
 ];
@@ -88,7 +90,7 @@ pub fn modules() -> &'static [Mod] {
 ///
 /// Which capability each one needs is [`scene::caps_for_op`], not a column
 /// here — the planner sets the same bits when it binds.
-const OPS: [(u8, &str, &str, &str); 17] = [
+const OPS: [(u8, &str, &str, &str); 23] = [
     (op::TRANSFORM, "bTransform", "oTransform", "ops/tx.js"),
     (op::TRANSLATE, "bTranslate", "oTranslate", "ops/txt.js"),
     (op::OPACITY, "bOpacity", "oOpacity", "ops/opacity.js"),
@@ -100,6 +102,17 @@ const OPS: [(u8, &str, &str, &str); 17] = [
     (op::STROKE, "bStroke", "oStroke", "ops/stroke.js"),
     (op::GRADIENT, "bGradient", "oGradient", "ops/grad.js"),
     (op::RAMP, "bRamp", "oRamp", "ops/ramp.js"),
+    (op::DASH, "bDash", "oDash", "ops/dash.js"),
+    (
+        op::TRANSFORM_SKEW,
+        "bTransformSkew",
+        "oTransformSkew",
+        "ops/tx.js",
+    ),
+    (op::FX_BLUR, "bFxBlur", "oFxBlur", "ops/fx.js"),
+    (op::FX_STD, "bFxStd", "oFxStd", "ops/fx.js"),
+    (op::FX_FLOOD_O, "bFxFloodO", "oFxFloodO", "ops/fx.js"),
+    (op::FX_OFFSET, "bFxOffset", "oFxOffset", "ops/fx.js"),
     (op::LAYER_TX, "bLayerTx", "oLayerTx", "ops/layer.js"),
     (
         op::LAYER_OP,
@@ -1007,6 +1020,12 @@ mod tests {
             op::STROKE,
             op::GRADIENT,
             op::RAMP,
+            op::DASH,
+            op::TRANSFORM_SKEW,
+            op::FX_BLUR,
+            op::FX_STD,
+            op::FX_FLOOD_O,
+            op::FX_OFFSET,
             op::LAYER_TX,
             op::LAYER_OP,
             op::SHAPE_RECT,

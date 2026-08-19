@@ -5,11 +5,5 @@
     "new unsupported feature is a build error rather than a silent mis-render.",
     "Every entry is a known rendering difference — shrink this list by",
     "implementing the feature, never by adding to it to make a build pass."
-  ],
-  "android_wave": [
-    "merge-paths"
-  ],
-  "bodymoovin": [
-    "merge-paths"
   ]
 }

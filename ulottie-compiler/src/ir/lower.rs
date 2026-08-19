@@ -35,7 +35,13 @@ pub fn lower(anim: &Animation) -> Result<Module> {
         width: anim.width,
         height: anim.height,
         frame_rate: anim.frame_rate,
-        in_point: anim.in_point,
+        // lottie-web maps player frame 0 to `Math.round(ip)`
+        // (`this.firstFrame`), so a fractional in-point starts the clock just
+        // *before* a layer authored to begin exactly at it — `loading_indicator`
+        // opens on a blank frame there. Rounding here counts frames the same
+        // way; layer in/out points stay authored, which is what makes the
+        // first-frame gating agree.
+        in_point: anim.in_point.round(),
         out_point: anim.out_point,
         is_3d: anim.ddd.unwrap_or(0) != 0,
     };
@@ -74,8 +80,8 @@ pub fn lower(anim: &Animation) -> Result<Module> {
             AssetKind::Image {
                 path: asset.path.clone(),
                 filename: asset.filename.clone(),
-                width: asset.w.unwrap_or(0),
-                height: asset.h.unwrap_or(0),
+                width: asset.w.unwrap_or(0.0),
+                height: asset.h.unwrap_or(0.0),
                 embedded: asset.e.unwrap_or(0) != 0,
             }
         };
@@ -140,13 +146,13 @@ fn lower_layer(
     let kind = match src.ty {
         0 => LayerKind::Precomp {
             asset: src.ref_id.clone().unwrap_or_default(),
-            width: src.width.unwrap_or(0),
-            height: src.height.unwrap_or(0),
+            width: src.width.unwrap_or(0.0),
+            height: src.height.unwrap_or(0.0),
         },
         1 => LayerKind::Solid {
             color: src.sc.clone().unwrap_or_else(|| "#000000".to_string()),
-            width: src.sw.unwrap_or(0),
-            height: src.sh.unwrap_or(0),
+            width: src.sw.unwrap_or(0.0),
+            height: src.sh.unwrap_or(0.0),
         },
         2 => LayerKind::Image {
             asset: src.ref_id.clone().unwrap_or_default(),
@@ -188,8 +194,11 @@ fn lower_layer(
         kind,
         transform,
         effects,
-        in_point: src.ip,
-        out_point: src.op,
+        // Absent bounds mean "the whole composition" — a layer that can never
+        // be range-hidden. The sentinels stay finite so they survive the
+        // wire's ×1000 integer quantization if they ever reach it.
+        in_point: src.ip.unwrap_or(-1e6),
+        out_point: src.op.unwrap_or(1e6),
         stretch: src.sr.unwrap_or(1.0),
         start_time: src.st.unwrap_or(0.0),
         time_remap: match &src.tm {
@@ -222,9 +231,11 @@ fn lower_masks(
         let mode = match m.mode.as_str() {
             "a" => MaskMode::Add,
             "s" => MaskMode::Subtract,
+            "i" => MaskMode::Intersect,
+            "n" => MaskMode::None,
             _ => MaskMode::Other,
         };
-        let shape = lower_prop_path(module, &m.pt)?;
+        let shape = lower_prop_path(module, &m.pt, m.cl)?;
         let opacity = match &m.o {
             Some(p) => Some(lower_prop_scalar(module, p, 100.0)?),
             None => None,
@@ -716,18 +727,27 @@ fn lower_prop_color(
     Ok(wrap_with_expr(module, p, value_source))
 }
 
-fn lower_prop_path(module: &mut Module, p: &AstProperty) -> Result<Property<PathData>> {
+/// `legacy_closed` is the pre-4.4.18 element-level closed flag; it applies
+/// only where a path value carries no `c` of its own, exactly the way
+/// lottie-web's `checkShapes` migration writes it in.
+fn lower_prop_path(
+    module: &mut Module,
+    p: &AstProperty,
+    legacy_closed: Option<bool>,
+) -> Result<Property<PathData>> {
     let value_source = if p.is_animated() {
         ValueSource::Animated(Keyframes {
             frames: p
                 .keyframes()
                 .unwrap_or(&[])
                 .iter()
-                .map(lower_kf_path)
+                .map(|kf| lower_kf_path(kf, legacy_closed))
                 .collect(),
         })
     } else {
-        ValueSource::Static(parse_path_opt(p.static_value()).unwrap_or_default())
+        ValueSource::Static(
+            parse_path_with(p.static_value(), legacy_closed).unwrap_or_default(),
+        )
     };
     Ok(wrap_with_expr(module, p, value_source))
 }
@@ -771,7 +791,7 @@ fn lower_kf<T: Clone>(src: &AstKeyframe, parse: fn(&[f64]) -> Option<T>) -> Keyf
     }
 }
 
-fn lower_kf_path(src: &AstKeyframe) -> Keyframe<PathData> {
+fn lower_kf_path(src: &AstKeyframe, legacy_closed: Option<bool>) -> Keyframe<PathData> {
     // Path keyframes wrap the bezier shape in a single-element array, e.g.
     //   s: [{ v: [...], i: [...], o: [...], c: ... }]
     // We extract that object and parse it via the existing path parser. This
@@ -779,7 +799,9 @@ fn lower_kf_path(src: &AstKeyframe) -> Keyframe<PathData> {
     // depends on.
     Keyframe {
         time: src.time,
-        value: src.start_path().and_then(parse_path_value),
+        value: src
+            .start_path()
+            .and_then(|v| parse_path_with(Some(v), legacy_closed)),
         easing_in: src.in_tangent.as_ref().map(lower_easing),
         easing_out: src.out_tangent.as_ref().map(lower_easing),
         spatial_in: None,
@@ -788,8 +810,19 @@ fn lower_kf_path(src: &AstKeyframe) -> Keyframe<PathData> {
     }
 }
 
-fn parse_path_value(v: &serde_json::Value) -> Option<PathData> {
-    parse_path_opt(Some(v))
+fn parse_path_with(
+    v: Option<&serde_json::Value>,
+    legacy_closed: Option<bool>,
+) -> Option<PathData> {
+    let mut path = parse_path_opt(v)?;
+    if let Some(c) = legacy_closed
+        && !v
+            .and_then(|x| x.as_object())
+            .is_some_and(|o| o.contains_key("c"))
+    {
+        path.closed = c;
+    }
+    Some(path)
 }
 
 fn lower_easing(src: &lottie::keyframes::EasingHandle) -> EasingHandle {
@@ -948,9 +981,10 @@ fn lower_shape(module: &mut Module, src: &GraphicElement) -> Result<Option<Shape
             ks,
             hidden,
             d,
+            closed,
         } => ShapeNode::Path {
             name: name.clone(),
-            ks: lower_prop_path(module, ks)?,
+            ks: lower_prop_path(module, ks, *closed)?,
             direction: ShapeDirection::from_lottie(*d),
             hidden: *hidden,
         },
@@ -979,7 +1013,13 @@ fn lower_shape(module: &mut Module, src: &GraphicElement) -> Result<Option<Shape
             size: lower_prop_vec2(module, s, [0.0, 0.0])?,
             position: lower_prop_vec2(module, p, [0.0, 0.0])?,
             radius: lower_prop_scalar(module, r, 0.0)?,
-            direction: ShapeDirection::from_lottie(*d),
+            // lottie-web's rect tests `d === 1 || d === 2` and reverses
+            // otherwise — so an *absent* `d` runs counter-clockwise, unlike
+            // the ellipse and star, which reverse only on `d === 3`.
+            direction: match d {
+                Some(1) | Some(2) => ShapeDirection::Normal,
+                _ => ShapeDirection::Reversed,
+            },
             hidden: *hidden,
         },
         GraphicElement::PolyStar {
@@ -1030,12 +1070,29 @@ fn lower_shape(module: &mut Module, src: &GraphicElement) -> Result<Option<Shape
             sa,
             hidden,
         } => {
+            // Old bodymovin omits fields at their default, so each lowers to
+            // its AE default when absent.
             let transform = Transform {
-                anchor: lower_prop_vec3(module, a, [0.0, 0.0, 0.0])?,
-                position: lower_prop_vec3(module, p, [0.0, 0.0, 0.0])?,
-                scale: lower_prop_vec3(module, s, [100.0, 100.0, 100.0])?,
-                rotation: lower_prop_scalar(module, r, 0.0)?,
-                opacity: lower_prop_scalar(module, o, 100.0)?,
+                anchor: match a {
+                    Some(a) => lower_prop_vec3(module, a, [0.0, 0.0, 0.0])?,
+                    None => Property::Static([0.0, 0.0, 0.0]),
+                },
+                position: match p {
+                    Some(p) => lower_prop_vec3(module, p, [0.0, 0.0, 0.0])?,
+                    None => Property::Static([0.0, 0.0, 0.0]),
+                },
+                scale: match s {
+                    Some(s) => lower_prop_vec3(module, s, [100.0, 100.0, 100.0])?,
+                    None => Property::Static([100.0, 100.0, 100.0]),
+                },
+                rotation: match r {
+                    Some(r) => lower_prop_scalar(module, r, 0.0)?,
+                    None => Property::Static(0.0),
+                },
+                opacity: match o {
+                    Some(o) => lower_prop_scalar(module, o, 100.0)?,
+                    None => Property::Static(100.0),
+                },
                 skew: match sk {
                     Some(p) => Some(lower_prop_scalar(module, p, 0.0)?),
                     None => None,
@@ -1056,14 +1113,21 @@ fn lower_shape(module: &mut Module, src: &GraphicElement) -> Result<Option<Shape
             match_name,
             c,
             o,
+            r,
             hidden,
             ..
         } => ShapeNode::Fill {
             name: name.clone(),
             match_name: match_name.clone(),
             color: lower_prop_color(module, c, [0.0, 0.0, 0.0, 1.0])?,
-            opacity: lower_prop_scalar(module, o, 100.0)?,
-            rule: FillRule::NonZero,
+            opacity: match o {
+                Some(p) => lower_prop_scalar(module, p, 100.0)?,
+                None => Property::Static(100.0),
+            },
+            rule: match r {
+                Some(2) => FillRule::EvenOdd,
+                _ => FillRule::NonZero,
+            },
             hidden: *hidden,
         },
         GraphicElement::Stroke {
@@ -1075,17 +1139,25 @@ fn lower_shape(module: &mut Module, src: &GraphicElement) -> Result<Option<Shape
             lc,
             lj,
             ml,
+            d,
             hidden,
             ..
         } => ShapeNode::Stroke {
             name: name.clone(),
             match_name: match_name.clone(),
             color: lower_prop_color(module, c, [0.0, 0.0, 0.0, 1.0])?,
-            opacity: lower_prop_scalar(module, o, 100.0)?,
-            width: lower_prop_scalar(module, w, 1.0)?,
+            opacity: match o {
+                Some(p) => lower_prop_scalar(module, p, 100.0)?,
+                None => Property::Static(100.0),
+            },
+            width: match w {
+                Some(p) => lower_prop_scalar(module, p, 1.0)?,
+                None => Property::Static(1.0),
+            },
             linecap: LineCap::from_lottie(*lc),
             linejoin: LineJoin::from_lottie(*lj),
             miter_limit: *ml,
+            dash: lower_dash(module, d.as_deref())?,
             hidden: *hidden,
         },
         GraphicElement::GradientStroke {
@@ -1099,12 +1171,19 @@ fn lower_shape(module: &mut Module, src: &GraphicElement) -> Result<Option<Shape
             lc,
             lj,
             ml,
+            d,
             hidden,
         } => ShapeNode::GradientStroke {
             name: name.clone(),
             gradient: GradientDef { raw: g.clone() },
-            width: lower_prop_scalar(module, w, 1.0)?,
-            opacity: lower_prop_scalar(module, o, 100.0)?,
+            width: match w {
+                Some(p) => lower_prop_scalar(module, p, 1.0)?,
+                None => Property::Static(1.0),
+            },
+            opacity: match o {
+                Some(p) => lower_prop_scalar(module, p, 100.0)?,
+                None => Property::Static(100.0),
+            },
             start: match s {
                 Some(p) => Some(lower_prop_vec2(module, p, [0.0, 0.0])?),
                 None => None,
@@ -1120,6 +1199,7 @@ fn lower_shape(module: &mut Module, src: &GraphicElement) -> Result<Option<Shape
             linecap: LineCap::from_lottie(*lc),
             linejoin: LineJoin::from_lottie(*lj),
             miter_limit: *ml,
+            dash: lower_dash(module, d.as_deref())?,
             hidden: *hidden,
         },
         GraphicElement::TrimPath {
@@ -1131,9 +1211,18 @@ fn lower_shape(module: &mut Module, src: &GraphicElement) -> Result<Option<Shape
             hidden,
         } => ShapeNode::TrimPath {
             name: name.clone(),
-            start: lower_prop_scalar(module, s, 0.0)?,
-            end: lower_prop_scalar(module, e, 100.0)?,
-            offset: lower_prop_scalar(module, o, 0.0)?,
+            start: match s {
+                Some(p) => lower_prop_scalar(module, p, 0.0)?,
+                None => Property::Static(0.0),
+            },
+            end: match e {
+                Some(p) => lower_prop_scalar(module, p, 100.0)?,
+                None => Property::Static(100.0),
+            },
+            offset: match o {
+                Some(p) => lower_prop_scalar(module, p, 0.0)?,
+                None => Property::Static(0.0),
+            },
             multiple_shapes: match m.unwrap_or(1) {
                 2 => TrimMultipleShapes::Individually,
                 _ => TrimMultipleShapes::Simultaneously,
@@ -1152,7 +1241,10 @@ fn lower_shape(module: &mut Module, src: &GraphicElement) -> Result<Option<Shape
         } => ShapeNode::GradientFill {
             name: name.clone(),
             gradient: GradientDef { raw: g.clone() },
-            opacity: lower_prop_scalar(module, o, 100.0)?,
+            opacity: match o {
+                Some(p) => lower_prop_scalar(module, p, 100.0)?,
+                None => Property::Static(100.0),
+            },
             start: match s {
                 Some(p) => Some(lower_prop_vec2(module, p, [0.0, 0.0])?),
                 None => None,
@@ -1351,4 +1443,24 @@ mod tests {
         // three, and this compiler folds colour alpha into paint alpha.
         assert_eq!(arr[3].as_f64().unwrap(), 1.0);
     }
+}
+
+/// A stroke's dash pattern, in authored order. `n` distinguishes a length
+/// (`d`/`g`) from the offset (`o`); lottie-web keeps that order when it joins
+/// the lengths into `stroke-dasharray`.
+fn lower_dash(
+    module: &mut Module,
+    d: Option<&[lottie::DashElement]>,
+) -> Result<Vec<DashStop>> {
+    let Some(items) = d else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::with_capacity(items.len());
+    for el in items {
+        out.push(DashStop {
+            offset: el.n.as_deref() == Some("o"),
+            value: lower_prop_scalar(module, &el.v, 0.0)?,
+        });
+    }
+    Ok(out)
 }

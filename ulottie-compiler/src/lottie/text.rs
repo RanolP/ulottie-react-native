@@ -369,7 +369,7 @@ pub fn text_shapes(
             if let GraphicElement::Group { ref mut it, .. } = shape {
                 match it.last_mut() {
                     Some(GraphicElement::Transform { s, .. }) => {
-                        *s = static_prop(vec![state.size, state.size]);
+                        *s = Some(static_prop(vec![state.size, state.size]));
                     }
                     _ => it.push(scale_transform(state.size)),
                 }
@@ -380,7 +380,7 @@ pub fn text_shapes(
             name: None,
             hidden: false,
             c: static_prop(fill_colour.clone()),
-            o: static_prop_num(100.0),
+            o: Some(static_prop_num(100.0)),
             r: None,
             bm: None,
             match_name: None,
@@ -388,11 +388,11 @@ pub fn text_shapes(
         it.push(GraphicElement::Transform {
             name: None,
             hidden: false,
-            p: static_prop(vec![*tx, *ty]),
-            a: static_prop(vec![0.0, 0.0]),
-            s: static_prop(vec![100.0, 100.0]),
-            r: static_prop_num(0.0),
-            o: static_prop_num(100.0),
+            p: Some(static_prop(vec![*tx, *ty])),
+            a: Some(static_prop(vec![0.0, 0.0])),
+            s: Some(static_prop(vec![100.0, 100.0])),
+            r: Some(static_prop_num(0.0)),
+            o: Some(static_prop_num(100.0)),
             sk: None,
             sa: None,
         });
@@ -414,11 +414,11 @@ fn scale_transform(size: f64) -> GraphicElement {
     GraphicElement::Transform {
         name: None,
         hidden: false,
-        p: static_prop(vec![0.0, 0.0]),
-        a: static_prop(vec![0.0, 0.0]),
-        s: static_prop(vec![size, size]),
-        r: static_prop_num(0.0),
-        o: static_prop_num(100.0),
+        p: Some(static_prop(vec![0.0, 0.0])),
+        a: Some(static_prop(vec![0.0, 0.0])),
+        s: Some(static_prop(vec![size, size])),
+        r: Some(static_prop_num(0.0)),
+        o: Some(static_prop_num(100.0)),
         sk: None,
         sa: None,
     }

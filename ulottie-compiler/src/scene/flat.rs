@@ -521,17 +521,19 @@ impl Flat {
     /// as `361000` costs five characters instead of two, 230 times over on
     /// `ripple`. The parent slot is an index, not a measurement, so it is never
     /// scaled.
-    fn timelines_section(&mut self, rows: &[[f64; 4]]) -> u32 {
+    fn timelines_section(&mut self, rows: &[[f64; 5]]) -> u32 {
         if rows.is_empty() {
             return 0;
         }
-        let shift = shift_for(rows.iter().flat_map(|t| [t[1], t[2], t[3]]));
-        let mut flat = Vec::with_capacity(rows.len() * 4 + 1);
+        let shift = shift_for(rows.iter().flat_map(|t| [t[1], t[3], t[4]]));
+        let mut flat = Vec::with_capacity(rows.len() * 5 + 1);
         flat.push(shift as i32);
         for t in rows {
             flat.push(t[0] as i32);
-            // The three frame-time fields share the shift; the slot does not.
-            for v in t[1..4].iter() {
+            flat.push(self.scaled(t[1], shift));
+            // The rate is a ratio, not a frame time — fixed ×1000.
+            flat.push(self.scaled(t[2], 3));
+            for v in t[3..5].iter() {
                 flat.push(self.scaled(*v, shift));
             }
         }

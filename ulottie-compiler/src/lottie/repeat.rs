@@ -156,11 +156,11 @@ pub fn expand(items: &[GraphicElement], at: usize) -> Option<Vec<GraphicElement>
         it.push(GraphicElement::Transform {
             name: None,
             hidden: false,
-            p: static_prop(vec![tx, ty]),
-            a: static_prop(vec![0.0, 0.0]),
-            s: static_prop(vec![sx * 100.0, sy * 100.0]),
-            r: static_prop_num(phi.to_degrees()),
-            o: static_prop_num(opacity),
+            p: Some(static_prop(vec![tx, ty])),
+            a: Some(static_prop(vec![0.0, 0.0])),
+            s: Some(static_prop(vec![sx * 100.0, sy * 100.0])),
+            r: Some(static_prop_num(phi.to_degrees())),
+            o: Some(static_prop_num(opacity)),
             sk: None,
             sa: None,
         });
@@ -234,6 +234,7 @@ mod tests {
             name: None,
             hidden: false,
             d: None,
+            closed: None,
             ks: Property::Static(StaticProperty {
                 animated: None,
                 value: serde_json::Value::from(0.0),
@@ -252,7 +253,7 @@ mod tests {
                 panic!("copy {k} carries its transform");
             };
             let rot = match r {
-                Property::Static(s) => s.value.as_f64().unwrap(),
+                Some(Property::Static(s)) => s.value.as_f64().unwrap(),
                 _ => panic!("static"),
             };
             // The decomposed angle wraps to (−180°, 180°]; compare mod 360.
@@ -262,7 +263,7 @@ mod tests {
                 (got - want).abs() < 1e-9,
                 "copy {k} at {rot}°, want {want}°"
             );
-            assert!(matches!(p, Property::Static(_)));
+            assert!(matches!(p, Some(Property::Static(_))));
         }
     }
 

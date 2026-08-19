@@ -15,9 +15,12 @@ use std::collections::HashMap;
 
 use super::{Arg, Binding, Caps, Effect, EffectParam, LayerRecord, Planner, op};
 
-/// After Effects' `ADBE Fill`. The numbering is Lottie's, and lottie-web keys
-/// its own filter table on it — see `registerEffect(21, SVGFillFilter)`.
+/// After Effects' effect type numbers — lottie-web keys its filter table on
+/// them (`registerEffect(21, SVGFillFilter)` and friends).
+const EFFECT_TINT: u32 = 20;
 const EFFECT_FILL: u32 = 21;
+const EFFECT_SHADOW: u32 = 25;
+const EFFECT_BLUR: u32 = 29;
 /// An effect parameter holding a colour.
 const EFFECT_PARAM_COLOR: u32 = 2;
 
@@ -33,8 +36,11 @@ pub enum TimeCtx {
     /// it from the frame and from every keyframe time it is compared against,
     /// so the two cancel — which is why `car-5` keyframes a layer at t=55..70
     /// and gives it `st: 55` and still means composition time. The one place
-    /// it survives is here, where a precomp hands a clock to its children.
-    Inner { parent: u32, offset: f64 },
+    /// it survives is here, where a precomp hands a clock to its children —
+    /// as does `sr`, which lottie-web applies only at this same boundary
+    /// (`renderedFrame = num / sr` in `CompElement`): a stretched ordinary
+    /// layer's keyframes were already exported at composition time.
+    Inner { parent: u32, offset: f64, rate: f64 },
 }
 
 /// The classified transform properties of one record-backed layer.
@@ -43,6 +49,8 @@ struct TxParts {
     a: Option<Prop>,
     s: Option<Prop>,
     r: Option<Prop>,
+    sk: Option<Prop>,
+    sa: Option<Prop>,
 }
 
 struct LayerNode {
@@ -176,7 +184,9 @@ impl Planner<'_> {
         // subtree that can only be in one place.
         let mut masks: HashMap<(usize, u8), String> = HashMap::new();
         for i in 0..layers.len() {
-            let Some(tt) = layers[i].tt else { continue };
+            let Some(tt) = layers[i].tt.filter(|&t| t != 0) else {
+                continue;
+            };
             let Some(j) = layers[i]
                 .tp
                 .map(|p| p as usize)
@@ -285,16 +295,42 @@ impl Planner<'_> {
     /// baked into the markup when nothing about it can move, a reference to
     /// the table's record when something can.
     fn emit_record_transform(&mut self, el: usize, parts: TxParts, rec: u32, slot: u32) {
-        let TxParts { p, a, s, r } = parts;
+        let TxParts { p, a, s, r, sk, sa } = parts;
         let dp = p.unwrap_or(Prop::Vector(vec![0.0, 0.0, 0.0]));
         let da = a.unwrap_or(Prop::Vector(vec![0.0, 0.0, 0.0]));
         let ds = s.unwrap_or(Prop::Vector(vec![100.0, 100.0, 100.0]));
         let dr = r.unwrap_or(Prop::Scalar(0.0));
-        if dp.is_static() && da.is_static() && ds.is_static() && dr.is_static() {
-            let m = matrix(&dp, &da, &ds, &dr);
+        let dsk = sk.unwrap_or(Prop::Scalar(0.0));
+        let dsa = sa.unwrap_or(Prop::Scalar(0.0));
+        let skew_static = dsk.is_static() && dsa.is_static();
+        if dp.is_static() && da.is_static() && ds.is_static() && dr.is_static() && skew_static {
+            let m = matrix_skewed(
+                &dp,
+                &da,
+                &ds,
+                &dr,
+                dsk.as_scalar().unwrap_or(0.0),
+                dsa.as_scalar().unwrap_or(0.0),
+            );
             if !is_identity(&m) {
                 self.set(el, "transform", svg::transform_str(&m));
             }
+        } else if !(skew_static && dsk.as_scalar().unwrap_or(0.0) == 0.0) {
+            // A live skew takes the direct-prop op — the record table does
+            // not carry skew, and nothing reads it through an expression.
+            self.bind(
+                op::TRANSFORM_SKEW,
+                el,
+                vec![
+                    Arg::Prop(dp),
+                    Arg::Prop(da),
+                    Arg::Prop(ds),
+                    Arg::Prop(dr),
+                    Arg::Prop(dsk),
+                    Arg::Prop(dsa),
+                ],
+                slot,
+            );
         } else {
             self.bind(op::LAYER_TX, el, vec![Arg::Num(rec as f64)], slot);
         }
@@ -322,14 +358,23 @@ impl Planner<'_> {
             Some(rec) => {
                 let e = &self.layers[rec as usize];
                 let (p, an, s, r) = (e.p.clone(), e.a.clone(), e.sc.clone(), e.r.clone());
-                self.emit_record_transform(el, TxParts { p, a: an, s, r }, rec, nodes[a].slot);
+                let sk = layers[a].sk.as_ref().map(|x| self.classify(x, 1));
+                let sa = layers[a].sa.as_ref().map(|x| self.classify(x, 1));
+                self.emit_record_transform(
+                    el,
+                    TxParts { p, a: an, s, r, sk, sa },
+                    rec,
+                    nodes[a].slot,
+                );
             }
-            None => self.emit_transform(
+            None => self.emit_transform_skewed(
                 el,
                 layers[a].p.as_ref(),
                 layers[a].a.as_ref(),
                 layers[a].sc.as_ref(),
                 layers[a].r.as_ref(),
+                layers[a].sk.as_ref(),
+                layers[a].sa.as_ref(),
                 nodes[a].slot,
             ),
         }
@@ -426,10 +471,17 @@ impl Planner<'_> {
                 let hides = layer.ip > c_ip || layer.op < c_op;
                 (0u32, hides)
             }
-            TimeCtx::Inner { parent, offset } => {
+            TimeCtx::Inner { parent, offset, rate } => {
                 self.caps |= Caps::TIMELINE;
-                self.timelines
-                    .push([parent as f64, offset, layer.ip, layer.op]);
+                // Same decision-boundary treatment as the display gate below.
+                let gate_time = |x: f64| (x * 1000.0).ceil() / 1000.0;
+                self.timelines.push([
+                    parent as f64,
+                    offset,
+                    rate,
+                    gate_time(layer.ip),
+                    gate_time(layer.op),
+                ]);
                 // A precomp's layers come and go on the precomp's own clock,
                 // exactly as the document's do on its. Treating them as always
                 // present drew every one of `car-4`'s four staggered states at
@@ -494,7 +546,7 @@ impl Planner<'_> {
         // the frame is in the precomp's own coordinates. Same rule that sends a
         // track matte to an untransformed wrapper, read the other way round.
         let clip = match (layer.ty, layer.sw, layer.sh) {
-            (0, Some(w), Some(h)) if w > 0 && h > 0 => Some((w, h)),
+            (0, Some(w), Some(h)) if w > 0.0 && h > 0.0 => Some((w, h)),
             _ => None,
         };
         let inner = if has_content {
@@ -513,12 +565,20 @@ impl Planner<'_> {
         // everything inside it is skipped on frames where it is invisible.
         // The DISPLAY binding itself stays ungated — it is what turns the
         // group back on.
+        //
+        // In/out points ship as their *decision boundary* at wire precision:
+        // the ×1000 quantization would round `ip: 35.0000014` to 35 and turn
+        // "starts just after frame 35" into "on at 35" — while lottie-web,
+        // whose first frame is `Math.round(ip)`, opens that composition on a
+        // blank frame (`loading_indicator`). Ceiling preserves the strict
+        // comparison for fractional bounds and is exact for whole ones.
+        let gate_time = |x: f64| (x * 1000.0).ceil() / 1000.0;
         let outer_gate = self.gate;
         if range_hidden && !inert {
             self.bind(
                 op::DISPLAY,
                 outer,
-                vec![Arg::Num(layer.ip), Arg::Num(layer.op)],
+                vec![Arg::Num(gate_time(layer.ip)), Arg::Num(gate_time(layer.op))],
                 slot,
             );
             // The gate table is evaluated against the composition clock, so it
@@ -526,7 +586,7 @@ impl Planner<'_> {
             // a slot of their own; `oDisplay` reads that slot and hides them
             // correctly, they just do not get the skip.
             if matches!(ctx, TimeCtx::Root) {
-                self.gates.push([layer.ip, layer.op]);
+                self.gates.push([gate_time(layer.ip), gate_time(layer.op)]);
                 self.gate = self.gates.len() as u32;
             }
         }
@@ -546,9 +606,18 @@ impl Planner<'_> {
             // the table, not the document — but an inert layer's own group
             // gets nothing written to it.
             if !inert {
+                let sk = layer.sk.as_ref().map(|x| self.classify(x, 1));
+                let sa = layer.sa.as_ref().map(|x| self.classify(x, 1));
                 self.emit_record_transform(
                     outer,
-                    TxParts { p: pp.clone(), a: ap.clone(), s: sp.clone(), r: rp.clone() },
+                    TxParts {
+                        p: pp.clone(),
+                        a: ap.clone(),
+                        s: sp.clone(),
+                        r: rp.clone(),
+                        sk,
+                        sa,
+                    },
                     rec,
                     slot,
                 );
@@ -574,12 +643,14 @@ impl Planner<'_> {
             e.o = op_p;
         } else {
             if !inert {
-                self.emit_transform(
+                self.emit_transform_skewed(
                     outer,
                     layer.p.as_ref(),
                     layer.a.as_ref(),
                     layer.sc.as_ref(),
                     layer.r.as_ref(),
+                    layer.sk.as_ref(),
+                    layer.sa.as_ref(),
                     slot,
                 );
             }
@@ -597,7 +668,7 @@ impl Planner<'_> {
         }
 
         if has_content && !inert {
-            self.emit_effects(inner, layer);
+            self.emit_effects(inner, layer, slot);
         }
 
         match layer.ty {
@@ -610,8 +681,8 @@ impl Planner<'_> {
             }
             1 => {
                 let rect = self.el("rect");
-                self.set(rect, "width", svg::n(layer.sw.unwrap_or(0) as f64));
-                self.set(rect, "height", svg::n(layer.sh.unwrap_or(0) as f64));
+                self.set(rect, "width", svg::n(layer.sw.unwrap_or(0.0)));
+                self.set(rect, "height", svg::n(layer.sh.unwrap_or(0.0)));
                 self.set(
                     rect,
                     "fill",
@@ -627,15 +698,16 @@ impl Planner<'_> {
             0 => {
                 if let Some(id) = layer.rf.clone() {
                     let offset = layer.st.unwrap_or(0.0);
+                    let rate = if layer.sr == 0.0 { 1.0 } else { layer.sr };
                     // Time remap replaces the precomp's clock outright: its
                     // inner time is a function of the outer one rather than a
                     // shift of it. Give it a slot of its own that the children
                     // then hang off, so the usual offset path is untouched.
-                    let (slot, offset) = match self.remap_slot(layer, slot) {
-                        Some(remapped) => (remapped, 0.0),
-                        None => (slot, offset),
+                    let (slot, offset, rate) = match self.remap_slot(layer, slot) {
+                        Some(remapped) => (remapped, 0.0, 1.0),
+                        None => (slot, offset, rate),
                     };
-                    match self.instantiate(&id, slot, offset)? {
+                    match self.instantiate(&id, slot, offset, rate)? {
                         Some(node) => self.els[inner].children.push(node),
                         // Not instanceable — walk it inline, as before.
                         None => {
@@ -654,6 +726,7 @@ impl Planner<'_> {
                                     TimeCtx::Inner {
                                         parent: slot,
                                         offset,
+                                        rate,
                                     },
                                 )?;
                                 self.els[inner].children.extend(kids);
@@ -771,7 +844,13 @@ impl Planner<'_> {
 
     /// Place one use of a precomp. The asset is planned the first time it is
     /// seen; a use is just a position, resolved once planning finishes.
-    fn instantiate(&mut self, id: &str, parent_slot: u32, offset: f64) -> Result<Option<usize>> {
+    fn instantiate(
+        &mut self,
+        id: &str,
+        parent_slot: u32,
+        offset: f64,
+        rate: f64,
+    ) -> Result<Option<usize>> {
         let Some(asset) = self.plan_asset(id)? else {
             return Ok(None);
         };
@@ -783,6 +862,7 @@ impl Planner<'_> {
             el_base: 0,
             parent_slot,
             offset,
+            rate,
         });
         self.caps |= Caps::TIMELINE | Caps::INSTANCES;
         Ok(Some(node))
@@ -799,7 +879,7 @@ impl Planner<'_> {
         let prop = self.classify(tr, 1);
         self.caps |= Caps::TIMELINE | Caps::TIME_REMAP;
         self.timelines
-            .push([parent as f64, 0.0, layer.ip, layer.op]);
+            .push([parent as f64, 0.0, 1.0, layer.ip, layer.op]);
         let slot = self.timelines.len() as u32;
         self.remaps.resize(self.timelines.len(), None);
         self.remaps[slot as usize - 1] = Some(prop);
@@ -839,6 +919,7 @@ impl Planner<'_> {
             TimeCtx::Inner {
                 parent: 0,
                 offset: 0.0,
+                rate: 1.0,
             },
         )?;
         self.els[root].children.extend(kids);
@@ -949,7 +1030,7 @@ impl Planner<'_> {
                 rebase_arg(a, delta);
             }
         }
-        let timelines: Vec<[f64; 4]> = self
+        let timelines: Vec<[f64; 5]> = self
             .timelines
             .drain(tl_start..)
             .map(|t| {
@@ -958,13 +1039,17 @@ impl Planner<'_> {
                 } else {
                     t[0] - tl_start as f64
                 };
-                [parent, t[1], t[2], t[3]]
+                [parent, t[1], t[2], t[3], t[4]]
             })
             .collect();
 
-        // Nested uses, repositioned relative to this asset.
+        // Nested uses, repositioned relative to this asset. One whose
+        // placeholder did not survive pruning — the whole subtree around it
+        // was invisible — renders nothing, and keeping it would index an
+        // element the template no longer has.
         let mut nested: Vec<super::instance::Nested> =
             self.pending.drain(pending_start..).collect();
+        nested.retain(|nst| local.contains_key(&nst.node));
         for nst in &mut nested {
             nst.el_base = local[&nst.node];
             // A parent slot of 0 stays 0: it means "the enclosing instance's
@@ -1048,48 +1133,273 @@ impl Planner<'_> {
     /// instead, scaling alpha by the effect's own opacity — the same matrix
     /// `SVGFillFilter` writes, so the two agree to the digit. `support::scan`
     /// reports every other renderable effect type rather than dropping it.
-    fn emit_effects(&mut self, target: usize, layer: &data::Layer) {
+    /// Layer effects that draw, as one SVG filter chaining every supported
+    /// effect's primitives — exactly the shape lottie-web's `SVGEffects`
+    /// builds. Fill, tint, drop shadow and gaussian blur are transcriptions
+    /// of `SVGFillFilter`, `SVGTintFilter`, `SVGDropShadowEffect` and
+    /// `SVGGaussianBlurEffect`, quirks intact (drop shadow keeps the default
+    /// `0%/100%` region that clips it to the element's own box; the blur is
+    /// what widens the region, because the last constructor to touch the
+    /// shared filter wins there too). Effect types lottie-web never
+    /// registered — Bulge, Warp, expression sliders — are skipped without a
+    /// finding, because the reference skips them the same way.
+    fn emit_effects(&mut self, target: usize, layer: &data::Layer, slot: u32) {
         let Some(effects) = &layer.ef else { return };
-        for e in effects {
-            if e.ty != EFFECT_FILL {
-                continue;
-            }
-            // Parameters are addressed by position, the way `SVGFillFilter`
-            // reads `effectElements[2]` and `[6]`; a match name is friendlier
-            // and survives a reordering neither renderer would tolerate anyway.
-            let color = e
-                .ef
-                .iter()
-                .find(|p| p.ty == EFFECT_PARAM_COLOR)
-                .and_then(|p| p.c);
-            let Some(c) = color else { continue };
-            let opacity = e
-                .ef
-                .iter()
-                .find(|p| p.nm.as_deref() == Some("Opacity"))
-                .and_then(|p| p.v)
-                .unwrap_or(1.0);
+        let supported: Vec<&data::Effect> = effects
+            .iter()
+            .filter(|e| matches!(e.ty, EFFECT_TINT | EFFECT_FILL | EFFECT_SHADOW | EFFECT_BLUR))
+            .collect();
+        if supported.is_empty() {
+            return;
+        }
 
-            let id = self.next_id("f");
-            let f = self.el("filter");
-            self.set(f, "id", id.clone());
-            let m = self.el("feColorMatrix");
-            self.set(m, "type", "matrix");
-            self.set(m, "color-interpolation-filters", "sRGB");
-            self.set(
-                m,
-                "values",
-                format!(
-                    "0 0 0 0 {} 0 0 0 0 {} 0 0 0 0 {} 0 0 0 {} 0",
-                    svg::n(c[0]),
-                    svg::n(c[1]),
-                    svg::n(c[2]),
-                    svg::n(opacity)
-                ),
-            );
-            self.els[f].children.push(m);
-            self.add_def(f);
-            self.set(target, "filter", format!("url(#{id})"));
+        let id = self.next_id("f");
+        let f = self.el("filter");
+        self.set(f, "id", id.clone());
+        if supported.iter().any(|e| e.ty == EFFECT_SHADOW) {
+            // lottie-web's default `filterSize` — the shadow clips to it.
+            self.set(f, "x", "0%");
+            self.set(f, "y", "0%");
+            self.set(f, "width", "100%");
+            self.set(f, "height", "100%");
+        }
+        if supported.iter().any(|e| e.ty == EFFECT_BLUR) {
+            self.set(f, "x", "-100%");
+            self.set(f, "y", "-100%");
+            self.set(f, "width", "300%");
+            self.set(f, "height", "300%");
+        }
+
+        // The running input: `SourceGraphic` until an effect merges, then that
+        // effect's named result. Only shadow and tint reference it by name.
+        let mut source = String::from("SourceGraphic");
+        // The previous effect's last primitive, so a by-name reference can
+        // give it the `result` it needs.
+        let mut last_prim: Option<usize> = None;
+        for (k, e) in supported.iter().enumerate() {
+            let name = |suffix: &str| format!("{id}_{k}{suffix}");
+            // A by-name consumer needs the running source to *have* a name.
+            let mut named_source = source.clone();
+            if matches!(e.ty, EFFECT_TINT | EFFECT_SHADOW) && source != "SourceGraphic" {
+                if let Some(p) = last_prim {
+                    named_source = format!("{id}_{}s", k);
+                    self.set(p, "result", named_source.clone());
+                }
+            }
+            match e.ty {
+                EFFECT_FILL => {
+                    // `SVGFillFilter`: one matrix that floods the colour and
+                    // scales alpha by the effect's own opacity.
+                    let Some(c) = e.ef.iter().find(|p| p.ty == EFFECT_PARAM_COLOR).and_then(|p| p.c)
+                    else {
+                        continue;
+                    };
+                    let opacity = e
+                        .ef
+                        .iter()
+                        .find(|p| p.nm.as_deref() == Some("Opacity"))
+                        .and_then(|p| p.v)
+                        .unwrap_or(1.0);
+                    let m = self.el("feColorMatrix");
+                    self.set(m, "type", "matrix");
+                    self.set(m, "color-interpolation-filters", "sRGB");
+                    self.set(
+                        m,
+                        "values",
+                        format!(
+                            "0 0 0 0 {} 0 0 0 0 {} 0 0 0 0 {} 0 0 0 {} 0",
+                            svg::n(c[0]),
+                            svg::n(c[1]),
+                            svg::n(c[2]),
+                            svg::n(opacity)
+                        ),
+                    );
+                    self.els[f].children.push(m);
+                    last_prim = Some(m);
+                    source = String::new(); // implicit chain from here on
+                }
+                EFFECT_TINT => {
+                    // `SVGTintFilter`: luminance scaled by intensity, mapped
+                    // onto the black→white ramp, merged over the source.
+                    let black = e.ef.first().and_then(|p| p.c).unwrap_or([0.0; 4]);
+                    let white = e.ef.get(1).and_then(|p| p.c).unwrap_or([1.0, 1.0, 1.0, 1.0]);
+                    let opacity = e.ef.get(2).and_then(|p| p.v).unwrap_or(100.0) / 100.0;
+                    let lin = self.el("feColorMatrix");
+                    self.set(lin, "type", "matrix");
+                    self.set(lin, "color-interpolation-filters", "linearRGB");
+                    self.set(
+                        lin,
+                        "values",
+                        format!(
+                            "0.3086 0.6094 0.082 0 0 0.3086 0.6094 0.082 0 0 0.3086 0.6094 0.082 0 0 0 0 0 {} 0",
+                            svg::n(opacity)
+                        ),
+                    );
+                    self.set(lin, "result", name("t1"));
+                    self.els[f].children.push(lin);
+                    let m = self.el("feColorMatrix");
+                    self.set(m, "type", "matrix");
+                    self.set(m, "color-interpolation-filters", "sRGB");
+                    self.set(
+                        m,
+                        "values",
+                        format!(
+                            "{} 0 0 0 {} {} 0 0 0 {} {} 0 0 0 {} 0 0 0 1 0",
+                            svg::n(white[0] - black[0]),
+                            svg::n(black[0]),
+                            svg::n(white[1] - black[1]),
+                            svg::n(black[1]),
+                            svg::n(white[2] - black[2]),
+                            svg::n(black[2])
+                        ),
+                    );
+                    self.set(m, "result", name("t2"));
+                    self.els[f].children.push(m);
+                    let merged = name("");
+                    for input in [named_source.as_str(), &name("t1"), &name("t2")] {
+                        let n = self.el("feMergeNode");
+                        self.set(n, "in", input);
+                        let merge = match self.els[f].children.last() {
+                            Some(&m2) if self.els[m2].tag == "feMerge" => m2,
+                            _ => {
+                                let m2 = self.el("feMerge");
+                                self.set(m2, "result", merged.clone());
+                                self.els[f].children.push(m2);
+                                m2
+                            }
+                        };
+                        self.els[merge].children.push(n);
+                    }
+                    last_prim = self.els[f].children.last().copied();
+                    source = merged;
+                }
+                EFFECT_SHADOW => {
+                    // `SVGDropShadowEffect`, primitive for primitive. Params
+                    // by position: colour, opacity (0–255), direction,
+                    // distance, softness.
+                    let color = e.ef.first().and_then(|p| p.c).unwrap_or([0.0; 4]);
+                    let blur = self.el("feGaussianBlur");
+                    self.set(blur, "in", "SourceAlpha");
+                    self.set(blur, "result", name("d1"));
+                    let softness = self.fx_scalar(e, 4);
+                    match softness.as_scalar() {
+                        Some(v) if softness.is_static() => {
+                            self.set(blur, "stdDeviation", svg::n(v / 4.0));
+                        }
+                        _ => {
+                            self.caps |= Caps::FX;
+                            self.bind(op::FX_STD, blur, vec![Arg::Prop(softness)], slot);
+                        }
+                    }
+                    self.els[f].children.push(blur);
+                    let off = self.el("feOffset");
+                    self.set(off, "in", name("d1"));
+                    self.set(off, "result", name("d2"));
+                    let dir = self.fx_scalar(e, 2);
+                    let dist = self.fx_scalar(e, 3);
+                    match (dir.as_scalar(), dist.as_scalar()) {
+                        (Some(a), Some(d)) if dir.is_static() && dist.is_static() => {
+                            let rad = (a - 90.0).to_radians();
+                            self.set(off, "dx", svg::n(d * rad.cos()));
+                            self.set(off, "dy", svg::n(d * rad.sin()));
+                        }
+                        _ => {
+                            self.caps |= Caps::FX;
+                            self.bind(
+                                op::FX_OFFSET,
+                                off,
+                                vec![Arg::Prop(dir), Arg::Prop(dist)],
+                                slot,
+                            );
+                        }
+                    }
+                    self.els[f].children.push(off);
+                    let flood = self.el("feFlood");
+                    self.set(
+                        flood,
+                        "flood-color",
+                        svg::hex_color(&[color[0], color[1], color[2], 1.0]),
+                    );
+                    let opacity = self.fx_scalar(e, 1);
+                    match opacity.as_scalar() {
+                        Some(v) if opacity.is_static() => {
+                            self.set(flood, "flood-opacity", svg::n(v / 255.0));
+                        }
+                        _ => {
+                            self.caps |= Caps::FX;
+                            self.bind(op::FX_FLOOD_O, flood, vec![Arg::Prop(opacity)], slot);
+                        }
+                    }
+                    self.set(flood, "result", name("d3"));
+                    self.els[f].children.push(flood);
+                    let comp = self.el("feComposite");
+                    self.set(comp, "in", name("d3"));
+                    self.set(comp, "in2", name("d2"));
+                    self.set(comp, "operator", "in");
+                    self.set(comp, "result", name("d4"));
+                    self.els[f].children.push(comp);
+                    let merged = name("");
+                    let merge = self.el("feMerge");
+                    self.set(merge, "result", merged.clone());
+                    for input in [&name("d4"), named_source.as_str()] {
+                        let n = self.el("feMergeNode");
+                        self.set(n, "in", input);
+                        self.els[merge].children.push(n);
+                    }
+                    self.els[f].children.push(merge);
+                    last_prim = Some(merge);
+                    source = merged;
+                }
+                EFFECT_BLUR => {
+                    // `SVGGaussianBlurEffect`: sigma is blurriness × 0.3, the
+                    // dimensions switch zeroes one axis, and edge mode 1 wraps.
+                    let blur = self.el("feGaussianBlur");
+                    let sigma = self.fx_scalar(e, 0);
+                    let dims = e.ef.get(1).and_then(|p| p.v).unwrap_or(1.0) as u32;
+                    match sigma.as_scalar() {
+                        Some(v) if sigma.is_static() => {
+                            let s = v * 0.3;
+                            let sx = if dims == 3 { 0.0 } else { s };
+                            let sy = if dims == 2 { 0.0 } else { s };
+                            self.set(
+                                blur,
+                                "stdDeviation",
+                                format!("{} {}", svg::n(sx), svg::n(sy)),
+                            );
+                        }
+                        _ => {
+                            self.caps |= Caps::FX;
+                            self.bind(
+                                op::FX_BLUR,
+                                blur,
+                                vec![Arg::Prop(sigma), Arg::Tag(dims)],
+                                slot,
+                            );
+                        }
+                    }
+                    let edge = e.ef.get(2).and_then(|p| p.v).unwrap_or(0.0);
+                    self.set(blur, "edgeMode", if edge == 1.0 { "wrap" } else { "duplicate" });
+                    self.els[f].children.push(blur);
+                    last_prim = Some(blur);
+                    source = String::new();
+                }
+                _ => {}
+            }
+        }
+
+        self.add_def(f);
+        self.set(target, "filter", format!("url(#{id})"));
+    }
+
+    /// One effect parameter as a classified scalar property — the animated
+    /// form when the export carries keyframes, the static value otherwise.
+    fn fx_scalar(&mut self, e: &data::Effect, i: usize) -> Prop {
+        match e.ef.get(i) {
+            Some(p) => match &p.p {
+                Some(inline) => self.classify(inline, 1),
+                None => Prop::Scalar(p.v.unwrap_or(0.0)),
+            },
+            None => Prop::Scalar(0.0),
         }
     }
 
@@ -1153,12 +1463,29 @@ impl Planner<'_> {
     /// separate — merging them into one `d` would let opposite windings cancel
     /// under `clip-rule="nonzero"`, which is why `merge_paths` does not walk in
     /// here.
+    /// Layer masks, mirroring lottie-web's `MaskElement` decision for
+    /// decision:
+    ///
+    /// * `clipPath` until some mask is non-Add, inverted, or not fully opaque
+    ///   — a `<mask>`'s default region quietly crops, so the hard form is
+    ///   never given up casually.
+    /// * The full-frame white rect exists **only when the first counted mask
+    ///   is Subtract or Intersect** (`count === 0` in their constructor).
+    ///   Adding it under a leading Add turned "A minus S" into "everything
+    ///   minus S" — `Tests_MaskInv`, 71.6% wrong, was exactly that.
+    /// * A Subtract paints black; *every* other counted mode paints white —
+    ///   including `f`, which lottie-web never special-cases.
+    /// * `n` masks draw nothing at all (lottie-web parks the path in defs).
+    /// * Intersect wraps everything accumulated so far in a `<g>` alpha-masked
+    ///   by its own path.
+    /// * An inverted mask is the composition-sized rect plus the path in one
+    ///   `d` — winding inversion, their `createLayerSolidPath`. Static paths
+    ///   only; an inverted animated path is the one remaining refusal.
     fn emit_masks(&mut self, target: usize, masks: &[data::LayerMask], slot: u32) -> Result<()> {
-        let (cw, ch) = (self.payload.c.w as f64, self.payload.c.h as f64);
+        let (cw, ch) = (self.payload.c.w, self.payload.c.h);
         // Bodymovin writes `"o": {"a":0,"k":100}` on a mask that is simply
         // opaque, so the test is the *value* and not the field's presence —
-        // lottie-web spells it `properties[i].o.k !== 100`. Anything less than
-        // fully opaque, or animated, needs real alpha and so needs a mask.
+        // lottie-web spells it `properties[i].o.k !== 100`.
         let opaque = |o: &Option<InlineProp>| match o {
             None => true,
             Some(InlineProp::Static(Value::Scalar(v))) => (*v - 100.0).abs() < 1e-6,
@@ -1170,31 +1497,64 @@ impl Planner<'_> {
 
         let id = self.next_id(if hard { "k" } else { "m" });
         let holder = self.el(if hard { "clipPath" } else { "mask" });
+        let outer = holder;
         self.set(holder, "id", id.clone());
         if !hard {
             self.set(holder, "mask-type", "luminance");
         }
 
-        let has_subtract = masks.iter().any(|m| m.m == "s" || m.inv);
-        if has_subtract {
-            let bg = self.el("rect");
-            self.set(bg, "width", svg::n(cw));
-            self.set(bg, "height", svg::n(ch));
-            self.set(bg, "fill", "#fff");
-            self.els[holder].children.push(bg);
-        }
-
+        let mut count = 0usize;
         for m in masks {
-            let subtract = m.m == "s" || m.inv;
+            if m.m == "n" {
+                continue;
+            }
+            if (m.m == "s" || m.m == "i") && count == 0 {
+                let bg = self.el("rect");
+                self.set(bg, "width", svg::n(cw));
+                self.set(bg, "height", svg::n(ch));
+                self.set(bg, "fill", "#ffffff");
+                self.els[holder].children.push(bg);
+            }
+            count += 1;
             let p = self.el("path");
             if hard {
                 self.set(p, "clip-rule", "nonzero");
             } else {
-                self.set(p, "fill", if subtract { "#000" } else { "#fff" });
-                self.set(p, "fill-rule", "evenodd");
+                self.set(p, "fill", if m.m == "s" { "#000" } else { "#fff" });
+            }
+            match &m.o {
+                Some(o) if !opaque(&m.o) => {
+                    let op_p = self.classify(o, 1);
+                    match op_p.as_scalar() {
+                        Some(v) if op_p.is_static() => {
+                            self.set(p, "fill-opacity", svg::n(v / 100.0));
+                        }
+                        // The colourless fill op writes exactly
+                        // `fill-opacity` — the same binding a gradient's
+                        // animated opacity uses.
+                        _ => self.bind(op::FILL, p, vec![Arg::Null, Arg::Prop(op_p)], slot),
+                    }
+                }
+                _ => {}
             }
             let shape = self.classify(&m.pt, 2);
             match &shape {
+                Prop::Path(path) if m.inv => {
+                    // `createLayerSolidPath` + the path, one `d`: the rect
+                    // winds once around everything, the contour cuts its hole.
+                    self.set(
+                        p,
+                        "d",
+                        format!(
+                            "M0,0h{}v{}h-{}v-{}z{}",
+                            svg::n(cw),
+                            svg::n(ch),
+                            svg::n(cw),
+                            svg::n(ch),
+                            path.to_d()
+                        ),
+                    );
+                }
                 Prop::Path(path) => {
                     self.set(p, "d", path.to_d());
                 }
@@ -1203,10 +1563,31 @@ impl Planner<'_> {
                     self.bind(op::SHAPE, p, vec![Arg::Prop(shape), Arg::Null], slot);
                 }
             }
-            self.els[holder].children.push(p);
+            if m.m == "i" {
+                // Everything so far, seen through this path.
+                let mid = format!("{id}_{count}");
+                let am = self.el("mask");
+                self.set(am, "id", mid.clone());
+                self.set(am, "mask-type", "alpha");
+                self.els[am].children.push(p);
+                self.add_def(am);
+                let g = self.el("g");
+                self.set(g, "mask", format!("url(#{mid})"));
+                let kids = std::mem::take(&mut self.els[holder].children);
+                self.els[g].children.extend(kids);
+                self.els[holder].children.push(g);
+            } else {
+                self.els[holder].children.push(p);
+            }
         }
 
-        self.add_def(holder);
+        // No counted mask, no attribute: an *empty* `<clipPath>` clips
+        // everything away, where lottie-web's `count > 0` guard leaves the
+        // layer unmasked (`Tests_MaskNone` is all `n` masks).
+        if count == 0 {
+            return Ok(());
+        }
+        self.add_def(outer);
         self.set(
             target,
             if hard { "clip-path" } else { "mask" },
@@ -1219,13 +1600,16 @@ impl Planner<'_> {
     // Transform / opacity
     // -----------------------------------------------------------------------
 
-    fn emit_transform(
+    #[allow(clippy::too_many_arguments)]
+    fn emit_transform_skewed(
         &mut self,
         el: usize,
         p: Option<&InlineProp>,
         a: Option<&InlineProp>,
         s: Option<&InlineProp>,
         r: Option<&InlineProp>,
+        sk: Option<&InlineProp>,
+        sa: Option<&InlineProp>,
         slot: u32,
     ) {
         let dim = if self.keep_z { 3 } else { 2 };
@@ -1239,14 +1623,47 @@ impl Planner<'_> {
             .map(|x| self.classify(x, dim))
             .unwrap_or(Prop::Vector(vec![100.0, 100.0]));
         let rp = r.map(|x| self.classify(x, 1)).unwrap_or(Prop::Scalar(0.0));
+        let skp = sk.map(|x| self.classify(x, 1)).unwrap_or(Prop::Scalar(0.0));
+        let sap = sa.map(|x| self.classify(x, 1)).unwrap_or(Prop::Scalar(0.0));
+
+        // A skew that is statically zero costs nothing anywhere; a live one
+        // takes the skewed op, whose matrix carries the extra factor.
+        let skew_zero = skp.is_static()
+            && sap.is_static()
+            && skp.as_scalar().unwrap_or(0.0) == 0.0;
 
         let rest_static = ap.is_static() && sp.is_static() && rp.is_static();
+        let skew_static = skp.is_static() && sap.is_static();
 
-        if pp.is_static() && rest_static {
-            let m = matrix(&pp, &ap, &sp, &rp);
+        if pp.is_static() && rest_static && skew_static {
+            let m = matrix_skewed(
+                &pp,
+                &ap,
+                &sp,
+                &rp,
+                skp.as_scalar().unwrap_or(0.0),
+                sap.as_scalar().unwrap_or(0.0),
+            );
             if !is_identity(&m) {
                 self.set(el, "transform", svg::transform_str(&m));
             }
+            return;
+        }
+
+        if !skew_zero {
+            self.bind(
+                op::TRANSFORM_SKEW,
+                el,
+                vec![
+                    Arg::Prop(pp),
+                    Arg::Prop(ap),
+                    Arg::Prop(sp),
+                    Arg::Prop(rp),
+                    Arg::Prop(skp),
+                    Arg::Prop(sap),
+                ],
+                slot,
+            );
             return;
         }
 
@@ -1435,12 +1852,14 @@ impl Planner<'_> {
             ShapeRef::Group(g) => {
                 let node = self.el("g");
                 self.els[parent].children.push(node);
-                self.emit_transform(
+                self.emit_transform_skewed(
                     node,
                     g.p.as_ref(),
                     g.a.as_ref(),
                     g.sc.as_ref(),
                     g.r.as_ref(),
+                    g.sk.as_ref(),
+                    g.sa.as_ref(),
                     slot,
                 );
                 self.emit_opacity(node, g.o.as_ref(), slot);
@@ -1541,7 +1960,9 @@ impl Planner<'_> {
                         if !is_fill && !is_stroke {
                             continue;
                         }
-                        let Some(node) = self.build_primitive(&shape, &trim, slot) else {
+                        let dashed = style_dashes(&st);
+                        let Some(node) = self.build_primitive(&shape, &trim, dashed, slot)
+                        else {
                             continue;
                         };
                         self.els[parent].children.push(node);
@@ -1554,7 +1975,13 @@ impl Planner<'_> {
                     }
                     return Ok(());
                 }
-                let node = self.build_primitive(&shape, &trim, slot);
+                let dashed = prim.y.iter().any(|id| {
+                    self.payload
+                        .y
+                        .get(*id as usize)
+                        .is_some_and(style_dashes)
+                });
+                let node = self.build_primitive(&shape, &trim, dashed, slot);
                 let Some(node) = node else { return Ok(()) };
                 self.els[parent].children.push(node);
                 self.emit_styles(node, &prim.y, slot);
@@ -1568,8 +1995,17 @@ impl Planner<'_> {
     ///
     /// `trim` is the modifier chain in application order — usually empty or
     /// one step; a shape under a group trim *and* a layer trim carries both.
-    fn build_primitive(&mut self, shape: &Shape, trim: &[Style], slot: u32) -> Option<usize> {
-        let trimmed = !trim.is_empty();
+    fn build_primitive(
+        &mut self,
+        shape: &Shape,
+        trim: &[Style],
+        dashed: bool,
+        slot: u32,
+    ) -> Option<usize> {
+        // A dashed shape needs the `<path>` spelling too: the dash pattern
+        // walks the contour from its start point, and a native `<ellipse>`
+        // begins at 3 o'clock where lottie-web's outline begins at 12.
+        let trimmed = !trim.is_empty() || dashed;
 
         // A trimmed shape always renders through <path>, since trimming turns
         // any primitive into an arbitrary open curve.
@@ -1711,19 +2147,27 @@ impl Planner<'_> {
                 }
                 (op::SHAPE, vec![Arg::Prop(p)])
             }
-            Shape::Rect { sz, ps, rd, .. } => {
+            Shape::Rect { sz, ps, rd, rv, .. } => {
                 let a = self.classify(sz, 2);
                 let b = self.classify(ps, 2);
                 let c = self.classify(rd, 1);
                 (
                     op::SHAPE_RECT,
-                    vec![Arg::Prop(a), Arg::Prop(b), Arg::Prop(c)],
+                    vec![
+                        Arg::Prop(a),
+                        Arg::Prop(b),
+                        Arg::Prop(c),
+                        Arg::Tag(*rv as u32),
+                    ],
                 )
             }
-            Shape::Ellipse { sz, ps, .. } => {
+            Shape::Ellipse { sz, ps, rv, .. } => {
                 let a = self.classify(sz, 2);
                 let b = self.classify(ps, 2);
-                (op::SHAPE_ELLIPSE, vec![Arg::Prop(a), Arg::Prop(b)])
+                (
+                    op::SHAPE_ELLIPSE,
+                    vec![Arg::Prop(a), Arg::Prop(b), Arg::Tag(*rv as u32)],
+                )
             }
             Shape::PolyStar {
                 sy,
@@ -1732,6 +2176,9 @@ impl Planner<'_> {
                 or,
                 ir,
                 rt,
+                os,
+                is,
+                rv,
                 ..
             } => {
                 let pt = self.classify(pt, 1);
@@ -1739,18 +2186,24 @@ impl Planner<'_> {
                 let or = self.classify(or, 1);
                 let ir = self.classify(ir, 1);
                 let rt = self.classify(rt, 1);
+                let zero = InlineProp::Static(Value::Scalar(0.0));
+                let os = self.classify(os.as_ref().unwrap_or(&zero), 1);
+                let is = self.classify(is.as_ref().unwrap_or(&zero), 1);
                 (
                     op::SHAPE_STAR,
                     vec![
                         // `Tag`, not `Num`: the star type is an enumeration, and
                         // a `Num` is a measurement the encoder scales by a
-                        // thousand.
+                        // thousand. Same for the direction flag.
                         Arg::Tag(*sy as u32),
                         Arg::Prop(pt),
                         Arg::Prop(ps),
                         Arg::Prop(or),
                         Arg::Prop(ir),
                         Arg::Prop(rt),
+                        Arg::Prop(os),
+                        Arg::Prop(is),
+                        Arg::Tag(*rv as u32),
                     ],
                 )
             }
@@ -1788,8 +2241,12 @@ impl Planner<'_> {
                 Arg::Prop(Prop::Path(p)) => return Some(p.clone()),
                 _ => return None,
             },
-            Shape::Rect { .. } => geometry::rect_to_path(vec2(1)?, vec2(0)?, num(2)?),
-            Shape::Ellipse { .. } => geometry::ellipse_to_path(vec2(1)?, vec2(0)?),
+            Shape::Rect { .. } => {
+                geometry::rect_to_path(vec2(1)?, vec2(0)?, num(2)?, num(3)? != 0.0)
+            }
+            Shape::Ellipse { .. } => {
+                geometry::ellipse_to_path(vec2(1)?, vec2(0)?, num(2)? != 0.0)
+            }
             Shape::PolyStar { .. } => geometry::polystar_to_path(
                 num(0)? as u8,
                 vec2(2)?,
@@ -1797,6 +2254,9 @@ impl Planner<'_> {
                 num(3)?,
                 num(4)?,
                 num(5)?,
+                num(6)?,
+                num(7)?,
+                num(8)? != 0.0,
             ),
         };
         Some(FlatPath::from_parts(
@@ -1905,7 +2365,12 @@ impl Planner<'_> {
 
     fn emit_fill(&mut self, el: usize, style: &Style, slot: u32) {
         match style {
-            Style::Fill { c, o } => {
+            Style::Fill { c, o, fr } => {
+                // The rule is a static fact of the style — Lottie has no
+                // animated fill rule — so it is always markup, never a binding.
+                if *fr == 2 {
+                    self.set(el, "fill-rule", "evenodd");
+                }
                 let cp = self.classify(c, 4);
                 let op_p = self.classify(o, 1);
                 if cp.is_static() && op_p.is_static() {
@@ -1938,8 +2403,53 @@ impl Planner<'_> {
         }
     }
 
+    /// A stroke's dash pattern. Static values bake to `stroke-dasharray` /
+    /// `stroke-dashoffset` — the same raw, space-joined numbers lottie-web's
+    /// `DashProperty` writes. Anything animated binds `op::DASH`, whose one
+    /// list argument is `[count, length…, offset]` (the offset rides last so
+    /// the count stays the length count).
+    fn emit_dash(
+        &mut self,
+        el: usize,
+        dl: &[InlineProp],
+        dof: Option<&InlineProp>,
+        slot: u32,
+    ) {
+        if dl.is_empty() {
+            return;
+        }
+        let lengths: Vec<Prop> = dl.iter().map(|p| self.classify(p, 1)).collect();
+        let offset = dof.map(|p| self.classify(p, 1));
+        let offset_static = offset.as_ref().map(|p| p.is_static()).unwrap_or(true);
+        if lengths.iter().all(|p| p.is_static()) && offset_static {
+            let arr = lengths
+                .iter()
+                .map(|p| svg::n(p.as_scalar().unwrap_or(0.0)))
+                .collect::<Vec<_>>()
+                .join(" ");
+            self.set(el, "stroke-dasharray", arr);
+            let o = offset
+                .as_ref()
+                .and_then(|p| p.as_scalar())
+                .unwrap_or(0.0);
+            if o != 0.0 {
+                self.set(el, "stroke-dashoffset", svg::n(o));
+            }
+            return;
+        }
+        self.caps |= Caps::DASH;
+        let mut items = Vec::with_capacity(lengths.len() + 2);
+        items.push(Arg::Num(lengths.len() as f64));
+        items.extend(lengths.into_iter().map(Arg::Prop));
+        items.push(match offset {
+            Some(p) => Arg::Prop(p),
+            None => Arg::Null,
+        });
+        self.bind(op::DASH, el, vec![Arg::List(items)], slot);
+    }
+
     fn emit_stroke(&mut self, el: usize, style: &Style, slot: u32) {
-        let (paint, opacity, width, lc, lj, ml) = match style {
+        let (paint, opacity, width, lc, lj, ml, dl, dof) = match style {
             Style::Stroke {
                 c,
                 o,
@@ -1947,6 +2457,8 @@ impl Planner<'_> {
                 lc,
                 lj,
                 ml,
+                dl,
+                dof,
             } => {
                 let cp = self.classify(c, 4);
                 (
@@ -1956,6 +2468,8 @@ impl Planner<'_> {
                     *lc,
                     *lj,
                     *ml,
+                    dl.clone(),
+                    dof.clone(),
                 )
             }
             Style::GradientStroke {
@@ -1968,6 +2482,8 @@ impl Planner<'_> {
                 lc,
                 lj,
                 ml,
+                dl,
+                dof,
             } => {
                 let id = self.emit_gradient(g, *gk, s.as_ref(), e.as_ref(), slot);
                 self.set(el, "stroke", format!("url(#{id})"));
@@ -1978,10 +2494,13 @@ impl Planner<'_> {
                     *lc,
                     *lj,
                     *ml,
+                    dl.clone(),
+                    dof.clone(),
                 )
             }
             _ => return,
         };
+        self.emit_dash(el, &dl, dof.as_ref(), slot);
 
         // `butt` and `miter` are the SVG defaults — emitting them is pure waste.
         if lc == 2 {
@@ -2319,6 +2838,15 @@ fn ramp_prop(ramp: &crate::eval::gradient::AnimatedRamp, values: &[[f64; 4]]) ->
     })
 }
 
+/// Whether a style draws a dashed stroke — which forces the `<path>`
+/// spelling, since the dash pattern depends on where the contour starts.
+fn style_dashes(style: &Style) -> bool {
+    matches!(
+        style,
+        Style::Stroke { dl, .. } | Style::GradientStroke { dl, .. } if !dl.is_empty()
+    )
+}
+
 /// The layer's parent, if it has one that is actually in the document.
 fn parent_of(layers: &[data::Layer], dead: &[bool], i: usize) -> Option<usize> {
     match layers[i].pr {
@@ -2535,6 +3063,17 @@ fn first_component(c: &data::EasingComponent) -> f64 {
 // ---------------------------------------------------------------------------
 
 pub(super) fn matrix(p: &Prop, a: &Prop, s: &Prop, r: &Prop) -> [f64; 6] {
+    matrix_skewed(p, a, s, r, 0.0, 0.0)
+}
+
+pub(super) fn matrix_skewed(
+    p: &Prop,
+    a: &Prop,
+    s: &Prop,
+    r: &Prop,
+    sk: f64,
+    sa: f64,
+) -> [f64; 6] {
     let pv = p.as_vec().map(|v| [v[0], v[1]]).unwrap_or([0.0, 0.0]);
     let av = a.as_vec().map(|v| [v[0], v[1]]).unwrap_or([0.0, 0.0]);
     let sv = s.as_vec().map(|v| [v[0], v[1]]).unwrap_or([100.0, 100.0]);
@@ -2544,6 +3083,8 @@ pub(super) fn matrix(p: &Prop, a: &Prop, s: &Prop, r: &Prop) -> [f64; 6] {
         anchor: av,
         scale: sv,
         rotation: rv,
+        skew: sk,
+        skew_axis: sa,
         opacity: 100.0,
     };
     spec.to_matrix().m

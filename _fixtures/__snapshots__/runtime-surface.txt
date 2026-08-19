@@ -56,7 +56,7 @@ lottie_logo_1
 
 lottie_logo_2
   caps:    TRANSLATE | DISPLAY | SHAPE | ELLIPSE | KEYFRAMES | EASING | SPATIAL | GEOM_ELLIPSE | PATH_D | TRIM
-  runtime: 79 symbols: A_PROGRAM, A_STRIDE, EASE, F_EASE, F_HOLD, F_SPATIAL, H_ASSETS, H_EASINGS, H_FLAGS, H_FR, H_GATES, H_IP, H_LAYERS, H_OP, H_PROGRAM, H_REMAPS, H_TIMELINES, H_USES, INV, KAPPA, P10, SAMPLES, SP_SEG, T_EXPR, T_PATH, T_SCALAR, T_VECTOR, U_EL_BASE, U_PARENT, U_SLOT_BASE, U_STRIDE, bDisplay, bEllipse, bShape, bShapeEllipse, bTranslate, dec, ellipsePath, fmt, geoSize, hasTrim, mkPath, mount, oDisplay, oEllipse, oShape, oShapeEllipse, oTranslate, open, outlines, pathD, pdPair, pdSep, pease, player, pseg, pslice, put, pv, pvp, pvv, r, r2, seq, slowed, spBuild, spSample, spSeg, tmBetween, tmConcat, tmCut, tmLocate, tmSplit, trim, trimApply, trimCols, trimTable, xv, xvv
+  runtime: 81 symbols: A_PROGRAM, A_STRIDE, EASE, F_EASE, F_HOLD, F_SPATIAL, H_ASSETS, H_EASINGS, H_FLAGS, H_FR, H_GATES, H_IP, H_LAYERS, H_OP, H_PROGRAM, H_REMAPS, H_TIMELINES, H_USES, INV, P10, ROUND, SAMPLES, SP_SEG, T_EXPR, T_PATH, T_SCALAR, T_VECTOR, U_EL_BASE, U_PARENT, U_SLOT_BASE, U_STRIDE, bDisplay, bEllipse, bShape, bShapeEllipse, bTranslate, dec, ellipsePath, fmt, geoRev, geoRev2, geoSize, hasTrim, mkPath, mount, oDisplay, oEllipse, oShape, oShapeEllipse, oTranslate, open, outlines, pathD, pdPair, pdSep, pease, player, pseg, pslice, put, pv, pvp, pvv, r, r2, seq, slowed, spBuild, spSample, spSeg, tmBetween, tmConcat, tmCut, tmLocate, tmSplit, trim, trimApply, trimCols, trimTable, xv, xvv
 
 lottie_logo_3
   caps:    TRANSFORM | TRANSLATE | OPACITY | DISPLAY | SHAPE | ELLIPSE | KEYFRAMES | EASING | SPATIAL | PATH_D | TRIM | TRIM_CHAIN

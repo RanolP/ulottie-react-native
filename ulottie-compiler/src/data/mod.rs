@@ -39,8 +39,8 @@ pub struct Payload {
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct Composition {
-    pub w: u32,
-    pub h: u32,
+    pub w: f64,
+    pub h: f64,
     pub fr: f64,
     pub ip: f64,
     pub op: f64,
@@ -295,6 +295,10 @@ pub enum Shape {
         sz: InlineProp,
         ps: InlineProp,
         rd: InlineProp,
+        /// 1 when the contour runs reversed — which for a rect is also the
+        /// absent-`d` case, per lottie-web's `d === 1 || d === 2` test.
+        #[serde(skip_serializing_if = "is_zero")]
+        rv: u8,
         #[serde(skip_serializing_if = "Option::is_none")]
         nm: Option<u32>,
     },
@@ -302,6 +306,8 @@ pub enum Shape {
     Ellipse {
         sz: InlineProp,
         ps: InlineProp,
+        #[serde(skip_serializing_if = "is_zero")]
+        rv: u8,
         #[serde(skip_serializing_if = "Option::is_none")]
         nm: Option<u32>,
     },
@@ -323,9 +329,15 @@ pub enum Shape {
         os: Option<InlineProp>,
         #[serde(skip_serializing_if = "Option::is_none")]
         is: Option<InlineProp>,
+        #[serde(skip_serializing_if = "is_zero")]
+        rv: u8,
         #[serde(skip_serializing_if = "Option::is_none")]
         nm: Option<u32>,
     },
+}
+
+fn is_zero(v: &u8) -> bool {
+    *v == 0
 }
 
 // ---------------------------------------------------------------------------
@@ -339,7 +351,7 @@ pub enum Shape {
 #[allow(clippy::large_enum_variant)]
 pub enum Style {
     #[serde(rename = "fl")]
-    Fill { c: InlineProp, o: InlineProp },
+    Fill { c: InlineProp, o: InlineProp, fr: u8 },
     #[serde(rename = "st")]
     Stroke {
         c: InlineProp,
@@ -349,6 +361,12 @@ pub enum Style {
         lj: u8,
         #[serde(skip_serializing_if = "Option::is_none")]
         ml: Option<f64>,
+        /// Dash lengths in draw order; empty means solid.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        dl: Vec<InlineProp>,
+        /// Dash offset.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dof: Option<InlineProp>,
     },
     #[serde(rename = "gs")]
     GradientStroke {
@@ -364,6 +382,12 @@ pub enum Style {
         lj: u8,
         #[serde(skip_serializing_if = "Option::is_none")]
         ml: Option<f64>,
+        /// Dash lengths in draw order; empty means solid.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        dl: Vec<InlineProp>,
+        /// Dash offset.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dof: Option<InlineProp>,
     },
     #[serde(rename = "gf")]
     GradientFill {
@@ -435,6 +459,10 @@ pub struct Layer {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub r: Option<InlineProp>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub sk: Option<InlineProp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sa: Option<InlineProp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub o: Option<InlineProp>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -444,9 +472,9 @@ pub struct Layer {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cl: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sw: Option<u32>,
+    pub sw: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sh: Option<u32>,
+    pub sh: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ef: Option<Vec<Effect>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -527,6 +555,10 @@ pub struct GroupRef {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub p: Option<InlineProp>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub sk: Option<InlineProp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sa: Option<InlineProp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub a: Option<InlineProp>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sc: Option<InlineProp>,
@@ -547,8 +579,8 @@ pub enum Asset {
         u: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         p: Option<String>,
-        w: u32,
-        h: u32,
+        w: f64,
+        h: f64,
         #[serde(skip_serializing_if = "is_zero_u8")]
         e: u8,
     },
