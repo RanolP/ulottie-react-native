@@ -552,8 +552,8 @@ impl Planner<'_> {
         let inner = if has_content {
             let n = self.el(if clip.is_some() { "svg" } else { "g" });
             if let Some((w, h)) = clip {
-                self.set(n, "width", svg::n(w as f64));
-                self.set(n, "height", svg::n(h as f64));
+                self.set(n, "width", svg::n(w));
+                self.set(n, "height", svg::n(h));
             }
             self.els[outer].children.push(n);
             n
@@ -782,7 +782,7 @@ impl Planner<'_> {
             (1, Some(p)) => p.clone(),
             (_, Some(p)) => format!("{}{}", u.clone().unwrap_or_default(), p),
         };
-        let (w, h) = (*w as f64, *h as f64);
+        let (w, h) = (*w, *h);
 
         let img = self.el("image");
         self.set(img, "width", svg::n(w));
@@ -1093,7 +1093,7 @@ impl Planner<'_> {
     /// default is the source's bounding box plus 10%, and outside it the
     /// inverted alpha would read as 0 and hide everything.
     fn matte_mask(&mut self, source: usize, tt: u8) -> String {
-        let (cw, ch) = (self.payload.c.w as f64, self.payload.c.h as f64);
+        let (cw, ch) = (self.payload.c.w, self.payload.c.h);
         let inverted = tt == 2 || tt == 4;
         let alpha = tt == 1 || tt == 2;
 
@@ -1180,11 +1180,12 @@ impl Planner<'_> {
             let name = |suffix: &str| format!("{id}_{k}{suffix}");
             // A by-name consumer needs the running source to *have* a name.
             let mut named_source = source.clone();
-            if matches!(e.ty, EFFECT_TINT | EFFECT_SHADOW) && source != "SourceGraphic" {
-                if let Some(p) = last_prim {
-                    named_source = format!("{id}_{}s", k);
-                    self.set(p, "result", named_source.clone());
-                }
+            if matches!(e.ty, EFFECT_TINT | EFFECT_SHADOW)
+                && source != "SourceGraphic"
+                && let Some(p) = last_prim
+            {
+                named_source = format!("{id}_{}s", k);
+                self.set(p, "result", named_source.clone());
             }
             match e.ty {
                 EFFECT_FILL => {

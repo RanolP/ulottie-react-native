@@ -336,10 +336,10 @@ fn scan_layers(
             push(out, Feature::TimeRemap, &at);
         }
 
-        if let Some(ks) = l.get("ks") {
-            if ks.get("rx").is_some() || ks.get("ry").is_some() || ks.get("rz").is_some() {
-                push(out, Feature::ThreeD, &at);
-            }
+        if let Some(ks) = l.get("ks")
+            && (ks.get("rx").is_some() || ks.get("ry").is_some() || ks.get("rz").is_some())
+        {
+            push(out, Feature::ThreeD, &at);
         }
 
         for m in l

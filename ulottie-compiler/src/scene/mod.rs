@@ -803,8 +803,8 @@ pub fn plan_with(
     // layer, because the frame is in composition space — outside every layer's
     // own transform.
     let frame = p.el("svg");
-    p.set(frame, "width", svg::n(payload.c.w as f64));
-    p.set(frame, "height", svg::n(payload.c.h as f64));
+    p.set(frame, "width", svg::n(payload.c.w));
+    p.set(frame, "height", svg::n(payload.c.h));
     p.els[frame].children = roots;
 
     // Definitions (masks, gradients) live at the end of the root: SVG resolves

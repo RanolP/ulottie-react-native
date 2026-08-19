@@ -1399,6 +1399,26 @@ fn canonicalize_expression(body: &str) -> String {
     out
 }
 
+/// A stroke's dash pattern, in authored order. `n` distinguishes a length
+/// (`d`/`g`) from the offset (`o`); lottie-web keeps that order when it joins
+/// the lengths into `stroke-dasharray`.
+fn lower_dash(
+    module: &mut Module,
+    d: Option<&[lottie::DashElement]>,
+) -> Result<Vec<DashStop>> {
+    let Some(items) = d else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::with_capacity(items.len());
+    for el in items {
+        out.push(DashStop {
+            offset: el.n.as_deref() == Some("o"),
+            value: lower_prop_scalar(module, &el.v, 0.0)?,
+        });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1443,24 +1463,4 @@ mod tests {
         // three, and this compiler folds colour alpha into paint alpha.
         assert_eq!(arr[3].as_f64().unwrap(), 1.0);
     }
-}
-
-/// A stroke's dash pattern, in authored order. `n` distinguishes a length
-/// (`d`/`g`) from the offset (`o`); lottie-web keeps that order when it joins
-/// the lengths into `stroke-dasharray`.
-fn lower_dash(
-    module: &mut Module,
-    d: Option<&[lottie::DashElement]>,
-) -> Result<Vec<DashStop>> {
-    let Some(items) = d else {
-        return Ok(Vec::new());
-    };
-    let mut out = Vec::with_capacity(items.len());
-    for el in items {
-        out.push(DashStop {
-            offset: el.n.as_deref() == Some("o"),
-            value: lower_prop_scalar(module, &el.v, 0.0)?,
-        });
-    }
-    Ok(out)
 }
