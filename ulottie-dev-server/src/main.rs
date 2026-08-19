@@ -42,7 +42,7 @@ mod contract;
 use axum::{
     Router,
     body::Bytes,
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::{HeaderValue, Request, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -201,7 +201,14 @@ async fn run_server(paths: Arc<PathLayout>, args: ServeArgs) -> Result<()> {
     let app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .nest_service("/_fixtures", ServeDir::new(&paths.fixtures_dir))
-        .route("/compile", post(compile_handler))
+        // Axum buffers `/compile` bodies with a 2 MB default, and a Lottie
+        // file with embedded images is routinely far past that — `bodymoovin`
+        // alone is 15 MB. This is a localhost dev tool; the cap only has to
+        // stop a runaway, not police anyone.
+        .route(
+            "/compile",
+            post(compile_handler).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
+        )
         .route("/.output/driver.js", get(serve_driver))
         .route("/.output/runtime/{*path}", get(serve_runtime_module))
         .nest_service("/.output", output_service)
