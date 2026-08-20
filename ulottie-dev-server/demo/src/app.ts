@@ -10,7 +10,7 @@ import { Bench, type Task } from 'tinybench';
 import { lottie } from './lottie.ts';
 
 import { compile } from './compiler.ts';
-import { highlight, langOf } from './pretty.ts';
+import { type Lang, highlight } from './pretty.ts';
 import type {
   CompileResponse,
   CompileResult,
@@ -216,7 +216,9 @@ function renderPlan(info: CompileResponse | null) {
 // ---------------------------------------------------------------------------
 
 /** One row: a delivery mode, and the parts whose sizes make up its total. */
-type Part = [name: string, size: SizeEntry, url?: string, prettyUrl?: string];
+// `lang` says what the artifact is. Declared here rather than read off the
+// URL: the wasm build's URLs are blobs, which say nothing.
+type Part = [name: string, size: SizeEntry, url?: string, prettyUrl?: string, lang?: Lang];
 
 interface Way {
   label: string;
@@ -253,6 +255,7 @@ function selfContainedPart(s: Sizes, generated: boolean): string {
  * to the 298 KB it replaces. The sprite is markup, so it also renders.
  */
 let viewerUrls: { raw: string; pretty: string } = { raw: '', pretty: '' };
+let viewerLang: Lang = 'javascript';
 let viewerRaw = false;
 
 /** Put the panel back to a known state before it shows anything else. */
@@ -304,7 +307,7 @@ async function paintSource() {
   const LIMIT = 60000;
   const clipped = text.length > LIMIT;
   const shown = clipped ? text.slice(0, LIMIT) : text;
-  body.innerHTML = await highlight(shown, langOf(viewerUrls.raw));
+  body.innerHTML = await highlight(shown, viewerLang);
   if (clipped) {
     body.insertAdjacentHTML(
       'beforeend',
@@ -319,15 +322,23 @@ async function paintSource() {
  * The table says a compiled module is 825 B; this is what 825 B looks like next
  * to the 298 KB it replaces.
  */
-async function showArtifact(name: string, size: SizeEntry, url: string, prettyUrl: string) {
+async function showArtifact(
+  name: string,
+  size: SizeEntry,
+  url: string,
+  prettyUrl: string,
+  lang: Lang,
+) {
   resetViewer();
   $('viewer').hidden = false;
   $('viewer-title').textContent = name;
   $('viewer-size').textContent = `${fmtBytes(size.raw)} raw · ${fmtBytes(size.gzipped)} gzipped`;
   viewerUrls = { raw: url, pretty: prettyUrl || url };
+  viewerLang = lang;
   await paintSource();
 
-  if (langOf(url) !== 'xml') return;
+  // Only markup renders. The row said what it is; a `blob:` URL could not.
+  if (lang !== 'xml') return;
   const render = $('viewer-render') as HTMLButtonElement;
   render.hidden = false;
   render.onclick = async () => {
@@ -362,7 +373,7 @@ async function showArtifact(name: string, size: SizeEntry, url: string, prettyUr
       : text;
     svgBox.insertAdjacentHTML(
       'beforeend',
-      '<p class="note">the first frame, on the symbol\'s canvas — this is ' +
+      `<p class="note">the first frame, ${id ? "on the symbol's canvas" : 'as served'} — this is ` +
         'what renders before any script does, and what the module hydrates</p>',
     );
   };
@@ -400,7 +411,7 @@ function renderSizes(s: Sizes | null, plan?: Plan, urls?: CompileResponse) {
   });
 
   const baseline = way('lottie-web', [
-    ['Lottie JSON', s.json, urls?.json_url, urls?.json_pretty_url],
+    ['Lottie JSON', s.json, urls?.json_url, urls?.json_pretty_url, 'json'],
     ['lottie.min.js', s.lottie_runtime],
   ], true);
   const shared = way('ulottie — shared runtime', [
@@ -415,7 +426,7 @@ function renderSizes(s: Sizes | null, plan?: Plan, urls?: CompileResponse) {
       ? way('ulottie — markup extracted', [
           ['compiled module', s.js_extracted, urls?.js_extracted_url, urls?.js_extracted_pretty_url],
           ['runtime it imports', slice, urls?.slice_url, urls?.slice_pretty_url],
-          ['SVG sprite', s.sprite, urls?.sprite_url, urls?.sprite_pretty_url],
+          ['SVG sprite', s.sprite, urls?.sprite_url, urls?.sprite_pretty_url, 'xml'],
         ])
       : null;
   // Self-contained last: it is the one that shares nothing, so it ends the
@@ -435,7 +446,7 @@ function renderSizes(s: Sizes | null, plan?: Plan, urls?: CompileResponse) {
   const ssr =
     s.document && s.js_hydrate
       ? way('ulottie — server-rendered, then hydrated', [
-          ['baked document, in the HTML', s.document, urls?.document_url, urls?.document_pretty_url],
+          ['baked document, in the HTML', s.document, urls?.document_url, urls?.document_pretty_url, 'xml'],
           ['hydration module (no markup)', s.js_hydrate, urls?.js_hydrate_url, urls?.js_hydrate_pretty_url],
         ])
       : null;
@@ -463,13 +474,13 @@ function renderSizes(s: Sizes | null, plan?: Plan, urls?: CompileResponse) {
       // its name — repeating the figures reads as an error.
       const sole = w.parts.length === 1;
       const parts = w.parts
-        .map(([name, v, url, prettyUrl]) => {
+        .map(([name, v, url, prettyUrl, lang]) => {
           const cells = sole
             ? '<td></td><td></td>'
             : `<td>${fmtBytes(v.raw)}</td><td>${fmtBytes(v.gzipped)}</td>`;
           const attrs = url
             ? ` class="part viewable" data-url="${url}" data-name="${name}"` +
-              ` data-pretty="${prettyUrl ?? url}"` +
+              ` data-pretty="${prettyUrl ?? url}" data-lang="${lang ?? 'javascript'}"` +
               ` data-raw="${v.raw}" data-gz="${v.gzipped}"`
             : ' class="part"';
           return `<tr${attrs}><td>${name}</td>${cells}<td></td></tr>`;
@@ -494,6 +505,7 @@ function renderSizes(s: Sizes | null, plan?: Plan, urls?: CompileResponse) {
         { raw: Number(row.dataset.raw), gzipped: Number(row.dataset.gz) },
         row.dataset.url!,
         row.dataset.pretty!,
+        row.dataset.lang as Lang,
       );
     });
   }

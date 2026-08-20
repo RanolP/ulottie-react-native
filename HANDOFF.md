@@ -665,7 +665,11 @@ runtime measured with tinybench — with a forced layout flush inside the timed
 region (attribute writes alone are roughly half the real cost) and
 cross-origin-isolated timers (5 µs resolution). Every artifact is served both
 minified and `--pretty` (the compiler formats; the page only colours, via
-lazily-loaded shiki).
+lazily-loaded shiki). What an artifact *is* — JavaScript, JSON, SVG — is
+declared by the size-table row that made it, never read off its URL: the
+wasm build's artifacts are `blob:` URLs, which carry no extension, and guessing
+from them turned every row into JavaScript there — the sprite and document
+rows lost their "rendered" view on exactly the build that is published.
 
 ### Player API
 

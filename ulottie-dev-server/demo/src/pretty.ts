@@ -12,14 +12,11 @@
 
 import type { HighlighterCore } from 'shiki/core';
 
+// Declared by whoever made the artifact, never guessed from its URL: the
+// static build's artifacts are `blob:` URLs, which carry no extension and no
+// MIME in the string — guessing made every row JavaScript there, so SVG rows
+// lost their "rendered" view and JSON lost its colouring.
 export type Lang = 'javascript' | 'json' | 'xml';
-
-/** Guess from the URL, since that is all the caller reliably has. */
-export function langOf(url: string): Lang {
-  if (url.includes('.json') || url.includes('application/json')) return 'json';
-  if (url.includes('.svg') || url.includes('image/svg')) return 'xml';
-  return 'javascript';
-}
 
 let loading: Promise<HighlighterCore> | null = null;
 
