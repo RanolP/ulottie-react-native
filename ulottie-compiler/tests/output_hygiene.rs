@@ -9,7 +9,7 @@
 use std::fs;
 
 use ulottie_compiler::backend::shake;
-use ulottie_compiler::{CompileOptions, RuntimeMode, compile_with};
+use ulottie_compiler::{CompileOptions, MarkupMode, RuntimeMode, compile_with};
 
 mod common;
 
@@ -38,11 +38,20 @@ fn source(name: &str) -> String {
 }
 
 fn emitted(name: &str, mode: RuntimeMode) -> String {
+    emitted_as(name, mode, MarkupMode::Inline)
+}
+
+fn emitted_as(name: &str, mode: RuntimeMode, markup: MarkupMode) -> String {
+    compile_as(name, mode, markup, false)
+}
+
+fn compile_as(name: &str, mode: RuntimeMode, markup: MarkupMode, minify: bool) -> String {
     compile_with(
         &source(name),
         &CompileOptions {
             runtime_mode: mode,
-            minify: false,
+            markup,
+            minify,
             allow: common::allowances(name),
             ..Default::default()
         },
@@ -88,6 +97,107 @@ fn embedded_output_has_no_unreachable_declarations() {
 /// The capability gates are what let the shaker cut edges that exist in the
 /// source but are never taken. If a gate stops working the symbol comes back,
 /// so pin the cases that motivated each gate.
+/// The module that hydrates a served document (`--no-markup`) carries nothing
+/// the page already has: no markup, no template table (the served document is
+/// the expanded tree), no sprite wiring — and, as shipped, is smaller than the
+/// inline module for every fixture in both runtime modes. (Measured minified:
+/// unminified, the id walker's comments outweigh a small document.) It still
+/// has to be free of unreachable declarations, and it has to declare the one
+/// thing it adds: the id walker, whenever the scene defines ids, because each
+/// adopted mount rewrites the served tree's marker for itself.
+#[test]
+fn a_no_markup_module_carries_no_markup() {
+    let mut problems = Vec::new();
+    for name in fixture_names() {
+        for mode in [RuntimeMode::Extern, RuntimeMode::Embedded] {
+            let inline = emitted_as(&name, mode, MarkupMode::Inline);
+            let served = emitted_as(&name, mode, MarkupMode::None);
+            let tag = format!("{name} ({mode:?})");
+            // Markup, however it is spelled: a `viewBox` (the document's root)
+            // or the module-level `const M` (at column 0 — the runtime has
+            // locals of that name). The one `<svg>` a served module may say
+            // is in its "nothing to hydrate" message.
+            for needle in [
+                "viewBox",
+                "\nconst M =",
+                "\nconst M=",
+                "TPL",
+                "spriteSymbol",
+                "fromSprite",
+            ] {
+                if served.contains(needle) {
+                    problems.push(format!("  {tag}: carries `{}`", needle.trim()));
+                }
+            }
+            if served.contains("export const markup") {
+                problems.push(format!("  {tag}: exports `markup` it does not have"));
+            }
+            let shipped = |markup| compile_as(&name, mode, markup, true).len();
+            let (inline_min, served_min) = (shipped(MarkupMode::Inline), shipped(MarkupMode::None));
+            if served_min >= inline_min {
+                problems.push(format!(
+                    "  {tag}: {served_min} B minified is not smaller than the inline module's {inline_min} B"
+                ));
+            }
+            let defines_ids = inline.contains("--u");
+            if mode == RuntimeMode::Extern && defines_ids != served.contains("suffixIds") {
+                problems.push(format!(
+                    "  {tag}: defines ids = {defines_ids}, imports the id walker = {}",
+                    !defines_ids
+                ));
+            }
+            if mode == RuntimeMode::Extern && served.contains("tpl.js") {
+                problems.push(format!(
+                    "  {tag}: imports template expansion for an expanded document"
+                ));
+            }
+            if mode == RuntimeMode::Embedded {
+                let dead = dead_declarations(&served);
+                if !dead.is_empty() {
+                    problems.push(format!("  {tag}: unreachable {}", dead.join(", ")));
+                }
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "no-markup modules carry what the page already has:\n{}",
+        problems.join("\n")
+    );
+}
+
+/// The served document keeps the per-mount id marker in place. The hydrating
+/// module rewrites it per adopted mount, which is what keeps two served copies
+/// of one animation from pointing into each other's gradients and masks;
+/// resolved to a fixed suffix here, every served copy would be identical and
+/// nothing downstream could tell them apart again.
+#[test]
+fn the_document_keeps_its_id_marker() {
+    // `ripple` defines gradients, `starfish` masks, `lottie_logo_1` a matte.
+    for name in ["ripple", "starfish", "lottie_logo_1"] {
+        let doc = ulottie_compiler::compile_document(&source(name))
+            .unwrap_or_else(|e| panic!("document {name}: {e}"));
+        let refs: Vec<&str> = doc
+            .match_indices("url(#")
+            .map(|(i, _)| &doc[i..doc[i..].find(')').map_or(doc.len(), |e| i + e)])
+            .collect();
+        assert!(
+            !refs.is_empty(),
+            "{name}: expected id references in the document"
+        );
+        for r in &refs {
+            assert!(
+                r.ends_with("--u"),
+                "{name}: `{r})` lost its per-mount marker"
+            );
+        }
+        assert!(
+            doc.contains("--u\""),
+            "{name}: no id definition carries the marker"
+        );
+    }
+}
+
 #[test]
 fn capability_gates_keep_unused_runtime_out() {
     let ball = emitted("boucing_ball", RuntimeMode::Embedded);

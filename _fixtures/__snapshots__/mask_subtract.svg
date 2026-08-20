@@ -1,13 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="overflow:hidden">
   <svg width="500" height="500">
     <g transform="translate(150,150)">
-      <g mask="url(#m0-0)">
+      <g mask="url(#m0--u)">
         <rect width="200" height="200" fill="#ea0c11"/>
       </g>
     </g>
   </svg>
   <defs>
-    <mask id="m0-0" mask-type="luminance">
+    <mask id="m0--u" mask-type="luminance">
       <rect width="500" height="500" fill="#ffffff"/>
       <path fill="#000" d="M100,50C72.386,50,50,72.386,50,100C50,127.614,72.386,150,100,150C127.614,150,150,127.614,150,100C150,72.386,127.614,50,100,50Z"/>
     </mask>

@@ -297,9 +297,10 @@ impl Index {
             // writer, and picking one here would be a coin toss that renders.
             bump(&mut self.by_ind, (table, scope, r.i), i as u32);
             if let Some(n) = r.n
-                && let Some(name) = names.get(n as usize) {
-                    bump(&mut self.by_name, (table, scope, name.clone()), i as u32);
-                }
+                && let Some(name) = names.get(n as usize)
+            {
+                bump(&mut self.by_name, (table, scope, name.clone()), i as u32);
+            }
         }
     }
 
@@ -333,8 +334,8 @@ mod rewrite_tests {
         let animation: crate::lottie::Animation = serde_json::from_str(&json).unwrap();
         let module = crate::ir::lower(&animation).unwrap();
         let payload = crate::data::encode(&module).unwrap();
-        let scene = crate::scene::plan_with(&payload, true, 24576, instance).unwrap();
         let exprs: Vec<_> = module.expressions.iter().cloned().collect();
+        let scene = crate::scene::plan_with(&payload, true, 24576, instance, &exprs).unwrap();
         plan_bodies(&scene.data, &exprs)
     }
 
@@ -539,7 +540,8 @@ mod index_tests {
         let animation: crate::lottie::Animation = serde_json::from_str(&json).unwrap();
         let module = crate::ir::lower(&animation).unwrap();
         let payload = crate::data::encode(&module).unwrap();
-        crate::scene::plan_with(&payload, true, 24576, instance).unwrap()
+        let bodies: Vec<_> = module.expressions.iter().cloned().collect();
+        crate::scene::plan_with(&payload, true, 24576, instance, &bodies).unwrap()
     }
 
     // Every number below was read out of a planned scene, not out of the Lottie
@@ -1057,10 +1059,7 @@ fn collect_tables(
     }
 }
 
-fn collect_tables_one(
-    s: &ast::Statement,
-    used: &mut BTreeMap<String, Option<u32>>,
-) {
+fn collect_tables_one(s: &ast::Statement, used: &mut BTreeMap<String, Option<u32>>) {
     each_stmt_expr(s, &mut |e| find_table_use(e, used));
     each_sub_stmt(s, &mut |inner| collect_tables_one(inner, used));
 }
@@ -1178,19 +1177,20 @@ impl Rw<'_> {
                 ast::Expression::CallExpression(c) => {
                     if let ast::Expression::StaticMemberExpression(m) = &c.callee
                         && m.property.name == "push"
-                            && let ast::Expression::Identifier(id) = &m.object {
-                                let holds_layer = c
-                                    .arguments
-                                    .iter()
-                                    .filter_map(|a| a.as_expression())
-                                    .all(|x| self.is_layer(x) || is_null(x));
-                                let name = id.name.to_string();
-                                if holds_layer && !c.arguments.is_empty() {
-                                    self.bind(&name, Ty::LayerArray);
-                                } else {
-                                    self.bind(&name, Ty::Other);
-                                }
-                            }
+                        && let ast::Expression::Identifier(id) = &m.object
+                    {
+                        let holds_layer = c
+                            .arguments
+                            .iter()
+                            .filter_map(|a| a.as_expression())
+                            .all(|x| self.is_layer(x) || is_null(x));
+                        let name = id.name.to_string();
+                        if holds_layer && !c.arguments.is_empty() {
+                            self.bind(&name, Ty::LayerArray);
+                        } else {
+                            self.bind(&name, Ty::Other);
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -1366,9 +1366,10 @@ impl Rw<'_> {
         // A layer-control table: its elements stop being effect indices and
         // become the layers those effects name.
         if let ast::Expression::ArrayExpression(a) = e
-            && let Some(text) = self.render_control_table((a.span.start, a.span.end)) {
-                return Some(text);
-            }
+            && let Some(text) = self.render_control_table((a.span.start, a.span.end))
+        {
+            return Some(text);
+        }
         // A layer-typed expression is rewritten to whatever produces its record.
         if self.is_layer(e) {
             // …except a chain that *ends* at `.path`, which is not a layer but
@@ -1431,11 +1432,13 @@ impl Rw<'_> {
     fn render_call(&mut self, c: &ast::CallExpression) -> Option<String> {
         // Bare `fromCompToSurface(pt)` is AE for the owning layer's inverse.
         if let ast::Expression::Identifier(id) = &c.callee
-            && id.name == "fromCompToSurface" && c.arguments.len() == 1 {
-                let pt = self.arg_text(c.arguments.first()?)?;
-                self.need("fromCompToSurface");
-                return Some(format!("fromCompToSurface({pt}, thisLayer, frame)"));
-            }
+            && id.name == "fromCompToSurface"
+            && c.arguments.len() == 1
+        {
+            let pt = self.arg_text(c.arguments.first()?)?;
+            self.need("fromCompToSurface");
+            return Some(format!("fromCompToSurface({pt}, thisLayer, frame)"));
+        }
         // `X.effect(a)(b)` and bare `effect(a)(b)`, uncurried.
         if let Some(text) = self.render_effect(c) {
             return Some(text);
@@ -1846,9 +1849,10 @@ impl Rw<'_> {
         }
         for a in &c.arguments {
             if let Some(x) = a.as_expression()
-                && let Some(t) = self.render(x) {
-                    cuts.push((x.span(), t));
-                }
+                && let Some(t) = self.render(x)
+            {
+                cuts.push((x.span(), t));
+            }
         }
         self.splice(c.span(), cuts)
     }
@@ -2104,7 +2108,8 @@ mod verify_tests {
         let animation: crate::lottie::Animation = serde_json::from_str(&json).unwrap();
         let module = crate::ir::lower(&animation).unwrap();
         let payload = crate::data::encode(&module).unwrap();
-        let scene = crate::scene::plan_with(&payload, true, 24576, false).unwrap();
+        let bodies: Vec<_> = module.expressions.iter().cloned().collect();
+        let scene = crate::scene::plan_with(&payload, true, 24576, false, &bodies).unwrap();
         let index = Index::build(&scene.data);
         // Whatever the first body's properties are; all that matters here is
         // that the sites are real and agree.

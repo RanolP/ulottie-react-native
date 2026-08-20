@@ -1,7 +1,9 @@
 // μLottie runtime — mount.
 //
 // The compiler hands over three things:
-//   M — SVG markup with every frame-invariant value already baked in;
+//   M — SVG markup with every frame-invariant value already baked in — or
+//       nothing at all, when the page serves the document and this module
+//       only hydrates it;
 //   D — the payload, one integer stream;
 //   P — bind: a function the compiler wrote that binds one batch per op and
 //       returns their state records;
@@ -42,11 +44,19 @@ export function mount(M, D, P, A, container, opt, ext) {
   // Extracted markup: M is the bare `<svg>` shell and the elements come from a
   // sprite, so the suffix is applied to the built DOM instead of the string.
   const src = ext.s;
-  const html = sfx && !src ? M.split('--u').join(sfx) : M;
+  // Adopt the `<svg>` already in the container rather than building one: when
+  // asked to (`hydrate`), and always when there is nothing to build with — a
+  // module compiled without markup hydrates the document the page served, and
+  // that is all it can do. An adopted tree keeps its id marker, so it is
+  // rewritten here the way an inline string is, per mount (`ext.i`).
+  const adopt = opt.hydrate || !M;
+  const html = M && sfx && !src ? M.split('--u').join(sfx) : M;
 
   let svg;
-  if (opt.hydrate) {
+  if (adopt) {
     svg = container.querySelector('svg');
+    if (!svg) throw new Error('ulottie: nothing to hydrate (no <svg> in the container)');
+    if (sfx && ext.i) ext.i(svg, '--u', sfx);
   } else {
     container.innerHTML = html;
     svg = container.firstElementChild;
@@ -56,6 +66,7 @@ export function mount(M, D, P, A, container, opt, ext) {
   // Optional capabilities arrive as functions rather than imports: core.js
   // naming them would pull them into every animation through the module graph.
   //   ext.s — fill the shell from an external sprite (applied above)
+  //   ext.i — rewrite an adopted tree's id marker for this mount (applied above)
   //   ext.t — expand factored-out subtrees, before anything is indexed
   //   ext.x — build the expression engine
   //   ext.r — resolve a time-remap property to an evaluator
@@ -181,5 +192,5 @@ export function mount(M, D, P, A, container, opt, ext) {
     for (let i = 0; i < nA; i++) Ap[i](ctx, St[i]);
   }
 
-  return player(container, svg, html, apply, fr, ip, op, opt);
+  return player(container, svg, html, apply, fr, ip, op, opt, adopt);
 }

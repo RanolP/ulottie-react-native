@@ -13,6 +13,8 @@
 //!   /.output/driver.js      minified shared runtime (served from memory)
 //!   /.output/runtime/**     the runtime as an ES module tree, so extern-mode
 //!                           output resolves its imports
+//!   /.output/<id>/assets/** images extraction pulled out of the markup,
+//!                           plus manifest.json (same lazy build as <id>.js)
 //!   /_fixtures/<name>.json  registered fixture source
 //!
 //! On-disk locations:
@@ -275,15 +277,46 @@ async fn serve_runtime_module(axum::extract::Path(rest): axum::extract::Path<Str
 ///   `/.output/<name>.embedded.js`  self-contained build
 ///   `/.output/<name>.extracted.js` markup extracted to a sprite
 ///   `/.output/<name>.sprite.svg`   that sprite
+///   `/.output/<name>.document.svg` the baked document — the SSR response
+///   `/.output/<name>.hydrate.js`   the self-contained module that hydrates
+///                                  it, carrying no markup of its own
 ///   `/.output/<name>.instanced.js` precomps planned once and replayed
 ///   `/.output/<name>.slice.js`     just the runtime modules it imports
 ///   `/.output/<name>.pretty.*`     any of the above, unminified
+///   `/.output/<name>/assets/**`    images extraction pulled out of the
+///                                  markup (plus `manifest.json`), served
+///                                  from the same lazy build
 async fn ensure_compiled(
     State(paths): State<Arc<PathLayout>>,
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
     let uri_path = req.uri().path().to_string();
+    if let Some(rest) = uri_path.strip_prefix("/.output/") {
+        // An extracted-asset request (`<name>/assets/<file>` or the manifest):
+        // the files are written by the same build that produces `<name>.js`,
+        // so drive that and let `ServeDir` hand over the bytes. Content type
+        // comes from the extension, which `scene::assets` picks to match the
+        // asset's MIME.
+        if let Some((name, file)) = rest.split_once("/assets/") {
+            if !name.is_empty()
+                && !name.contains('/')
+                && !name.contains("..")
+                && !file.contains("..")
+            {
+                let src = paths.fixtures_dir.join(format!("{name}.json"));
+                if src.is_file() {
+                    let cache = paths.output_dir.join(format!("{name}.js"));
+                    if let Err(e) =
+                        compile_if_stale(&src, &cache, name, Variant::Extern, false, &paths).await
+                    {
+                        return e.into_response();
+                    }
+                }
+            }
+            return next.run(req).await;
+        }
+    }
     if let Some(file) = uri_path
         .strip_prefix("/.output/")
         .filter(|p| !p.contains('/') && !p.contains(".."))
@@ -309,6 +342,8 @@ async fn ensure_compiled(
             .or_else(|| named(".instanced.js", Variant::Instanced))
             .or_else(|| named(".extracted.js", Variant::Extracted))
             .or_else(|| named(".sprite.svg", Variant::Extracted))
+            .or_else(|| named(".hydrate.js", Variant::Hydrate))
+            .or_else(|| named(".document.svg", Variant::Document))
             .or_else(|| named(".js", Variant::Extern))
         {
             Some(pair) => pair,
@@ -362,9 +397,46 @@ enum Variant {
     Embedded,
     Extracted,
     Instanced,
+    /// The SSR pair: the baked document, and the self-contained module with
+    /// no markup of its own that hydrates it.
+    Document,
+    Hydrate,
     /// Not a module: the runtime modules an extern build imports, minified.
     /// The size table names it, so the viewer has to be able to show it.
     Slice,
+}
+
+/// Asset extraction options for one fixture/upload: on, pointing at this
+/// server's `/.output/<id>/assets/` route, with the default threshold. The
+/// files land on disk at the same path under `.output/`, so `ServeDir` hands
+/// them over with the content type their extension implies.
+fn asset_options_for(id: &str) -> ulottie_compiler::AssetOptions {
+    ulottie_compiler::AssetOptions {
+        extract: true,
+        url_base: format!("/.output/{id}/assets/"),
+        ..Default::default()
+    }
+}
+
+/// Write the artifacts extraction produced: the files the markup now points
+/// at, plus the manifest (always — `[]` when nothing was extracted, so
+/// `/.output/<id>/assets/manifest.json` is a well-defined endpoint).
+async fn write_assets(
+    dir: &StdPath,
+    assets: &[ulottie_compiler::ExtractedAsset],
+    manifest: &str,
+) -> Result<(), String> {
+    use tokio::fs;
+    fs::create_dir_all(dir).await.map_err(|e| e.to_string())?;
+    for a in assets {
+        fs::write(dir.join(&a.name), &a.bytes)
+            .await
+            .map_err(|e| format!("write {}: {e}", a.name))?;
+    }
+    fs::write(dir.join("manifest.json"), manifest)
+        .await
+        .map_err(|e| format!("write manifest.json: {e}"))?;
+    Ok(())
 }
 
 async fn compile_if_stale(
@@ -420,15 +492,59 @@ async fn compile_if_stale(
             .map_err(|e| ApiError::compile(format!("write {name}.slice.js: {e}")))?;
         return Ok(());
     }
+    if variant == Variant::Document {
+        // The SSR response: the document with its first frame baked in, images
+        // extracted like every other markup-carrying artifact.
+        let out = ulottie_compiler::compile_document_with(
+            &json,
+            &ulottie_compiler::CompileOptions {
+                allow,
+                assets: asset_options_for(name),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| ApiError::compile(format!("document {name}: {e}")))?;
+        if let Some(parent) = cache_path.parent() {
+            fs::create_dir_all(parent).await.ok();
+        }
+        if let Err(e) = write_assets(
+            &paths.output_dir.join(name).join("assets"),
+            &out.assets,
+            &out.manifest,
+        )
+        .await
+        {
+            return Err(ApiError::compile(format!("extract {name}: {e}")));
+        }
+        let body = if pretty {
+            ulottie_compiler::markup_pretty(&out.svg)
+        } else {
+            out.svg
+        };
+        fs::write(cache_path, body)
+            .await
+            .map_err(|e| ApiError::compile(format!("write {name}.document.svg: {e}")))?;
+        return Ok(());
+    }
     let markup = match variant {
         Variant::Extracted => ulottie_compiler::MarkupMode::Extracted(name.to_string()),
+        Variant::Hydrate => ulottie_compiler::MarkupMode::None,
         _ => ulottie_compiler::MarkupMode::Inline,
     };
-    let js = ulottie_compiler::compile_with(
+    // Extraction is on for every variant whose markup ships (everything but
+    // the runtime `Slice`): a page that loads `.js`, `.embedded.js` or the
+    // sprite gets markup whose images are URL references this server answers,
+    // at `/.output/<name>/assets/**` — the `ensure_compiled` middleware builds
+    // them alongside the module, and `ServeDir` serves them from disk.
+    let assets = asset_options_for(name);
+    let out = ulottie_compiler::compile_with_output(
         &json,
         &ulottie_compiler::CompileOptions {
+            // The hydration module is the SSR first load's script, so it is
+            // the self-contained build — one request, next to the document
+            // that came in the HTML.
             runtime_mode: match variant {
-                Variant::Embedded => ulottie_compiler::RuntimeMode::Embedded,
+                Variant::Embedded | Variant::Hydrate => ulottie_compiler::RuntimeMode::Embedded,
                 _ => ulottie_compiler::RuntimeMode::Extern,
             },
             // The `.js`/`.embedded.js`/`.extracted.js` variants use the real
@@ -444,6 +560,7 @@ async fn compile_if_stale(
             // Unminified is the compiler's own review form — one element and
             // one binding per line — not a reformatting of the minified bytes.
             minify: !pretty,
+            assets,
             ..Default::default()
         },
     )
@@ -451,13 +568,29 @@ async fn compile_if_stale(
     if let Some(parent) = cache_path.parent() {
         fs::create_dir_all(parent).await.ok();
     }
+    if let Err(e) = write_assets(
+        &paths.output_dir.join(name).join("assets"),
+        &out.assets,
+        &out.manifest,
+    )
+    .await
+    {
+        return Err(ApiError::compile(format!("extract {name}: {e}")));
+    }
     if variant == Variant::Extracted {
         // One fixture per sprite here. A real build shares one across many;
         // keeping them separate keeps a stale fixture from being served out of
         // another fixture's file.
-        let symbol = ulottie_compiler::compile_symbol(&json, name)
-            .map_err(|e| ApiError::compile(format!("extract {name}: {e}")))?;
-        let svg = ulottie_compiler::sprite(&[symbol]);
+        let symbol = ulottie_compiler::compile_symbol_with(
+            &json,
+            name,
+            &ulottie_compiler::CompileOptions {
+                assets: asset_options_for(name),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| ApiError::compile(format!("extract {name}: {e}")))?;
+        let svg = ulottie_compiler::sprite(&[symbol.svg]);
         fs::write(paths.output_dir.join(format!("{name}.sprite.svg")), &svg)
             .await
             .map_err(|e| ApiError::compile(format!("write {name}.sprite.svg: {e}")))?;
@@ -467,12 +600,21 @@ async fn compile_if_stale(
         )
         .await
         .map_err(|e| ApiError::compile(format!("write {name}.sprite.pretty.svg: {e}")))?;
-        fs::write(paths.output_dir.join(format!("{name}.extracted.js")), js)
+        if let Err(e) = write_assets(
+            &paths.output_dir.join(name).join("assets"),
+            &symbol.assets,
+            &symbol.manifest,
+        )
+        .await
+        {
+            return Err(ApiError::compile(format!("extract {name}: {e}")));
+        }
+        fs::write(paths.output_dir.join(format!("{name}.extracted.js")), out.module)
             .await
             .map_err(|e| ApiError::compile(format!("write {name}.extracted.js: {e}")))?;
         return Ok(());
     }
-    fs::write(cache_path, js)
+    fs::write(cache_path, out.module)
         .await
         .map_err(|e| ApiError::compile(format!("write {name}.js: {e}")))?;
     Ok(())
@@ -587,9 +729,11 @@ async fn compile_handler(
     // Written to disk so the UI can load it for visual verification.
     let found = ulottie_compiler::unsupported(json_text).unwrap_or_default();
     let allow_all: std::collections::BTreeSet<_> = found.iter().map(|f| f.feature).collect();
+    let upload_assets = asset_options_for(&id);
     let embedded_options = ulottie_compiler::CompileOptions {
         runtime_mode: ulottie_compiler::RuntimeMode::Embedded,
         allow: allow_all.clone(),
+        assets: upload_assets.clone(),
         ..Default::default()
     };
     let embedded_js =
@@ -613,16 +757,58 @@ async fn compile_handler(
         .map_err(|e| ApiError::compile(format!("report {id}: {e}")))?;
 
     // Extracted variant: module plus the sprite it sources its markup from.
+    // Same asset options as every other variant, so an upload's images are
+    // served from `/.output/<id>/assets/**` exactly like a fixture's.
     let extracted_options = ulottie_compiler::CompileOptions {
         markup: ulottie_compiler::MarkupMode::Extracted(id.clone()),
         allow: allow_all.clone(),
+        assets: upload_assets.clone(),
         ..Default::default()
     };
-    let extracted_js =
-        ulottie_compiler::compile_with(json_text, &extracted_options).unwrap_or_default();
-    let sprite = ulottie_compiler::compile_symbol(json_text, &id)
-        .map(|sym| ulottie_compiler::sprite(&[sym]))
+    let extracted = ulottie_compiler::compile_with_output(json_text, &extracted_options)
+        .unwrap_or_else(|_| ulottie_compiler::CompiledOutput {
+            module: String::new(),
+            assets: Vec::new(),
+            manifest: "[]".into(),
+        });
+    let extracted_js = extracted.module;
+    let sprite = ulottie_compiler::compile_symbol_with(json_text, &id, &extracted_options)
+        .map(|sym| ulottie_compiler::sprite(&[sym.svg]))
         .unwrap_or_default();
+
+    // The SSR pair: the baked document that goes out in the HTML, and the
+    // self-contained module that hydrates it without carrying any markup.
+    let hydrate_options = ulottie_compiler::CompileOptions {
+        runtime_mode: ulottie_compiler::RuntimeMode::Embedded,
+        markup: ulottie_compiler::MarkupMode::None,
+        allow: allow_all.clone(),
+        assets: upload_assets.clone(),
+        ..Default::default()
+    };
+    let hydrate_js =
+        ulottie_compiler::compile_with(json_text, &hydrate_options).unwrap_or_default();
+    let document = ulottie_compiler::compile_document_with(
+        json_text,
+        &ulottie_compiler::CompileOptions {
+            allow: allow_all.clone(),
+            assets: upload_assets.clone(),
+            ..Default::default()
+        },
+    )
+    .map(|d| d.svg)
+    .unwrap_or_default();
+    // The upload's extracted files, if any. Written even when empty (the
+    // manifest is `[]`), so the demo's fetch of `manifest.json` is well
+    // defined for every upload.
+    if let Err(e) = write_assets(
+        &paths.output_dir.join(&id).join("assets"),
+        &extracted.assets,
+        &extracted.manifest,
+    )
+    .await
+    {
+        tracing::warn!("write assets for {id}: {e}");
+    }
 
     // Every artifact the size table names is written, not just measured: the
     // panel lets a row show its own bytes, and an upload is addressed by
@@ -641,6 +827,7 @@ async fn compile_handler(
                 markup,
                 allow: allow_all.clone(),
                 minify: false,
+                assets: upload_assets.clone(),
                 ..Default::default()
             },
         )
@@ -658,6 +845,11 @@ async fn compile_handler(
         ulottie_compiler::RuntimeMode::Extern,
         ulottie_compiler::MarkupMode::Extracted(id.clone()),
     );
+    let pretty_hydrate = pretty(
+        ulottie_compiler::RuntimeMode::Embedded,
+        ulottie_compiler::MarkupMode::None,
+    );
+    let pretty_document = ulottie_compiler::markup_pretty(&document);
     let pretty_json = serde_json::from_str::<serde_json::Value>(json_text)
         .ok()
         .and_then(|v| serde_json::to_string_pretty(&v).ok())
@@ -668,6 +860,13 @@ async fn compile_handler(
     for (name, body) in [
         (format!("{id}.extracted.js"), extracted_js.as_bytes()),
         (format!("{id}.sprite.svg"), sprite.as_bytes()),
+        (format!("{id}.hydrate.js"), hydrate_js.as_bytes()),
+        (format!("{id}.document.svg"), document.as_bytes()),
+        (format!("{id}.hydrate.pretty.js"), pretty_hydrate.as_bytes()),
+        (
+            format!("{id}.document.pretty.svg"),
+            pretty_document.as_bytes(),
+        ),
         (format!("{id}.slice.js"), slice.as_bytes()),
         (format!("{id}.pretty.json"), pretty_json.as_bytes()),
         (format!("{id}.pretty.js"), pretty_extern.as_bytes()),
@@ -701,6 +900,8 @@ async fn compile_handler(
         js_embedded: size_entry(embedded_bytes),
         js_extracted: size_entry(extracted_js.as_bytes()),
         sprite: size_entry(sprite.as_bytes()),
+        document: size_entry(document.as_bytes()),
+        js_hydrate: size_entry(hydrate_js.as_bytes()),
         features: contract::FeatureReport {
             expressions: included.expressions,
             trim_path: included.trim_path,
@@ -720,12 +921,16 @@ async fn compile_handler(
         js_embedded_url: format!("/.output/{id}.embedded.js"),
         js_extracted_url: format!("/.output/{id}.extracted.js"),
         sprite_url: format!("/.output/{id}.sprite.svg"),
+        document_url: format!("/.output/{id}.document.svg"),
+        js_hydrate_url: format!("/.output/{id}.hydrate.js"),
         slice_url: format!("/.output/{id}.slice.js"),
         json_pretty_url: format!("/.output/{id}.pretty.json"),
         js_pretty_url: format!("/.output/{id}.pretty.js"),
         js_embedded_pretty_url: format!("/.output/{id}.embedded.pretty.js"),
         js_extracted_pretty_url: format!("/.output/{id}.extracted.pretty.js"),
         sprite_pretty_url: format!("/.output/{id}.sprite.pretty.svg"),
+        document_pretty_url: format!("/.output/{id}.document.pretty.svg"),
+        js_hydrate_pretty_url: format!("/.output/{id}.hydrate.pretty.js"),
         slice_pretty_url: format!("/.output/{id}.slice.pretty.js"),
         name: header.nm,
         total_frames,
@@ -804,6 +1009,10 @@ struct FixtureSizes {
     /// The runtime slice an extern build imports, gzipped — what a page
     /// downloads *in addition to* the module for a single animation.
     slice_gz: usize,
+    /// The SSR pair, gzipped: the baked document (shipped inside the HTML) and
+    /// the self-contained module with no markup that hydrates it.
+    document_gz: usize,
+    hydrate_gz: usize,
     /// Whether the self-contained build is generated code.
     generated: bool,
     features: ulottie_compiler::EmbeddedFeatures,
@@ -898,6 +1107,22 @@ async fn measure_fixture(path: &StdPath) -> Result<FixtureSizes> {
     let embedded_raw = embedded_js.len();
     let embedded_gz = gzip_size(embedded_js.as_bytes());
 
+    // The SSR pair: document in the HTML, hydration module next to it.
+    let document_gz = ulottie_compiler::compile_document(&json_text)
+        .map(|d| gzip_size(d.as_bytes()))
+        .unwrap_or(0);
+    let hydrate_gz = ulottie_compiler::compile_with(
+        &json_text,
+        &ulottie_compiler::CompileOptions {
+            runtime_mode: ulottie_compiler::RuntimeMode::Embedded,
+            markup: ulottie_compiler::MarkupMode::None,
+            allow: allow2.clone(),
+            ..Default::default()
+        },
+    )
+    .map(|js| gzip_size(js.as_bytes()))
+    .unwrap_or(0);
+
     // The report carries both the slice and which backend won.
     let report = ulottie_compiler::compile_report(
         &json_text,
@@ -932,6 +1157,8 @@ async fn measure_fixture(path: &StdPath) -> Result<FixtureSizes> {
         embedded_raw,
         embedded_gz,
         slice_gz,
+        document_gz,
+        hydrate_gz,
         generated,
         features,
     })
@@ -985,7 +1212,7 @@ fn print_table(
     let hdr_gz = |label: &str| format!("{:>8}", label);
 
     println!(
-        "\n {:<nw$}  {}  {}  {}  {}  {}  {}  {}  Feat  How",
+        "\n {:<nw$}  {}  {}  {}  {}  {}  {}  {}  {}  {}  Feat  How",
         "Fixt",
         hdr("JSON"),
         hdr_gz("gz"),
@@ -994,13 +1221,15 @@ fn print_table(
         hdr("+slice"),
         hdr("Emb"),
         hdr_gz("gz"),
+        hdr("SSR doc"),
+        hdr("+hydr"),
         nw = nw,
     );
-    println!("{}", "-".repeat(nw + 80));
+    println!("{}", "-".repeat(nw + 100));
 
     for f in fixtures {
         println!(
-            " {:<nw$}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {}  {}",
+            " {:<nw$}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {}  {}",
             f.name,
             fmt_bytes(f.json_raw),
             fmt_bytes(f.json_gz),
@@ -1011,13 +1240,17 @@ fn print_table(
             fmt_bytes(f.extern_gz + f.slice_gz),
             fmt_bytes(f.embedded_raw),
             fmt_bytes(f.embedded_gz),
+            // Server-rendered, gzipped: the document rides in the HTML, and
+            // the hydration module is the only script — no markup in it.
+            fmt_bytes(f.document_gz),
+            fmt_bytes(f.hydrate_gz),
             feat_str(&f.features),
             if f.generated { "code" } else { "interp" },
             nw = nw,
         );
     }
 
-    println!("{}", "-".repeat(nw + 80));
+    println!("{}", "-".repeat(nw + 100));
     // Nothing imports this — compiled output imports the entry points it
     // binds. It is the ceiling: what a page would load if one animation used
     // every capability at once.
@@ -1063,6 +1296,15 @@ fn print_table(
             fmt_bytes(avg_embedded_gz),
         );
         println!("                                    single-animation first load)");
+        let avg_document_gz = fixtures.iter().map(|f| f.document_gz).sum::<usize>() / n;
+        let avg_hydrate_gz = fixtures.iter().map(|f| f.hydrate_gz).sum::<usize>() / n;
+        println!(
+            "  ulottie SSR           : {:>8}  (avg document {} in the HTML + {} hydration",
+            fmt_bytes(avg_document_gz + avg_hydrate_gz),
+            fmt_bytes(avg_document_gz),
+            fmt_bytes(avg_hydrate_gz),
+        );
+        println!("                                    module with no markup in it)");
     }
 }
 

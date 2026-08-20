@@ -30,10 +30,14 @@
 //!   skips — one gated off at this frame, inside a layer that is not yet on —
 //!   is skipped here too, so nothing is left for the runtime to fail to clear.
 //!
-//! Expressions are the one place this cannot be exact: evaluating them needs
-//! the expression engine, which is JavaScript. An expression-driven property
-//! bakes to its fallback — the keyframes it reads as `value` — which is what
-//! the runtime itself falls back to when no engine is present.
+//! Expressions are the one place exactness is not free: the engine is
+//! JavaScript. So the bake runs its own interpreter over the raw body —
+//! [`crate::expr::interp`], a frame-aware twin of `runtime/expr.js` — and only
+//! falls back when that cannot decide. A missed evaluation bakes the property
+//! to its fallback (the keyframes it reads as `value`, what the runtime itself
+//! falls back to with no engine); a wrong one never happens, because the
+//! interpreter refuses everything it does not understand — the same
+//! one-directional rule as `expr::fold`.
 
 use std::collections::HashMap;
 
@@ -47,6 +51,58 @@ pub(crate) type Overlay = HashMap<usize, Vec<(String, String)>>;
 
 /// Arc-length samples per spatial segment. Matches `SP_SEG` in spatial.js.
 const SP_SEG: usize = 200;
+
+/// How deep an expression-reading-expression chain may go during the bake
+/// before the interpreter gives up and the innermost property falls back.
+const MAX_EXPR_DEPTH: u32 = 8;
+
+/// The interpreter's answer as a wire [`Prop`] — the shapes a binding can
+/// consume. Anything else (a layer, a string, a pair list) refuses.
+fn value_to_prop(v: crate::expr::interp::Value) -> Option<Prop> {
+    use crate::expr::interp::Value;
+    match v {
+        Value::Num(n) if n.is_finite() => Some(Prop::Scalar(n)),
+        Value::Bool(b) => Some(Prop::Scalar(if b { 1.0 } else { 0.0 })),
+        Value::Arr(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                let Value::Num(n) = item else { return None };
+                if !n.is_finite() {
+                    return None;
+                }
+                out.push(n);
+            }
+            Some(Prop::Vector(out))
+        }
+        Value::Path(p) => Some(Prop::Path(FlatPath {
+            v: p.v.clone(),
+            i: p.i.clone(),
+            o: p.o.clone(),
+            c: p.c,
+        })),
+        _ => None,
+    }
+}
+
+impl crate::expr::interp::Host for Planner<'_> {
+    /// The planner's own evaluation, expression properties included — which
+    /// is how a body reading another layer's expression-driven property
+    /// recurses (through the depth cap and the memo in `expr_value`).
+    fn prop_at(&self, p: &Prop, f: f64) -> Option<crate::expr::interp::Value> {
+        use crate::expr::interp::Value;
+        match self.value_at(p, f) {
+            Prop::Scalar(n) => Some(Value::Num(n)),
+            Prop::Vector(v) => Some(Value::Arr(v.into_iter().map(Value::Num).collect())),
+            Prop::Path(p) => Some(Value::Path(crate::expr::interp::PathVal {
+                v: p.v.clone(),
+                i: p.i.clone(),
+                o: p.o.clone(),
+                c: p.c,
+            })),
+            _ => None,
+        }
+    }
+}
 
 impl Planner<'_> {
     /// Every binding's value at the composition's first frame, as attributes.
@@ -178,7 +234,10 @@ impl Planner<'_> {
                 out.push(("stdDeviation".into(), format!("{sx} {sy}")));
             }
             op::FX_STD => {
-                out.push(("stdDeviation".into(), format!("{}", self.scalar(prop(0), f, 0.0) / 4.0)));
+                out.push((
+                    "stdDeviation".into(),
+                    format!("{}", self.scalar(prop(0), f, 0.0) / 4.0),
+                ));
             }
             op::FX_FLOOD_O => {
                 out.push((
@@ -473,17 +532,66 @@ impl Planner<'_> {
     }
 
     /// A property's value at `f`, as a static `Prop`. Mirrors `resolve` in
-    /// kf.js — including its behaviour with no expression engine, where an
-    /// expression-driven property falls back to the source it reads.
+    /// kf.js — an expression-driven property is what its body computes at `f`
+    /// when the interpreter can run it, and the source it reads as `value`
+    /// when it cannot.
     fn value_at(&self, p: &Prop, f: f64) -> Prop {
         match p {
             Prop::Anim(a) => self.anim_at(a, f),
-            Prop::Expr { fallback, .. } => match fallback {
-                Some(fb) => self.value_at(fb, f),
-                None => Prop::Scalar(0.0),
-            },
+            Prop::Expr {
+                id,
+                fallback,
+                layer,
+            } => {
+                if let Some(v) = self.expr_value(*id, *layer, fallback.as_deref(), f) {
+                    return v;
+                }
+                match fallback {
+                    Some(fb) => self.value_at(fb, f),
+                    None => Prop::Scalar(0.0),
+                }
+            }
             _ => p.clone(),
         }
+    }
+
+    /// One expression at one frame, through [`crate::expr::interp`].
+    ///
+    /// Memoized per `(id, owner, frame)`: the initial frame is one frame, but
+    /// a body serves every property it was applied to and many bindings share
+    /// a prop. The depth cap is the cycle breaker — an expression reading
+    /// another layer whose property is itself an expression must not walk
+    /// forever, and the runtime's per-frame memo plays the same role there.
+    fn expr_value(
+        &self,
+        id: u32,
+        layer: Option<u32>,
+        fallback: Option<&Prop>,
+        f: f64,
+    ) -> Option<Prop> {
+        let body = self.bodies.get(id as usize)?.body.as_str();
+        let key = (id, layer, f.to_bits());
+        if let Some(hit) = self.expr_cache.borrow().get(&key) {
+            return hit.clone();
+        }
+        if self.expr_depth.get() >= MAX_EXPR_DEPTH {
+            self.expr_cache.borrow_mut().insert(key, None);
+            return None;
+        }
+        self.expr_depth.set(self.expr_depth.get() + 1);
+        let site = crate::expr::interp::Site {
+            frame: f,
+            fr: self.payload.c.fr,
+            owner: layer,
+            fallback,
+            layers: &self.layers,
+            scopes: &self.scopes,
+            names: &self.names,
+        };
+        let out = crate::expr::interp::eval_at(body, &site, self).and_then(value_to_prop);
+        self.expr_depth.set(self.expr_depth.get() - 1);
+        self.expr_cache.borrow_mut().insert(key, out.clone());
+        out
     }
 
     /// Keyframe interpolation, mirroring `keyframed` in kf.js.
@@ -521,9 +629,10 @@ impl Planner<'_> {
         if let Some(ez) = &a.ez {
             let k = ez.get(i).copied().unwrap_or(0) as usize;
             if k != 0
-                && let Some(e) = self.easings.get(k) {
-                    u = ease(e, u);
-                }
+                && let Some(e) = self.easings.get(k)
+            {
+                u = ease(e, u);
+            }
         }
 
         let start = at(i);
@@ -533,21 +642,23 @@ impl Planner<'_> {
         // runtime tests only the first two components before taking the slow
         // path, so this does too.
         if a.kind == AnimKind::Vector
-            && let (Some(to), Some(ti)) = (&a.to, &a.ti) {
-                let base = i * a.dim;
-                let live = |c: &[f64], k: usize| c.get(base + k).copied().unwrap_or(0.0) != 0.0;
-                if (live(to, 0) || live(to, 1) || live(ti, 0) || live(ti, 1))
-                    && let (Prop::Vector(p0), Prop::Vector(p1)) = (&start, &end) {
-                        let d = a.dim.min(p0.len()).min(p1.len());
-                        return Prop::Vector(spatial(
-                            &p0[..d],
-                            &p1[..d],
-                            &to[base..base + d],
-                            &ti[base..base + d],
-                            u,
-                        ));
-                    }
+            && let (Some(to), Some(ti)) = (&a.to, &a.ti)
+        {
+            let base = i * a.dim;
+            let live = |c: &[f64], k: usize| c.get(base + k).copied().unwrap_or(0.0) != 0.0;
+            if (live(to, 0) || live(to, 1) || live(ti, 0) || live(ti, 1))
+                && let (Prop::Vector(p0), Prop::Vector(p1)) = (&start, &end)
+            {
+                let d = a.dim.min(p0.len()).min(p1.len());
+                return Prop::Vector(spatial(
+                    &p0[..d],
+                    &p1[..d],
+                    &to[base..base + d],
+                    &ti[base..base + d],
+                    u,
+                ));
             }
+        }
 
         match (start, end) {
             (Prop::Scalar(x), Prop::Scalar(y)) => Prop::Scalar(x + (y - x) * u),

@@ -63,6 +63,10 @@ pub struct Report {
     /// Instancing put bindings on per-instance clocks. Those are correct but
     /// currently expensive — see `Instancing::Auto`.
     pub instance_clocks: bool,
+    /// Images extracted from the markup into URL references, when the options
+    /// asked for it (`CompileOptions::assets`). Deterministic per payload, so
+    /// the two instancing candidates extract the same set.
+    pub assets: Vec<scene::assets::ExtractedAsset>,
 }
 
 pub fn compile(module: &ir::Module, options: &crate::CompileOptions) -> Result<Option<String>> {
@@ -131,6 +135,7 @@ fn describe(
                 .map(|a| a.records.len())
                 .sum::<usize>(),
         js,
+        assets: Vec::new(),
     }
 }
 
@@ -147,7 +152,18 @@ pub fn report(module: &ir::Module, options: &crate::CompileOptions) -> Result<Op
     let bodies: Vec<ir::Expression> = module.expressions.iter().cloned().collect();
 
     let build = |instance| -> Result<Report> {
-        let mut scene = scene::plan_with(&payload, has_exprs, options.inline_limit, instance)?;
+        let mut scene =
+            scene::plan_with(&payload, has_exprs, options.inline_limit, instance, &bodies)?;
+
+        // Asset extraction runs on the planned scene before any consumer reads
+        // its markup, so the module `M`, the codegen `M` and every report
+        // count all see the same URL references. Image layers are pure markup
+        // — nothing in the wire stream mentions them — so no re-seal.
+        let assets = if options.assets.extract {
+            scene::assets::extract(&mut scene, &options.assets)
+        } else {
+            Vec::new()
+        };
 
         // The layer pass runs *here*, not once for the module, because it
         // resolves references to record indices and the two candidate builds
@@ -186,7 +202,9 @@ pub fn report(module: &ir::Module, options: &crate::CompileOptions) -> Result<Op
             exprs.as_ref(),
             &options.markup,
         )?;
-        Ok(describe(&scene, js, instance, exprs.as_ref()))
+        let mut report = describe(&scene, js, instance, exprs.as_ref());
+        report.assets = assets;
+        Ok(report)
     };
 
     // Extracted markup and precomp instancing do not compose. The sprite holds
@@ -195,17 +213,22 @@ pub fn report(module: &ir::Module, options: &crate::CompileOptions) -> Result<Op
     // element layout (ripple: 786 elements vs the 869 the bindings address). It
     // could be made to work by putting placeholders in the sprite, but then the
     // sprite is no longer a renderable picture, which is the point of the mode.
-    let extracted = matches!(options.markup, crate::MarkupMode::Extracted(_));
-    if extracted && options.instance_precomps == crate::Instancing::Always {
+    // The same holds for a module with no markup of its own: the document it
+    // hydrates is the fully-expanded one `compile_document` wrote.
+    let fixed_tree = matches!(
+        options.markup,
+        crate::MarkupMode::Extracted(_) | crate::MarkupMode::None
+    );
+    if fixed_tree && options.instance_precomps == crate::Instancing::Always {
         anyhow::bail!(
-            "--instance-precomps cannot be combined with --extract: an instanced module \
-             binds against a tree expanded at runtime, so the extracted sprite would not \
-             match it. Drop one of the two."
+            "--instance-precomps cannot be combined with --extract or --no-markup: an \
+             instanced module binds against a tree expanded at runtime, so the sprite or \
+             served document would not match it. Drop one of the two."
         );
     }
 
     let out = match options.instance_precomps {
-        _ if extracted => build(false)?,
+        _ if fixed_tree => build(false)?,
         crate::Instancing::Always => build(true)?,
         crate::Instancing::Never => build(false)?,
         // Only animations with reusable precomps can differ, so the second

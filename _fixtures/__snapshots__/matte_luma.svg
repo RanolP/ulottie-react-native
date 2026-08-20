@@ -14,12 +14,12 @@
             <g transform="translate(-34,462)">
               <path fill="#f59e85" d="M84-398.906C88.971-398.906,91.5-399.5,91.5-397C91.5-394.406,88.971-395,84-395C79.029-395,76.75-394.781,76.75-397C76.75-399.344,79.029-398.906,84-398.906Z"/>
             </g>
-            <g mask="url(#t1-0)">
+            <g mask="url(#t1--u)">
               <g transform="matrix(1.5,0,0,1.5,-76.75,656.28)">
                 <path d="M88-393C96.284-393,103-389.418,103-385C103-380.582,96.284-377,88-377C79.716-377,73-380.582,73-385C73-389.418,79.716-393,88-393Z" fill="#d9876e"/>
               </g>
             </g>
-            <g mask="url(#t0-0)">
+            <g mask="url(#t0--u)">
               <g transform="translate(-34.5,462)">
                 <path d="M68-409.75L101-409.75L101-400L68-400L68-409.75Z" fill="#faf2f0"/>
               </g>
@@ -45,12 +45,12 @@
     </g>
   </svg>
   <defs>
-    <mask id="t0-0" mask-type="luminance" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
+    <mask id="t0--u" mask-type="luminance" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
       <g transform="translate(-34,462)">
         <path d="M84-398.906C88.971-398.906,91.5-399.5,91.5-397C91.5-394.406,88.971-395,84-395C79.029-395,76.75-394.781,76.75-397C76.75-399.344,79.029-398.906,84-398.906Z" fill="rgb(84,84,71)"/>
       </g>
     </mask>
-    <mask id="t1-0" mask-type="luminance" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
+    <mask id="t1--u" mask-type="luminance" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
       <g transform="translate(-34,462)">
         <path d="M84-398.906C88.971-398.906,91.5-399.5,91.5-397C91.5-394.406,88.971-395,84-395C79.029-395,76.75-394.781,76.75-397C76.75-399.344,79.029-398.906,84-398.906Z" fill="rgb(84,84,71)"/>
       </g>

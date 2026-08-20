@@ -3,12 +3,12 @@
     <rect width="1080" height="1920" fill="#be2a2a"/>
     <g transform="translate(540,960)">
       <g transform="matrix(.9329,0,0,2.19491,0,0)">
-        <rect x="-580" y="-440" width="1160" height="880" fill="url(#g0-0)" stroke="#fec825" stroke-width="6"/>
+        <rect x="-580" y="-440" width="1160" height="880" fill="url(#g0--u)" stroke="#fec825" stroke-width="6"/>
       </g>
     </g>
   </svg>
   <defs>
-    <linearGradient id="g0-0" gradientUnits="userSpaceOnUse" x1="-430.769" y1="-404.573" x2="374.412" y2="342.611">
+    <linearGradient id="g0--u" gradientUnits="userSpaceOnUse" x1="-430.769" y1="-404.573" x2="374.412" y2="342.611">
       <stop offset="0" stop-color="rgb(130,227,72)"/>
       <stop offset=".5" stop-color="rgb(85,223,149)"/>
       <stop offset="1" stop-color="rgb(40,219,225)"/>

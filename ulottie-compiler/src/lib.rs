@@ -15,6 +15,8 @@ pub mod wasm;
 use anyhow::Result;
 use serde::Serialize;
 
+pub use scene::assets::ExtractedAsset;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RuntimeMode {
     /// Emit `import { run } from './driver.js'` — the runtime is a separate
@@ -63,6 +65,48 @@ pub enum MarkupMode {
     /// it into the HTML, or fetch and inject it once. `init()` stays
     /// synchronous and throws if the symbol is missing.
     Extracted(String),
+    /// The module carries no markup at all — the SSR module. The page already
+    /// has the document ([`compile_document`]'s output, server-rendered into
+    /// the HTML, or a `<noscript>` body), and `init(el)` adopts the `<svg>`
+    /// it finds in `el`: hydration is implied, since there is nothing else the
+    /// module could do, and `init` throws by name when the container is empty.
+    /// Each adopted instance gets its own id suffix, so several served copies
+    /// of one animation on a page keep their gradients and masks apart.
+    ///
+    /// Strictly smaller than [`MarkupMode::Inline`] — the document is dead
+    /// bytes to a module that only ever hydrates — and no second file to
+    /// place, unlike [`MarkupMode::Extracted`]. Planned fully expanded, never
+    /// instanced, because the served document is the expanded tree.
+    None,
+}
+
+/// How embedded images (`data:` URIs) above a size threshold are delivered.
+///
+/// Off by default: without extraction the markup keeps every image inline as
+/// a data URI, exactly as the source had it, and every existing output is
+/// byte-identical. With `extract` on, images whose decoded size is strictly
+/// above `threshold` bytes are written out as files and referenced by
+/// `url_base + name`, so they load concurrently with (or ahead of, via the
+/// manifest) the module. See `scene::assets` and EXPLAINER's
+/// "Pre-loadable assets".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetOptions {
+    pub extract: bool,
+    /// Where the markup points at the extracted files, e.g. `"assets/"`.
+    /// Always slash-terminated when used; `"assets"` and `"assets/"` agree.
+    pub url_base: String,
+    /// Images whose decoded byte count is *strictly above* this stay inline.
+    pub threshold: usize,
+}
+
+impl Default for AssetOptions {
+    fn default() -> Self {
+        Self {
+            extract: false,
+            url_base: "assets/".into(),
+            threshold: 4096,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +142,9 @@ pub struct CompileOptions {
     /// Whether to plan each precomp once and replay it per use, instead of
     /// walking it inline at every use.
     pub instance_precomps: Instancing,
+    /// Whether oversized embedded images become URL references plus a
+    /// manifest of files to serve alongside the module.
+    pub assets: AssetOptions,
 }
 
 impl Default for CompileOptions {
@@ -109,6 +156,7 @@ impl Default for CompileOptions {
             markup: MarkupMode::default(),
             allow: Default::default(),
             instance_precomps: Instancing::default(),
+            assets: AssetOptions::default(),
         }
     }
 }
@@ -136,6 +184,37 @@ pub fn compile_with(json: &str, options: &CompileOptions) -> Result<String> {
     let module = ir::lower(&animation)?;
     backend::compile(&module, options)?
         .ok_or_else(|| anyhow::anyhow!("fixture uses features the data backend doesn't support"))
+}
+
+/// The module plus everything extraction pulled out of it.
+///
+/// When `options.assets.extract` is off, `assets` is empty and `manifest` is
+/// `[]` — the module is then identical to [`compile_with`]'s output.
+pub struct CompiledOutput {
+    pub module: String,
+    pub assets: Vec<ExtractedAsset>,
+    /// JSON array of `{"url","file","mime","bytes"}` objects — what a web
+    /// server turns into 103 Early Hints / `<link rel=preload>` entries.
+    pub manifest: String,
+}
+
+/// Compile, returning the module and the extracted image artifacts.
+///
+/// The assets are the files the markup now references: each must be written
+/// to `<url_base><asset.name>` and served alongside the module, or the images
+/// 404. The manifest's `url` entries use the same `url_base`.
+pub fn compile_with_output(json: &str, options: &CompileOptions) -> Result<CompiledOutput> {
+    check_supported(json, &options.allow)?;
+    let animation: lottie::Animation = serde_json::from_str(json)?;
+    let module = ir::lower(&animation)?;
+    let report = backend::report(&module, options)?
+        .ok_or_else(|| anyhow::anyhow!("fixture uses features the data backend doesn't support"))?;
+    let manifest = scene::assets::manifest(&report.assets, &options.assets.url_base);
+    Ok(CompiledOutput {
+        module: report.js,
+        assets: report.assets,
+        manifest,
+    })
 }
 
 /// Fail unless every feature the source uses is either implemented or
@@ -181,33 +260,90 @@ pub fn compile_to_payload(json: &str) -> Result<data::Payload> {
 /// attribute — see [`scene::bake`]. Without that the document would hold only
 /// what cannot change, and a layer with an animated transform would have no
 /// `transform` at all and draw at the origin. What the module inlines is the
-/// *un*baked form, since the runtime writes those attributes on mount anyway.
+/// *un*baked form, since the runtime writes those attributes on mount anyway —
+/// and a module compiled with [`MarkupMode::None`] inlines nothing: it is the
+/// script that hydrates *this* document.
 ///
-/// One gap: an expression cannot be evaluated ahead of time, so a property
-/// driven by one bakes to its fallback and the picture is approximate. It is
-/// exact for every animation without expressions.
+/// Expressions make exactness conditional rather than impossible: the bake
+/// runs a compile-time interpreter over the raw body
+/// ([`expr::interp`], a frame-aware twin of the runtime engine), and a body
+/// that interpreter cannot decide bakes to its fallback — the keyframes the
+/// body reads as `value` — exactly as the runtime falls back with no engine.
+/// A missed evaluation costs picture accuracy on that one attribute; a wrong
+/// one never ships, because the interpreter refuses everything it does not
+/// understand.
+///
+/// **Generated ids keep their per-instance marker** (`id="g0--u"`,
+/// `url(#g0--u)`): the document is valid and renders as-is, and a module
+/// compiled with [`MarkupMode::None`] rewrites the marker per adopted mount so
+/// several served copies of one animation keep their gradients and masks
+/// apart. A page that inlines more than one copy *without* hydrating them
+/// should replace `--u` with a suffix of its own per copy — a plain string
+/// replacement, no parsing. Resolving the marker here to a fixed suffix (what
+/// this used to do) made every served copy identical, and nothing downstream
+/// could tell them apart again.
 pub fn compile_document(json: &str) -> Result<String> {
     // Inlined markup is parsed as HTML, where the SVG namespace is implied.
     // A standalone document has to declare it or a browser renders the source
     // tree instead of the picture.
-    let doc =
-        document_template(json)?.replacen("<svg ", "<svg xmlns=\"http://www.w3.org/2000/svg\" ", 1);
-    Ok(scene::resolve_ids(&doc, 0))
+    Ok(document_template(json)?.replacen("<svg ", "<svg xmlns=\"http://www.w3.org/2000/svg\" ", 1))
 }
 
-/// The document with per-mount id markers still in place.
+/// The document with per-mount id markers in place — which is also how it
+/// ships; see [`compile_document`].
 ///
 /// Planned fully expanded — never instanced — which is also what lets the bake
 /// cover every element: an instanced precomp body is stored once and replayed
 /// at a different point on each instance's clock, so it has no single frame.
 fn document_template(json: &str) -> Result<String> {
+    Ok(document_template_with(json, &CompileOptions::default())?.0)
+}
+
+/// Same plan, with the asset options applied — extraction runs on the scene
+/// before anything reads `markup`, so a document or symbol compiled this way
+/// references the same files the module does.
+fn document_template_with(
+    json: &str,
+    options: &CompileOptions,
+) -> Result<(String, Vec<ExtractedAsset>)> {
     let animation: lottie::Animation = serde_json::from_str(json)?;
     let module = ir::lower(&animation)?;
     if !data::can_encode(&module) {
-        anyhow::bail!("fixture uses features the backend doesn't support");
+        anyhow::bail!("fixture uses features the data backend doesn't support");
     }
     let payload = data::encode(&module)?;
-    Ok(scene::plan(&payload, !module.expressions.is_empty())?.markup)
+    let bodies: Vec<ir::Expression> = module.expressions.iter().cloned().collect();
+    let mut scene = scene::plan(&payload, !module.expressions.is_empty(), &bodies)?;
+    let assets = if options.assets.extract {
+        scene::assets::extract(&mut scene, &options.assets)
+    } else {
+        Vec::new()
+    };
+    Ok((scene.markup, assets))
+}
+
+/// The document plus its extracted image artifacts — the `--document`
+/// counterpart of [`compile_with_output`].
+pub struct DocumentOutput {
+    pub svg: String,
+    pub assets: Vec<ExtractedAsset>,
+    pub manifest: String,
+}
+
+/// [`compile_document`], with the asset options applied. See
+/// [`compile_with_output`] for what to do with `assets` and `manifest`.
+pub fn compile_document_with(json: &str, options: &CompileOptions) -> Result<DocumentOutput> {
+    let (doc, assets) = document_template_with(json, options)?;
+    // Inlined markup is parsed as HTML, where the SVG namespace is implied.
+    // A standalone document has to declare it or a browser renders the source
+    // tree instead of the picture.
+    let doc = doc.replacen("<svg ", "<svg xmlns=\"http://www.w3.org/2000/svg\" ", 1);
+    let manifest = scene::assets::manifest(&assets, &options.assets.url_base);
+    Ok(DocumentOutput {
+        svg: doc,
+        assets,
+        manifest,
+    })
 }
 
 /// The document as a sprite `<symbol>`, ready to be concatenated with others
@@ -222,6 +358,23 @@ fn document_template(json: &str) -> Result<String> {
 /// can be mounted any number of times and each mount resolves its own.
 pub fn compile_symbol(json: &str, id: &str) -> Result<String> {
     Ok(scene::symbol(&document_template(json)?, id))
+}
+
+/// [`compile_symbol`], with the asset options applied — the sprite's `<image>`
+/// hrefs reference the extracted files, returned alongside for the caller to
+/// write and serve.
+pub fn compile_symbol_with(
+    json: &str,
+    id: &str,
+    options: &CompileOptions,
+) -> Result<DocumentOutput> {
+    let (doc, assets) = document_template_with(json, options)?;
+    let manifest = scene::assets::manifest(&assets, &options.assets.url_base);
+    Ok(DocumentOutput {
+        svg: scene::symbol(&doc, id),
+        assets,
+        manifest,
+    })
 }
 
 /// Combine symbols into one sprite file. Symbol ids have to be unique within
@@ -265,7 +418,8 @@ pub fn analyze_features(json: &str) -> Result<Option<EmbeddedFeatures>> {
         return Ok(None);
     }
     let payload = data::encode(&module)?;
-    let scene = scene::plan(&payload, !module.expressions.is_empty())?;
+    let bodies: Vec<ir::Expression> = module.expressions.iter().cloned().collect();
+    let scene = scene::plan(&payload, !module.expressions.is_empty(), &bodies)?;
     Ok(Some(EmbeddedFeatures {
         expressions: scene.caps.contains(scene::Caps::EXPRESSIONS),
         trim_path: scene.caps.contains(scene::Caps::TRIM),

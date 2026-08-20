@@ -626,14 +626,13 @@ describe('the sprite is a valid standalone SVG', () => {
   }
 });
 
-// Fixtures whose first frame depends on an expression. The compiler cannot
-// evaluate one ahead of time — that needs the expression engine, which is
-// JavaScript — so those properties bake to their fallback and the static
-// picture is an approximation. Everything else has to be exact.
-//
-// Pinned rather than skipped: if one of these starts matching, the expression
-// compiler landed and the entry should go.
-const EXPRESSION_DRIVEN = new Set(['lights', 'ripple', 'starfish']);
+// Fixtures whose first frame depends on an expression. The bake runs its own
+// compile-time interpreter over the raw body (`src/expr/interp.rs`), which is
+// exact whenever the body is decidable and falls back to the property's own
+// value otherwise — so every fixture now has to match the mounted engine
+// element-wise, expressions included. The set stays (empty) rather than being
+// deleted: a fixture whose bake regresses to approximation belongs back in it.
+const EXPRESSION_DRIVEN = new Set<string>();
 
 // The sprite has to be a finished picture *before* any script runs: it is what
 // an SSR response paints, what `<noscript>` falls back to, and what an
@@ -737,6 +736,71 @@ describe('the sprite is the first frame, with no script', () => {
   }
 });
 
+// The way a page actually *draws* the sprite before any script runs is
+// `<use href="#id">` — the only thing that renders a `<symbol>`. No other
+// gate touches that surface: the module clones the symbol's children instead,
+// and the comparison above reads attributes, which cannot see paint. And paint
+// is where it broke: a gradient defined inside a `display:none` subtree is not
+// painted when a `<use>` instance references it (Chromium), so with the sprite
+// hiding itself that way `ripple`'s 46 gradient-stroked wires vanished from the
+// demo's viewer while its plain-filled dots stayed — and every attribute
+// compared equal. Masks and clip paths happen to survive it, which is why no
+// other fixture looked wrong. The sprite now hides itself out of flow at zero
+// size; this is what keeps it that way.
+//
+// Strict pixels — no antialiasing discount, which is exactly what hides a
+// missing two-pixel stroke — against the module mounted at the same frame:
+// same markup, same viewport, nothing legitimate to differ by.
+describe('the sprite renders through <use>, with no script', () => {
+  beforeAll(async () => {
+    await page.viewport(VIEWPORT_W * 2 + 40, VIEWPORT_H + 40);
+  });
+
+  for (const fx of FIXTURES) {
+    test(`${fx.name}`, { timeout: 30_000 }, async () => {
+      const { ref: used, ulottie: live } = mountContainers();
+      // As shipped, in a plain holder: how the sprite keeps itself out of the
+      // layout is part of what is under test.
+      const holder = document.createElement('div');
+      holder.innerHTML = await fetch(`/.output/${fx.name}.sprite.svg`).then(r => r.text());
+      document.body.appendChild(holder);
+      const symbol = holder.querySelector(`symbol[id="${fx.name}"]`);
+      expect(symbol, `no <symbol id="${fx.name}"> in the sprite`).toBeTruthy();
+      used.innerHTML =
+        `<svg viewBox="${symbol!.getAttribute('viewBox')}" width="100%" height="100%"` +
+        ` preserveAspectRatio="xMidYMid meet"><use href="#${fx.name}"/></svg>`;
+
+      const mod = await import(
+        /* @vite-ignore */ `/.output/${fx.name}.js?t=${Date.now()}`
+      );
+      const anim = mod.init(live, { autoplay: false, loop: false });
+      try {
+        await new Promise(r => requestAnimationFrame(() => r(undefined)));
+        await new Promise(r => requestAnimationFrame(() => r(undefined)));
+        const usedShot = shotPath(await page.screenshot({ element: used, save: true }));
+        const liveShot = shotPath(await page.screenshot({ element: live, save: true }));
+        const diff = await commands.odiffCompare(usedShot, liveShot, { antialiasing: false });
+        // A `<use>` instance rasterizes edges a shade differently from the same
+        // markup in the DOM: 3–13 px of 102,400 measured, on a mask boundary,
+        // a gradient edge and a stroke edge (`mask_subtract`, `gradient_radial`,
+        // `stroke_under_fill`); most fixtures match exactly. The wires the old
+        // sprite lost measured 258 px at this size. The budget sits between,
+        // four times the noise and a fifth of the signal — and strictness is
+        // the point, so do not widen it for a fixture: find out what moved.
+        const ratio = diff.match ? 0 : diff.diffPercentage / 100;
+        expect(
+          ratio,
+          `${fx.name}: the sprite drawn through <use> is not the mounted first frame — ` +
+            `${diff.diffPercentage?.toFixed(3)}% of pixels differ (${diff.diffPath})`,
+        ).toBeLessThanOrEqual(0.0005);
+      } finally {
+        anim.destroy();
+        holder.remove();
+      }
+    });
+  }
+});
+
 // The other half of the SSR flow: markup arrives already painted, and the
 // module adopts it instead of replacing it (`init(el, { hydrate: true })`).
 //
@@ -744,46 +808,158 @@ describe('the sprite is the first frame, with no script', () => {
 // document-order index, so adding attributes is safe and adding *elements*
 // would not be — and nothing here would fail loudly if that changed, it would
 // just start writing the right values onto the wrong nodes.
+// Both runtime builds, because they are two `init`s: the extern module goes
+// through `mount` in core.js, the self-contained one mostly through generated
+// code — whose `init` ignored `hydrate` outright and overwrote the served
+// markup with its own until this loop ran it.
 describe('a served first frame hydrates', () => {
   for (const fx of FIXTURES) {
-    test(`${fx.name}`, { timeout: 30_000 }, async () => {
-      const text = await fetch(`/.output/${fx.name}.sprite.svg`).then(r => r.text());
-      const symbol = new DOMParser()
-        .parseFromString(text, 'image/svg+xml')
-        .querySelector(`symbol[id="${fx.name}"]`)!;
+    for (const build of ['extern', 'embedded'] as const) {
+      test(`${fx.name} (${build})`, { timeout: 30_000 }, async () => {
+        const text = await fetch(`/.output/${fx.name}.sprite.svg`).then(r => r.text());
+        const symbol = new DOMParser()
+          .parseFromString(text, 'image/svg+xml')
+          .querySelector(`symbol[id="${fx.name}"]`)!;
 
+        document.body.innerHTML = '';
+        // Stand in for the server's response: the symbol's children in a shell.
+        const served = document.createElement('div');
+        served.innerHTML =
+          `<svg viewBox="${symbol.getAttribute('viewBox')}" width="100%" height="100%"` +
+          ` preserveAspectRatio="xMidYMid meet" style="overflow:hidden">${symbol.innerHTML}</svg>`;
+        document.body.appendChild(served);
+        const before = served.querySelector('svg')!.querySelectorAll('*').length;
+
+        const fresh = document.createElement('div');
+        document.body.appendChild(fresh);
+
+        const suffix = build === 'embedded' ? '.embedded.js' : '.js';
+        const mod = await import(
+          /* @vite-ignore */ `/.output/${fx.name}${suffix}?t=${Date.now()}`
+        );
+        const a = mod.init(served, { hydrate: true, autoplay: false, loop: false });
+        const b = mod.init(fresh, { autoplay: false, loop: false });
+        try {
+          // Adopted, not re-rendered: the same nodes are still there.
+          expect(served.querySelector('svg')!.querySelectorAll('*').length).toBe(before);
+
+          // Mid-animation, not frame 0: an off-by-one in element indexing would
+          // still look right at the frame the markup was baked at.
+          const mid = Math.floor(b.totalFrames / 2);
+          a.goToAndStop(mid);
+          b.goToAndStop(mid);
+          const shot = (host: HTMLElement) =>
+            [...host.querySelector('svg')!.querySelectorAll('*')].map(shape);
+          expect(compare(shot(served), shot(fresh)), `${fx.name} hydrated`).toEqual([]);
+        } finally {
+          a.destroy();
+          b.destroy();
+        }
+      });
+    }
+  }
+});
+
+// The SSR module proper. Compiled with `--no-markup`, it carries no document
+// at all: the page serves `--document`'s output and `init(el)` adopts the
+// `<svg>` it finds there — hydration implied, there being nothing else it
+// could do. Same oracle as above, mid-animation against a fresh inline mount.
+// The self-contained build, because that is what an SSR first load ships next
+// to the HTML (and it takes the codegen path for most fixtures).
+describe('the hydration module adopts a served document', () => {
+  const shot = (host: HTMLElement) =>
+    [...host.querySelector('svg')!.querySelectorAll('*')].map(shape);
+
+  for (const fx of FIXTURES) {
+    test(`${fx.name}`, { timeout: 30_000 }, async () => {
+      const doc = await fetch(`/.output/${fx.name}.document.svg`).then(r => r.text());
       document.body.innerHTML = '';
-      // Stand in for the server's response: the symbol's children in a shell.
+      // The server's response, as the page parses it.
       const served = document.createElement('div');
-      served.innerHTML =
-        `<svg viewBox="${symbol.getAttribute('viewBox')}" width="100%" height="100%"` +
-        ` preserveAspectRatio="xMidYMid meet" style="overflow:hidden">${symbol.innerHTML}</svg>`;
+      served.innerHTML = doc;
       document.body.appendChild(served);
       const before = served.querySelector('svg')!.querySelectorAll('*').length;
-
       const fresh = document.createElement('div');
       document.body.appendChild(fresh);
 
-      const mod = await import(
+      const hydrator = await import(
+        /* @vite-ignore */ `/.output/${fx.name}.hydrate.js?t=${Date.now()}`
+      );
+      const inline = await import(
         /* @vite-ignore */ `/.output/${fx.name}.js?t=${Date.now()}`
       );
-      const a = mod.init(served, { hydrate: true, autoplay: false, loop: false });
-      const b = mod.init(fresh, { autoplay: false, loop: false });
+      expect(hydrator.markup, `${fx.name}: a hydration module exports no markup`).toBeUndefined();
+      const a = hydrator.init(served, { autoplay: false, loop: false });
+      const b = inline.init(fresh, { autoplay: false, loop: false });
       try {
-        // Adopted, not re-rendered: the same nodes are still there.
         expect(served.querySelector('svg')!.querySelectorAll('*').length).toBe(before);
-
-        // Mid-animation, not frame 0: an off-by-one in element indexing would
-        // still look right at the frame the markup was baked at.
         const mid = Math.floor(b.totalFrames / 2);
         a.goToAndStop(mid);
         b.goToAndStop(mid);
-        const shot = (host: HTMLElement) =>
-          [...host.querySelector('svg')!.querySelectorAll('*')].map(shape);
         expect(compare(shot(served), shot(fresh)), `${fx.name} hydrated`).toEqual([]);
-      } finally {
+        // A served tree was never the module's to clear.
         a.destroy();
+        expect(served.querySelector('svg'), `${fx.name}: destroy() removed the served document`)
+          .toBeTruthy();
+      } finally {
         b.destroy();
+      }
+    });
+  }
+
+  // Nothing to adopt is an error by name — not a blank mount, and not a
+  // TypeError three calls later.
+  test('init() throws when the container holds no <svg>', async () => {
+    document.body.innerHTML = '';
+    const empty = document.createElement('div');
+    document.body.appendChild(empty);
+    const hydrator = await import(
+      /* @vite-ignore */ `/.output/ripple.hydrate.js?t=${Date.now()}`
+    );
+    expect(() => hydrator.init(empty, { autoplay: false })).toThrow(/ulottie: nothing to hydrate/);
+  });
+
+  // Two served copies of one id-bearing animation on one page: each mount
+  // rewrites the document's id marker for itself, so a `url(#…)` in the
+  // second copy never reaches into the first. The inline module does this on
+  // its string and the extracted one on its clone; a served tree is the third
+  // place it has to happen, and the one a server renders many times over.
+  for (const name of ['ripple', 'starfish']) {
+    test(`two served copies of ${name} keep their ids apart`, { timeout: 30_000 }, async () => {
+      const doc = await fetch(`/.output/${name}.document.svg`).then(r => r.text());
+      expect(doc, 'the document ships its id marker').toContain('--u');
+      document.body.innerHTML = '';
+      const hosts = [0, 1].map(() => {
+        const host = document.createElement('div');
+        host.innerHTML = doc;
+        document.body.appendChild(host);
+        return host;
+      });
+      const hydrator = await import(
+        /* @vite-ignore */ `/.output/${name}.hydrate.js?t=${Date.now()}`
+      );
+      const anims = hosts.map(h => hydrator.init(h, { autoplay: false, loop: false }));
+      try {
+        const ids = hosts.map(h => new Set([...h.querySelectorAll('[id]')].map(e => e.id)));
+        expect(ids[0].size).toBeGreaterThan(0);
+        for (const id of ids[0]) {
+          expect(ids[1].has(id), `${id} is defined in both copies`).toBe(false);
+        }
+        for (const [i, host] of hosts.entries()) {
+          for (const el of host.querySelectorAll('*')) {
+            for (const at of el.attributes) {
+              expect(at.value.includes('--u'), `copy ${i}: ${at.name}="${at.value}" keeps the marker`)
+                .toBe(false);
+              const ref = /url\(#([^)]+)\)/.exec(at.value);
+              if (ref) {
+                expect(ids[i].has(ref[1]), `copy ${i}: ${at.value} resolves outside its copy`)
+                  .toBe(true);
+              }
+            }
+          }
+        }
+      } finally {
+        anims.forEach(a => a.destroy());
       }
     });
   }

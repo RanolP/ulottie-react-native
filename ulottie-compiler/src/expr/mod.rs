@@ -43,6 +43,7 @@ use oxc_span::SourceType;
 
 use crate::ir;
 
+pub(crate) mod interp;
 mod pass;
 pub mod resolve;
 pub use pass::fold_module;
@@ -344,10 +345,11 @@ impl Env<'_> {
         // functions over numbers.
         if let ast::Expression::StaticMemberExpression(m) = &c.callee {
             if let ast::Expression::Identifier(id) = &m.object
-                && id.name == "Math" {
-                    let args = self.args(c)?;
-                    return math(m.property.name.as_str(), &args);
-                }
+                && id.name == "Math"
+            {
+                let args = self.args(c)?;
+                return math(m.property.name.as_str(), &args);
+            }
             // `thisProperty.propertyGroup(n)` — the group holding it.
             let name = m.property.name.as_str();
             let obj = self.eval(&m.object)?;

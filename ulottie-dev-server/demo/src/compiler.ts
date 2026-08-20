@@ -9,15 +9,20 @@
 // `?compiler=api|wasm` overrides, which is how the wasm path gets exercised
 // without a production build.
 
-import type { CompileResponse } from './types.ts';
+import type { CompileResult } from './types.ts';
 
 const override = new URLSearchParams(location.search).get('compiler');
 const useApi = override ? override === 'api' : import.meta.env.DEV;
 
-const backend = useApi ? import('./compiler-api.ts') : import('./compiler-wasm.ts');
+/** Which compiler answered. Both extract the same image assets: the dev
+ *  server writes the files and serves them, the wasm build hands the bytes
+ *  back for the page to mint Blob URLs from. */
+export const backend = useApi ? ('api' as const) : ('wasm' as const);
 
-export const ready = backend.then((m) => m.ready);
+const backendModule = useApi ? import('./compiler-api.ts') : import('./compiler-wasm.ts');
 
-export async function compile(jsonText: string): Promise<CompileResponse> {
-  return (await backend).compile(jsonText);
+export const ready = backendModule.then((m) => m.ready);
+
+export async function compile(jsonText: string): Promise<CompileResult> {
+  return (await backendModule).compile(jsonText);
 }

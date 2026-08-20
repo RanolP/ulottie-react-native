@@ -199,6 +199,9 @@ fn roots(caps: Caps, helpers: &[&'static str]) -> Vec<&'static str> {
     if caps.contains(Caps::EXTRACTED) {
         r.push("fromSprite");
     }
+    if caps.contains(Caps::SERVED) {
+        r.push("suffixIds");
+    }
     if caps.contains(Caps::TIME_REMAP) {
         r.push("resolve");
     }
@@ -372,13 +375,18 @@ pub fn emit(
     }
 
     let markup = js_string(&carried(scene, markup_mode));
+    // No markup carried at all: the page serves the document and the module
+    // hydrates it. Nothing below that names `M` is emitted.
+    let served = matches!(markup_mode, MarkupMode::None);
     let mut src = String::with_capacity(scene.inline.len() + 4096);
 
     // Nothing varies over time: the module is the markup plus an inert player.
     // No runtime, no data table, no animation frame is ever scheduled.
     if scene.is_static() {
-        src.push_str(&format!("const M={markup};\n"));
-        src.push_str("export const markup=M;\n");
+        if !served {
+            src.push_str(&format!("const M={markup};\n"));
+            src.push_str("export const markup=M;\n");
+        }
         src.push_str(&sprite_export(markup_mode));
         src.push_str(&static_player(scene, markup_mode));
         return Ok(minify(&src).unwrap_or(src));
@@ -395,8 +403,10 @@ pub fn emit(
     // runtime dominates and dramatically *larger* for one like `ripple`, where
     // 230 bindings each unroll — so which is better is a measurement, not a
     // rule, and it is cheap to just take it.
-    let candidate = if mode == RuntimeMode::Embedded && matches!(markup_mode, MarkupMode::Inline) {
-        codegen::try_emit(scene).map(|code| generated(scene, &markup, code, exprs))
+    let candidate = if mode == RuntimeMode::Embedded
+        && matches!(markup_mode, MarkupMode::Inline | MarkupMode::None)
+    {
+        codegen::try_emit(scene).map(|code| generated(scene, &markup, code, exprs, markup_mode))
     } else {
         None
     };
@@ -418,11 +428,15 @@ pub fn emit(
             src.push_str(&programs(scene));
         }
     }
-    src.push_str(&format!("const M={markup};\nconst D={data};\n"));
+    if !served {
+        src.push_str(&format!("const M={markup};\n"));
+    }
+    src.push_str(&format!("const D={data};\n"));
     // Factored-out subtrees are the module's own strings, not payload: naming
     // them here keeps them out of the pool, and the pool then has nothing left
-    // in it at all for most animations.
-    if !scene.data.tpl.is_empty() {
+    // in it at all for most animations. A served document is already the
+    // expanded tree, so a module that hydrates one has nothing to expand.
+    if !scene.data.tpl.is_empty() && !served {
         let items: Vec<String> = scene.data.tpl.iter().map(|m| js_string(m)).collect();
         src.push_str(&format!("const TPL=[{}];\n", items.join(",")));
     }
@@ -433,10 +447,14 @@ pub fn emit(
     if let Some(e) = exprs {
         src.push_str(&e.src);
     }
-    src.push_str("export const markup=M;\n");
+    if !served {
+        src.push_str("export const markup=M;\n");
+    }
     src.push_str(&sprite_export(markup_mode));
+    // `mount` reads a falsy `M` as "adopt the document already there".
     src.push_str(&format!(
-        "export const init=(c,o)=>mount(M,D,P0,A0,c,o{});\n",
+        "export const init=(c,o)=>mount({},D,P0,A0,c,o{});\n",
+        if served { "0" } else { "M" },
         extensions(scene, exprs, markup_mode)
     ));
 
@@ -470,7 +488,7 @@ pub fn is_generated(scene: &Scene, exprs: Option<&Exprs>) -> bool {
     let markup = js_string(&carried(scene, &MarkupMode::Inline));
     match codegen::try_emit(scene) {
         Some(code) => {
-            let g = generated(scene, &markup, code, exprs);
+            let g = generated(scene, &markup, code, exprs, &MarkupMode::Inline);
             let mut src = String::new();
             src.push_str(&bundle(
                 caps_of(scene, &MarkupMode::Inline),
@@ -514,7 +532,9 @@ fn generated(
     markup: &str,
     code: codegen::Generated,
     exprs: Option<&Exprs>,
+    markup_mode: &MarkupMode,
 ) -> String {
+    let served = matches!(markup_mode, MarkupMode::None);
     let mut src = String::with_capacity(4096);
 
     // Only the helpers the generated body actually calls, plus the player.
@@ -528,8 +548,13 @@ fn generated(
     if code.exprs {
         roots.push("initExpr");
     }
-    if !scene.data.tpl.is_empty() {
+    // Templates are expanded on a tree this module builds; a served document
+    // is already expanded. Its ids, though, are rewritten per adopted mount.
+    if !scene.data.tpl.is_empty() && !served {
         roots.push("expand");
+    }
+    if served && scene.data.uses_ids {
+        roots.push("suffixIds");
     }
     roots.extend(code.needs.iter().copied());
     // The expression bodies name their own helpers; a generated module reaches
@@ -568,11 +593,13 @@ fn generated(
     }
     // Factored-out subtrees ship as markup strings and are expanded before any
     // element is indexed — the planner numbered the *expanded* tree.
-    if !scene.data.tpl.is_empty() {
+    if !scene.data.tpl.is_empty() && !served {
         let items: Vec<String> = scene.data.tpl.iter().map(|m| js_string(m)).collect();
         src.push_str(&format!("const TPL=[{}];\n", items.join(",")));
     }
-    src.push_str(&format!("const M={markup};\nexport const markup=M;\n"));
+    if !served {
+        src.push_str(&format!("const M={markup};\nexport const markup=M;\n"));
+    }
     // Two mounts of the same module must not share `<mask>`/gradient ids. The
     // interpreter keeps this counter in core.js, which a generated module does
     // not include.
@@ -582,14 +609,36 @@ fn generated(
 
     src.push_str("export const init=(c,o)=>{\n");
     src.push_str("o=o||{};\n");
-    src.push_str(if scene.data.uses_ids {
-        "const H=M.split('--u').join('-'+(uid++));\nc.innerHTML=H;\n"
+    if served {
+        // Nothing to build with: adopt the document the page already has, the
+        // same way `mount` does for the interpreter — and rewrite its id
+        // marker for this mount, so two served copies keep their ids apart.
+        src.push_str(
+            "const svg=c.querySelector('svg');\n\
+             if(!svg)throw new Error('ulottie: nothing to hydrate (no <svg> in the container)');\n",
+        );
+        if scene.data.uses_ids {
+            src.push_str("suffixIds(svg,'--u','-'+(uid++));\n");
+        }
     } else {
-        "const H=M;\nc.innerHTML=H;\n"
-    });
-    src.push_str("const svg=c.firstElementChild;\n");
-    if !scene.data.tpl.is_empty() {
-        src.push_str("expand(svg,TPL);\n");
+        src.push_str(if scene.data.uses_ids {
+            "const H=M.split('--u').join('-'+(uid++));\n"
+        } else {
+            "const H=M;\n"
+        });
+        // `hydrate` adopts the `<svg>` already in the container instead of
+        // building one — the documented option, which this path once ignored
+        // and overwrote the served markup with its own.
+        src.push_str(
+            "let svg;\n\
+             if(o.hydrate){svg=c.querySelector('svg');\
+             if(!svg)throw new Error('ulottie: nothing to hydrate (no <svg> in the container)')}\
+             else{c.innerHTML=H;svg=c.firstElementChild;",
+        );
+        if !scene.data.tpl.is_empty() {
+            src.push_str("expand(svg,TPL);");
+        }
+        src.push_str("}\n");
     }
     // Elements are addressed by document-order index, the same numbering the
     // planner assigned; only the bound ones are looked up.
@@ -623,11 +672,15 @@ fn generated(
     }
     src.push_str(&code.body);
     src.push_str("};\n");
+    // The last argument says whether the tree was adopted: `destroy()` clears
+    // only what this module built.
     src.push_str(&format!(
-        "return player(c,svg,H,apply,{},{},{},o);\n}};\n",
+        "return player(c,svg,{},apply,{},{},{},o,{});\n}};\n",
+        if served { "''" } else { "H" },
         crate::scene::svg::n(scene.data.fr),
         crate::scene::svg::n(scene.data.ip),
-        crate::scene::svg::n(scene.data.op)
+        crate::scene::svg::n(scene.data.op),
+        if served { "1" } else { "o.hydrate" },
     ));
 
     // The engine and its table are decided in two places — `code.exprs` here and
@@ -655,7 +708,7 @@ fn shaken(roots: &[&str]) -> String {
 /// sprite entry it needs without parsing the module. Empty in inline mode.
 fn sprite_export(markup_mode: &MarkupMode) -> String {
     match markup_mode {
-        MarkupMode::Inline => String::new(),
+        MarkupMode::Inline | MarkupMode::None => String::new(),
         MarkupMode::Extracted(id) => {
             format!("export const spriteSymbol = {};\n", js_string(id))
         }
@@ -663,21 +716,32 @@ fn sprite_export(markup_mode: &MarkupMode) -> String {
 }
 
 /// The markup the module carries: the whole document, or — when it has been
-/// extracted to a sprite — just the `<svg>` shell the runtime fills.
+/// extracted to a sprite — just the `<svg>` shell the runtime fills, or
+/// nothing at all when the page serves the document and the module hydrates.
 fn carried(scene: &Scene, markup_mode: &MarkupMode) -> String {
     match markup_mode {
         MarkupMode::Inline => scene.inline.clone(),
         MarkupMode::Extracted(_) => crate::scene::shell(&scene.inline),
+        MarkupMode::None => String::new(),
     }
 }
 
 /// The scene's capabilities plus whatever the delivery mode needs. Extraction
 /// is a property of how the module ships, not of the animation, so the planner
-/// never sees it.
+/// never sees it — and neither is serving: a module that hydrates a served
+/// document has nothing to expand (the document is the expanded tree) and,
+/// when the tree carries generated ids, has to rewrite their marker per mount.
 fn caps_of(scene: &Scene, markup_mode: &MarkupMode) -> Caps {
     match markup_mode {
         MarkupMode::Inline => scene.caps,
         MarkupMode::Extracted(_) => scene.caps | Caps::EXTRACTED,
+        MarkupMode::None => {
+            let mut caps = scene.caps - Caps::TEMPLATES;
+            if scene.data.uses_ids {
+                caps |= Caps::SERVED;
+            }
+            caps
+        }
     }
 }
 
@@ -687,20 +751,41 @@ fn caps_of(scene: &Scene, markup_mode: &MarkupMode) -> Caps {
 /// children is four lines, and a module whose entire point is that it needs no
 /// runtime should not acquire a dependency to fetch its own picture.
 fn static_player(scene: &Scene, markup_mode: &MarkupMode) -> String {
-    let fill = match markup_mode {
-        MarkupMode::Inline => String::new(),
-        MarkupMode::Extracted(id) => format!(
-            "const s=document.getElementById({});\
-             if(!s)throw new Error('ulottie: sprite symbol {} is not in the document');\
-             for(const n of s.children)c.firstElementChild.appendChild(n.cloneNode(true));",
-            js_string(id),
-            id,
+    // How the `<svg>` comes to be in the container: built from `M` (and filled
+    // from the sprite), or — with no markup carried — found there already, the
+    // way a served document is. An adopted tree is not the player's to clear.
+    let (build, svg, markup, destroy) = match markup_mode {
+        MarkupMode::Inline => (
+            "c.innerHTML=M;".to_string(),
+            "c.firstElementChild",
+            "M",
+            "c.innerHTML=''",
+        ),
+        MarkupMode::Extracted(id) => (
+            format!(
+                "c.innerHTML=M;const s=document.getElementById({});\
+                 if(!s)throw new Error('ulottie: sprite symbol {} is not in the document');\
+                 for(const n of s.children)c.firstElementChild.appendChild(n.cloneNode(true));",
+                js_string(id),
+                id,
+            ),
+            "c.firstElementChild",
+            "M",
+            "c.innerHTML=''",
+        ),
+        MarkupMode::None => (
+            "const s=c.querySelector('svg');\
+             if(!s)throw new Error('ulottie: nothing to hydrate (no <svg> in the container)');"
+                .to_string(),
+            "s",
+            "''",
+            "",
         ),
     };
     format!(
-        "export const init=(c)=>{{c.innerHTML=M;{fill}const p={{svg:c.firstElementChild,markup:M,\
+        "export const init=(c)=>{{{build}const p={{svg:{svg},markup:{markup},\
          totalFrames:{},frameRate:{},duration:{},currentFrame:{},isPlaying:false,\
-         destroy(){{c.innerHTML=''}}}};\
+         destroy(){{{destroy}}}}};\
          for(const k of ['play','pause','stop','seek','goToFrame','goToAndStop','goToAndPlay','on','off'])p[k]=()=>p;\
          return p}};\n",
         fmt(scene.data.op - scene.data.ip),
@@ -732,8 +817,12 @@ fn readable(
         match (scene.caps.contains(Caps::INSTANCES), markup_mode) {
             (true, MarkupMode::Extracted(_)) => ", precomps instanced, markup extracted",
             (true, MarkupMode::Inline) => ", precomps instanced",
+            (true, MarkupMode::None) => {
+                ", precomps instanced, no markup (hydrates a served document)"
+            }
             (false, MarkupMode::Extracted(_)) => ", markup extracted",
             (false, MarkupMode::Inline) => "",
+            (false, MarkupMode::None) => ", no markup (hydrates a served document)",
         },
         caps_list(caps_of(scene, markup_mode)),
     ));
@@ -768,15 +857,24 @@ fn readable(
         }
     }
 
+    let served = matches!(markup_mode, MarkupMode::None);
     if let MarkupMode::Extracted(id) = markup_mode {
         src.push_str(&format!(
             "// The document lives in an external sprite as `<symbol id=\"{id}\">`; the\n\
              // module carries only the shell and clones the symbol's children into it.\n"
         ));
     }
-    src.push_str("const M =\n");
-    src.push_str(pretty::markup(&carried(scene, markup_mode), js_string).trim_end());
-    src.push_str(";\n\n");
+    if served {
+        src.push_str(
+            "// No markup: the page serves the document (`--document`) and `init()`\n\
+             // adopts the `<svg>` already in the container, rewriting its id marker\n\
+             // per mount. There is no `M`, no template table, no `markup` export.\n\n",
+        );
+    } else {
+        src.push_str("const M =\n");
+        src.push_str(pretty::markup(&carried(scene, markup_mode), js_string).trim_end());
+        src.push_str(";\n\n");
+    }
 
     if !scene.is_static() {
         let value = serde_json::to_value(&scene.data)?;
@@ -787,7 +885,7 @@ fn readable(
 
     // The module's own strings, named rather than interned — see the emitter's
     // counterpart above.
-    if !scene.data.tpl.is_empty() {
+    if !scene.data.tpl.is_empty() && !served {
         src.push_str("const TPL = [\n");
         for m in &scene.data.tpl {
             src.push_str(&format!("  {},\n", js_string(m)));
@@ -806,7 +904,9 @@ fn readable(
         src.push_str(&e.src);
         src.push('\n');
     }
-    src.push_str("export const markup = M;\n");
+    if !served {
+        src.push_str("export const markup = M;\n");
+    }
     if let MarkupMode::Extracted(_) = markup_mode {
         src.push_str(
             "// `markup` is only the shell in this mode. Server-rendering the\n\
@@ -819,7 +919,8 @@ fn readable(
         src.push_str(&static_player(scene, markup_mode));
     } else {
         src.push_str(&format!(
-            "export const init = (c, o) => mount(M, D, P0, A0, c, o{});\n",
+            "export const init = (c, o) => mount({}, D, P0, A0, c, o{});\n",
+            if served { "0" } else { "M" },
             extensions(scene, exprs, markup_mode)
         ));
     }
@@ -861,10 +962,17 @@ fn extensions(scene: &Scene, exprs: Option<&Exprs>, markup_mode: &MarkupMode) ->
     if let MarkupMode::Extracted(id) = markup_mode {
         parts.push(format!("s:fromSprite({})", js_string(id)));
     }
+    let served = matches!(markup_mode, MarkupMode::None);
+    // A served document carries the generated ids with their marker; each
+    // adopted mount rewrites it, the way an inline mount rewrites its string.
+    if served && scene.data.uses_ids {
+        parts.push("i:suffixIds".to_string());
+    }
     // Gated on the templates themselves, not on the capability: `TPL` is only
     // declared when there is something to put in it, and the two conditions
-    // drifting apart is a module that throws at `init`.
-    if !tpl.is_empty() {
+    // drifting apart is a module that throws at `init`. A served document is
+    // already expanded, so a hydrating module declares neither.
+    if !tpl.is_empty() && !served {
         debug_assert!(caps.contains(Caps::TEMPLATES));
         parts.push("t:s=>expand(s,TPL)".to_string());
     }
@@ -910,6 +1018,9 @@ fn extern_imports(caps: Caps, base: &str, helpers: &[&'static str]) -> String {
         out.push_str(&format!(
             "import {{ fromSprite }} from '{base}/sprite.js';\n"
         ));
+    }
+    if caps.contains(Caps::SERVED) {
+        out.push_str(&format!("import {{ suffixIds }} from '{base}/ids.js';\n"));
     }
     if caps.contains(Caps::EXPRESSIONS) {
         let mut names = vec!["makeExpr"];

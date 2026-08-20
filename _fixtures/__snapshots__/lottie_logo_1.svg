@@ -6,7 +6,7 @@
     <g transform="translate(121.95,317.31)">
       <path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#2e606a" stroke-width="14" style="display:none"/>
     </g>
-    <g mask="url(#t1-0)">
+    <g mask="url(#t1--u)">
       <g transform="matrix(.64391,.7651,-.7651,.64391,262.38,-38.99)">
         <g transform="translate(173.08,262.38)">
           <path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#6ddad2" stroke-width="14" style="display:none"/>
@@ -42,13 +42,13 @@
     </g>
   </svg>
   <defs>
-    <filter id="i0-0" filterUnits="userSpaceOnUse" x="0" y="0" width="500" height="500">
+    <filter id="i0--u" filterUnits="userSpaceOnUse" x="0" y="0" width="500" height="500">
       <feComponentTransfer>
         <feFuncA type="table" tableValues="1 0"/>
       </feComponentTransfer>
     </filter>
-    <mask id="t1-0" mask-type="alpha" maskUnits="userSpaceOnUse" x="0" y="0" width="500" height="500">
-      <g filter="url(#i0-0)">
+    <mask id="t1--u" mask-type="alpha" maskUnits="userSpaceOnUse" x="0" y="0" width="500" height="500">
+      <g filter="url(#i0--u)">
         <g transform="translate(165.84,266.79)">
           <path fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="1" stroke="#2e606a" stroke-width="14" style="display:none"/>
         </g>

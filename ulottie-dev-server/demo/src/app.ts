@@ -11,7 +11,16 @@ import { lottie } from './lottie.ts';
 
 import { compile } from './compiler.ts';
 import { highlight, langOf } from './pretty.ts';
-import type { CompileResponse, Plan, Player, SizeEntry, Sizes, UlottieModule } from './types.ts';
+import type {
+  CompileResponse,
+  CompileResult,
+  ManifestEntry,
+  Plan,
+  Player,
+  SizeEntry,
+  Sizes,
+  UlottieModule,
+} from './types.ts';
 
 /** Every id here is in `index.html`; a missing one is a bug, not a case. */
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
@@ -52,7 +61,7 @@ async function loadFromSource(jsonText: string, label?: string) {
   }
   resetPerf();
 
-  let info: CompileResponse;
+  let info: CompileResult;
   try {
     info = await compile(jsonText);
   } catch (e) {
@@ -63,6 +72,7 @@ async function loadFromSource(jsonText: string, label?: string) {
   }
   renderPlan(info);
   renderSizes(info.sizes, info.plan, info);
+  void renderAssetHints(info);
   isStatic = info.plan?.is_static ?? false;
 
   currentAnim = lottie.loadAnimation({
@@ -336,7 +346,13 @@ async function showArtifact(name: string, size: SizeEntry, url: string, prettyUr
     const id = /<symbol[^>]*\bid="([^"]+)"/.exec(text)?.[1];
     const vb = /<symbol[^>]*\bviewBox="([^"]+)"/.exec(text)?.[1] ?? '0 0 512 512';
     svgBox.innerHTML = id
-      ? `<div hidden>${text}</div>` +
+      ? // The holder is out of flow and zero-sized, never `hidden`: a gradient
+        // defined inside a `display:none` subtree is not painted when the
+        // `<use>` instance references it (Chromium), and the sprite keeps
+        // itself out of the page the same way for the same reason — `ripple`'s
+        // gradient-stroked wires vanished from this panel while its plain-
+        // filled dots stayed.
+        `<div style="position:absolute;width:0;height:0;overflow:hidden">${text}</div>` +
         // The frame is the symbol's own viewBox. Without it an animation whose
         // static geometry sits in one corner — most of them, since bindings
         // write the rest — reads as clipped rather than as a mostly-empty
@@ -413,7 +429,24 @@ function renderSizes(s: Sizes | null, plan?: Plan, urls?: CompileResponse) {
     ],
   ]);
 
-  const ways: Way[] = [baseline, shared, ...(extracted ? [extracted] : []), self];
+  // Server-rendered: the document goes out inside the HTML — no request of
+  // its own, but bytes all the same — and the module that hydrates it carries
+  // no markup. The one delivery where the picture is never downloaded twice.
+  const ssr =
+    s.document && s.js_hydrate
+      ? way('ulottie — server-rendered, then hydrated', [
+          ['baked document, in the HTML', s.document, urls?.document_url, urls?.document_pretty_url],
+          ['hydration module (no markup)', s.js_hydrate, urls?.js_hydrate_url, urls?.js_hydrate_pretty_url],
+        ])
+      : null;
+
+  const ways: Way[] = [
+    baseline,
+    shared,
+    ...(extracted ? [extracted] : []),
+    self,
+    ...(ssr ? [ssr] : []),
+  ];
 
   const base = ways.find((w) => w.baseline)!;
   const best = Math.min(...ways.filter((w) => !w.baseline).map((w) => w.gz));
@@ -494,6 +527,76 @@ function renderSizes(s: Sizes | null, plan?: Plan, urls?: CompileResponse) {
     );
   }
   $('size-note').textContent = notes.join(' ');
+}
+
+// ---------------------------------------------------------------------------
+// Extracted assets — the preload story of the first-load panel
+// ---------------------------------------------------------------------------
+
+/**
+ * One line of the extraction manifest: what a server would turn into 103
+ * Early Hints or `<link rel="preload" as="image">` entries, so the images are
+ * already arriving while the module is still being parsed.
+ */
+
+/**
+ * Show the images extraction pulled out of the markup, and actually issue the
+ * preload hints the manifest implies — the panel then demonstrates the claim
+ * rather than describing it.
+ *
+ * Both compilers extract. The dev server writes the files and serves a
+ * manifest at a URL; the wasm build hands the bytes back on the response,
+ * already minted as Blob URLs — so the panel reads the same shape either way.
+ */
+async function renderAssetHints(info: CompileResult) {
+  const el = $('assets-hints');
+  let entries: ManifestEntry[];
+  let source: string;
+  if (info.assets) {
+    entries = info.assets;
+    source = 'Blob URLs minted by the in-browser compiler';
+  } else {
+    const url = `/.output/${info.id}/assets/manifest.json`;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(String(res.status));
+      entries = (await res.json()) as ManifestEntry[];
+      source = `<a href="${url}">manifest.json</a>`;
+    } catch {
+      el.innerHTML = '';
+      return;
+    }
+  }
+  if (!entries.length) {
+    el.innerHTML = '';
+    return;
+  }
+  // The hints themselves — exactly what the manifest is for. Removed and
+  // re-added per animation so a previous one's preloads do not linger.
+  for (const l of document.head.querySelectorAll('link[data-ulottie-preload]'))
+    l.remove();
+  for (const e of entries) {
+    const link = document.createElement('link');
+    link.rel = 'preload';
+    link.as = 'image';
+    link.href = e.url;
+    link.setAttribute('data-ulottie-preload', '');
+    document.head.appendChild(link);
+  }
+  const total = entries.reduce((n, e) => n + e.bytes, 0);
+  el.innerHTML =
+    `<div class="chips"><span class="k">Extracted images</span>` +
+    entries
+      .map(
+        (e) =>
+          `<a class="chip" href="${e.url}">${e.file}</a>` +
+          `<span class="chip">${e.mime} · ${fmtBytes(e.bytes)}</span>`,
+      )
+      .join('') +
+    `</div>` +
+    `<div class="note">${entries.length} image(s), ${fmtBytes(total)}, preloaded via ` +
+      `<code>&lt;link rel="preload" as="image"&gt;</code> from ${source} — they ` +
+      `load ahead of the module instead of inside it.</div>`;
 }
 
 // ---------------------------------------------------------------------------

@@ -14,7 +14,10 @@
 // added on the way in and taken off on the way out. It only shows on an
 // animation whose `ip` is not 0 — `lf20_tWzLYe` starts at 3.0000001 and was
 // being compared three frames out of step, which read as a rendering bug.
-export function player(container, svg, markup, apply, fr, ip, op, opt) {
+// `adopt` says the `<svg>` was found in the container rather than built: the
+// player then leaves it there on `destroy()` — it was never this module's to
+// clear, whether the page served it or a previous mount did.
+export function player(container, svg, markup, apply, fr, ip, op, opt, adopt) {
   const span = op - ip || 1;
   let raf = 0;
   let prev = 0;
@@ -92,7 +95,7 @@ export function player(container, svg, markup, apply, fr, ip, op, opt) {
     },
     destroy() {
       halt();
-      if (!opt.hydrate) container.innerHTML = '';
+      if (!adopt) container.innerHTML = '';
     },
   };
 

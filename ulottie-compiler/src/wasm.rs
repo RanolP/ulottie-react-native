@@ -12,7 +12,8 @@ use serde::Serialize as _;
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    CompileOptions, EmbeddedFeatures, MarkupMode, RuntimeMode, backend, ir, lottie, minified_driver,
+    AssetOptions, CompileOptions, EmbeddedFeatures, ExtractedAsset, MarkupMode, RuntimeMode,
+    backend, ir, lottie, minified_driver,
 };
 
 /// Outcome of compiling one Lottie animation. JS reads the byte arrays via
@@ -25,6 +26,10 @@ pub struct CompileResult {
     compiled_embedded: Vec<u8>,
     compiled_extracted: Vec<u8>,
     sprite_svg: Vec<u8>,
+    // The SSR pair: the baked document, and the self-contained module with no
+    // markup of its own that hydrates it.
+    compiled_hydrate: Vec<u8>,
+    document_svg: Vec<u8>,
     runtime_slice: Vec<u8>,
     // The same artifacts as the compiler writes them before minification —
     // what the demo's viewer shows. Producing them here rather than
@@ -33,6 +38,8 @@ pub struct CompileResult {
     pretty_js: Vec<u8>,
     pretty_embedded: Vec<u8>,
     pretty_extracted: Vec<u8>,
+    pretty_hydrate: Vec<u8>,
+    pretty_document: Vec<u8>,
     pretty_slice: Vec<u8>,
     pretty_sprite: Vec<u8>,
     driver_min_js: Vec<u8>,
@@ -44,6 +51,11 @@ pub struct CompileResult {
     feature_cost_gradient: i64,
     plan: serde_json::Value,
     unsupported: serde_json::Value,
+    // Images extraction pulled out of the markup. The markup references them
+    // as `assets/<name>` (the same stable spelling the CLI writes); the JS
+    // side mints a Blob URL per file and rewrites the references, which is the
+    // in-browser stand-in for a server that writes the files and serves them.
+    assets: Vec<ExtractedAsset>,
 }
 
 #[wasm_bindgen]
@@ -73,6 +85,20 @@ impl CompileResult {
         bytes(&self.sprite_svg)
     }
 
+    /// The self-contained hydration module: no markup, adopts a served
+    /// `documentSvg`.
+    #[wasm_bindgen(getter, js_name = compiledHydrate)]
+    pub fn compiled_hydrate(&self) -> Uint8Array {
+        bytes(&self.compiled_hydrate)
+    }
+
+    /// The baked document — the SSR response, and what `compiledHydrate`
+    /// hydrates.
+    #[wasm_bindgen(getter, js_name = documentSvg)]
+    pub fn document_svg(&self) -> Uint8Array {
+        bytes(&self.document_svg)
+    }
+
     /// Minified source of only the runtime modules this animation imports —
     /// what a bundler ships for it, as opposed to `driverMinJs`, the ceiling.
     #[wasm_bindgen(getter, js_name = runtimeSlice)]
@@ -95,6 +121,16 @@ impl CompileResult {
         bytes(&self.pretty_extracted)
     }
 
+    #[wasm_bindgen(getter, js_name = prettyHydrate)]
+    pub fn pretty_hydrate(&self) -> Uint8Array {
+        bytes(&self.pretty_hydrate)
+    }
+
+    #[wasm_bindgen(getter, js_name = prettyDocument)]
+    pub fn pretty_document(&self) -> Uint8Array {
+        bytes(&self.pretty_document)
+    }
+
     #[wasm_bindgen(getter, js_name = prettySlice)]
     pub fn pretty_slice(&self) -> Uint8Array {
         bytes(&self.pretty_slice)
@@ -108,6 +144,30 @@ impl CompileResult {
     #[wasm_bindgen(getter, js_name = driverMinJs)]
     pub fn driver_min_js(&self) -> Uint8Array {
         bytes(&self.driver_min_js)
+    }
+
+    /// How many images were extracted from the markup.
+    #[wasm_bindgen(getter, js_name = assetCount)]
+    pub fn asset_count(&self) -> usize {
+        self.assets.len()
+    }
+
+    /// Extracted asset `i`'s file name (`img_<hash>.<ext>`), or `undefined`.
+    #[wasm_bindgen(js_name = assetName)]
+    pub fn asset_name(&self, i: usize) -> Option<String> {
+        self.assets.get(i).map(|a| a.name.clone())
+    }
+
+    /// Extracted asset `i`'s MIME type, or `undefined`.
+    #[wasm_bindgen(js_name = assetMime)]
+    pub fn asset_mime(&self, i: usize) -> Option<String> {
+        self.assets.get(i).map(|a| a.mime.clone())
+    }
+
+    /// Extracted asset `i`'s decoded bytes — the file to serve (as a Blob, here).
+    #[wasm_bindgen(js_name = assetBytes)]
+    pub fn asset_bytes(&self, i: usize) -> Option<Uint8Array> {
+        self.assets.get(i).map(|a| bytes(&a.bytes))
     }
 
     /// What the AOT stage decided: capabilities, imports, instancing, counts.
@@ -170,32 +230,76 @@ pub fn compile_request(json_text: &str) -> Result<CompileResult, JsError> {
     let found = crate::unsupported(json_text).unwrap_or_default();
     let allow: std::collections::BTreeSet<_> = found.iter().map(|f| f.feature).collect();
 
+    // Same delivery shape as the dev server: oversized embedded images come
+    // out of the markup as `assets/<name>` references, handed back as bytes
+    // for the page to mint Blob URLs from. There is nowhere to write files in
+    // a page — rewriting the reference is the whole difference.
+    let assets_on = || AssetOptions {
+        extract: true,
+        ..Default::default()
+    };
+    let mut assets: Vec<ExtractedAsset> = Vec::new();
+    let mut keep = |more: Vec<ExtractedAsset>| {
+        for a in more {
+            if !assets.iter().any(|x| x.name == a.name) {
+                assets.push(a);
+            }
+        }
+    };
+
     let opts = |m| CompileOptions {
         runtime_mode: m,
         allow: allow.clone(),
+        assets: assets_on(),
         ..Default::default()
     };
     let report = backend::report(&module, &opts(RuntimeMode::Extern))
         .map_err(|e| JsError::new(&format!("compile extern: {e}")))?
         .ok_or_else(|| JsError::new("data backend can't encode this fixture"))?;
+    keep(report.assets.clone());
     let compiled_js = report.js.clone();
-    let compiled_embedded = backend::compile(&module, &opts(RuntimeMode::Embedded))
+    let embedded_rep = backend::report(&module, &opts(RuntimeMode::Embedded))
         .map_err(|e| JsError::new(&format!("compile embedded: {e}")))?
-        .unwrap_or_default();
+        .ok_or_else(|| JsError::new("data backend can't encode this fixture"))?;
+    keep(embedded_rep.assets.clone());
+    let compiled_embedded = embedded_rep.js;
 
     // Extracted delivery: the module carries only the `<svg>` shell and the
     // markup ships as a sprite the page inlines or preloads.
     let extracted_opts = CompileOptions {
         markup: MarkupMode::Extracted("anim".into()),
         allow: allow.clone(),
+        assets: assets_on(),
         ..Default::default()
     };
-    let compiled_extracted = backend::compile(&module, &extracted_opts)
+    let extracted_rep = backend::report(&module, &extracted_opts)
         .map_err(|e| JsError::new(&format!("compile extracted: {e}")))?
-        .unwrap_or_default();
-    let sprite_svg = crate::compile_symbol(json_text, "anim")
-        .map(|sym| crate::sprite(&[sym]))
-        .unwrap_or_default();
+        .ok_or_else(|| JsError::new("data backend can't encode this fixture"))?;
+    keep(extracted_rep.assets.clone());
+    let compiled_extracted = extracted_rep.js;
+    let sprite_out = crate::compile_symbol_with(json_text, "anim", &extracted_opts)
+        .map_err(|e| JsError::new(&format!("compile sprite: {e}")))?;
+    keep(sprite_out.assets);
+    let sprite_svg = crate::sprite(&[sprite_out.svg]);
+
+    // The SSR pair. The document is what a server renders into the HTML; the
+    // hydration module is the self-contained build with no markup in it.
+    let hydrate_opts = CompileOptions {
+        runtime_mode: RuntimeMode::Embedded,
+        markup: MarkupMode::None,
+        allow: allow.clone(),
+        assets: assets_on(),
+        ..Default::default()
+    };
+    let hydrate_rep = backend::report(&module, &hydrate_opts)
+        .map_err(|e| JsError::new(&format!("compile hydrate: {e}")))?
+        .ok_or_else(|| JsError::new("data backend can't encode this fixture"))?;
+    keep(hydrate_rep.assets.clone());
+    let compiled_hydrate = hydrate_rep.js;
+    let document_out = crate::compile_document_with(json_text, &opts(RuntimeMode::Extern))
+        .map_err(|e| JsError::new(&format!("compile document: {e}")))?;
+    keep(document_out.assets);
+    let document_svg = document_out.svg;
 
     let runtime_slice = if report.is_static {
         String::new()
@@ -208,6 +312,7 @@ pub fn compile_request(json_text: &str) -> Result<CompileResult, JsError> {
         markup,
         allow: allow.clone(),
         minify: false,
+        assets: assets_on(),
         ..Default::default()
     };
     let pretty_js = backend::compile(&module, &unmin(RuntimeMode::Extern, MarkupMode::Inline))
@@ -223,6 +328,10 @@ pub fn compile_request(json_text: &str) -> Result<CompileResult, JsError> {
     )
     .unwrap_or_default()
     .unwrap_or_default();
+    let pretty_hydrate = backend::compile(&module, &unmin(RuntimeMode::Embedded, MarkupMode::None))
+        .unwrap_or_default()
+        .unwrap_or_default();
+    let pretty_document = crate::markup_pretty(&document_svg);
     let pretty_sprite = crate::markup_pretty(&sprite_svg);
     let pretty_slice = if report.is_static {
         String::new()
@@ -300,10 +409,14 @@ pub fn compile_request(json_text: &str) -> Result<CompileResult, JsError> {
         compiled_embedded: compiled_embedded.into_bytes(),
         compiled_extracted: compiled_extracted.into_bytes(),
         sprite_svg: sprite_svg.into_bytes(),
+        compiled_hydrate: compiled_hydrate.into_bytes(),
+        document_svg: document_svg.into_bytes(),
         runtime_slice: runtime_slice.into_bytes(),
         pretty_js: pretty_js.into_bytes(),
         pretty_embedded: pretty_embedded.into_bytes(),
         pretty_extracted: pretty_extracted.into_bytes(),
+        pretty_hydrate: pretty_hydrate.into_bytes(),
+        pretty_document: pretty_document.into_bytes(),
         pretty_slice: pretty_slice.into_bytes(),
         pretty_sprite: pretty_sprite.into_bytes(),
         driver_min_js: driver_min_js.into_bytes(),
@@ -315,6 +428,7 @@ pub fn compile_request(json_text: &str) -> Result<CompileResult, JsError> {
         feature_cost_gradient,
         plan,
         unsupported,
+        assets,
     })
 }
 

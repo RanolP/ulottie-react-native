@@ -1,7 +1,7 @@
 /// <reference types="vitest" />
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { cp, mkdir, readdir, rm, stat, utimes } from 'node:fs/promises';
+import { cp, mkdir, readdir, stat, utimes } from 'node:fs/promises';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { gzipSync } from 'node:zlib';
@@ -11,7 +11,7 @@ import { playwright } from '@vitest/browser-playwright';
 import { compare as odiffCompare } from 'odiff-bin';
 import { defineConfig, type Plugin } from 'vitest/config';
 
-import { DEV_PORT, TEST_PORT, startCompileServer } from './global-setup.ts';
+import { DEV_PORT, TEST_PORT, buildWasm, startCompileServer } from './global-setup.ts';
 
 // One config for three jobs: `vite` serves the demo, `vite build` produces the
 // static deploy, `vitest` runs the suites. They share almost nothing except the
@@ -19,7 +19,7 @@ import { DEV_PORT, TEST_PORT, startCompileServer } from './global-setup.ts';
 
 const here = import.meta.dirname;
 const workspace = path.dirname(here);
-const compilerDir = path.join(workspace, 'ulottie-compiler');
+
 const fixturesDir = path.join(workspace, '_fixtures', 'animations');
 const publicDir = path.join(here, 'demo', 'public');
 // The wasm glue is an ES module the worker imports, so it has to be in the
@@ -133,23 +133,10 @@ function demoAssets(command: 'serve' | 'build'): Plugin {
       if (command === 'serve' && (await exists(path.join(wasmDst, 'ulottie_compiler_bg.wasm')))) {
         return;
       }
-      if (process.env.ULOTTIE_SKIP_WASM) return;
-
-      // wasm-pack 0.15's `--out-dir` maps onto cargo's unstable
-      // `--artifact-dir`, which the stable toolchain rejects — so build into
-      // the crate's default pkg/ and move it ourselves.
-      const pkgDir = path.join(compilerDir, 'pkg');
-      await rm(pkgDir, { recursive: true, force: true });
-      await run(
-        'wasm-pack',
-        ['build', '--release', '--target', 'web', '--no-default-features', '--features', 'wasm,eval'],
-        compilerDir,
-      );
-      if (!(await exists(path.join(pkgDir, 'ulottie_compiler_bg.wasm')))) {
-        throw new Error('wasm-pack produced no wasm — check the build log above');
-      }
-      await rm(wasmDst, { recursive: true, force: true });
-      await cp(pkgDir, wasmDst, { recursive: true });
+      // The build itself (wasm-pack invocation, pkg/ shuffle, destination) is
+      // shared with the test setup — one rule, so the shipped artifact and
+      // the tested one cannot drift.
+      await buildWasm();
     },
   };
 }
@@ -174,6 +161,25 @@ declare module 'vitest/browser' {
     ) => Promise<{ match: boolean; diffPercentage: number; diffPath?: string; reason?: string }>;
     /** Print a block of text on the host, so browser-side reports are visible. */
     report: (text: string) => Promise<void>;
+    /**
+     * Compile a fixture through the release CLI with asset extraction on, into
+     * the shared `.output/` dir the test server serves — the SSR e2e in
+     * `tests/assets.spec.ts` needs both the host (shell out, check files) and
+     * the browser (mount, hydrate), and this is the bridge. The module lands
+     * directly under `.output/` so its `./runtime/**` imports resolve against
+     * the server's runtime route.
+     */
+    ssrCompile: (fixture: string) => Promise<{
+      moduleUrl: string;
+      module: string;
+      /** The `--no-markup` hydration module (self-contained), and its URL. */
+      hydrateUrl: string;
+      hydrate: string;
+      sprite: string;
+      document: string;
+      manifest: { url: string; file: string; mime: string; bytes: number }[];
+      assetFiles: string[];
+    }>;
   }
 }
 
@@ -231,7 +237,7 @@ export default defineConfig(({ command }) => ({
       {
         test: {
           name: 'browser',
-          include: ['tests/visual.spec.ts', 'tests/perf.spec.ts'],
+          include: ['tests/visual.spec.ts', 'tests/perf.spec.ts', 'tests/assets.spec.ts'],
           browser: {
             enabled: true,
             provider: playwright(),
@@ -240,6 +246,64 @@ export default defineConfig(({ command }) => ({
             commands: {
               async report(_ctx: unknown, text: string) {
                 process.stdout.write(text + '\n');
+              },
+              /** Host side of `tests/assets.spec.ts`: run the release CLI with
+               *  `--assets` (threshold 0, so the tiny fixture image is
+               *  extracted) and hand the browser the artifacts it produced. */
+              async ssrCompile(_ctx: unknown, fixture: string) {
+                const { execFileSync } = await import('node:child_process');
+                const { mkdir, readdir, readFile } = await import('node:fs/promises');
+                const outDir = path.join(here, '.output');
+                await mkdir(outDir, { recursive: true });
+                const compiler = path.join(workspace, 'target', 'release', 'ulottie-compiler');
+                const src = path.join(fixturesDir, `${fixture}.json`);
+                const mod = path.join(outDir, 'ssr-e2e.js');
+                const hydrate = path.join(outDir, 'ssr-e2e.hydrate.js');
+                const sprite = path.join(outDir, 'ssr-e2e.sprite.svg');
+                const doc = path.join(outDir, 'ssr-e2e.document.svg');
+                const run = (args: string[]) =>
+                  execFileSync(compiler, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+                // Inline-markup module — the ordinary one, which also hydrates.
+                run([src, '-o', mod, '--assets', 'assets', '--asset-threshold', '0']);
+                // The SSR module: no markup, adopts the served document.
+                run([
+                  src,
+                  '-o',
+                  hydrate,
+                  '--embedded',
+                  '--no-markup',
+                  '--assets',
+                  'assets',
+                  '--asset-threshold',
+                  '0',
+                ]);
+                // Sprite variant: module is a shell, markup lives in the sprite.
+                run([
+                  src,
+                  '-o',
+                  path.join(outDir, 'ssr-e2e.extracted.js'),
+                  '--extract',
+                  sprite,
+                  '--symbol-id',
+                  'ssr-e2e',
+                  '--assets',
+                  'assets',
+                  '--asset-threshold',
+                  '0',
+                ]);
+                // The baked document — the SSR response, and the hydration source.
+                run([src, '--document', '-o', doc, '--assets', 'assets', '--asset-threshold', '0']);
+                const assetsDir = path.join(outDir, 'assets');
+                return {
+                  moduleUrl: '/.output/ssr-e2e.js',
+                  module: await readFile(mod, 'utf8'),
+                  hydrateUrl: '/.output/ssr-e2e.hydrate.js',
+                  hydrate: await readFile(hydrate, 'utf8'),
+                  sprite: await readFile(sprite, 'utf8'),
+                  document: await readFile(doc, 'utf8'),
+                  manifest: JSON.parse(await readFile(path.join(assetsDir, 'manifest.json'), 'utf8')),
+                  assetFiles: (await readdir(assetsDir)).filter((f) => f !== 'manifest.json'),
+                };
               },
               async odiffCompare(
                 _ctx: unknown,

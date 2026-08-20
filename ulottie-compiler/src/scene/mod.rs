@@ -15,6 +15,7 @@
 
 mod bake;
 mod build;
+pub mod assets;
 pub mod flat;
 mod instance;
 pub mod prop;
@@ -29,6 +30,7 @@ use serde::ser::SerializeSeq;
 use serde::{Serialize, Serializer};
 
 use crate::data::Payload;
+use crate::ir;
 
 pub use instance::AssetPlan;
 use prop::{Easing, LINEAR, Prop};
@@ -167,6 +169,11 @@ bitflags! {
         const TRANSFORM_SKEW = 1 << 35;
         /// Animated layer-effect parameters (blur sigma, shadow offset…).
         const FX           = 1 << 36;
+        /// The markup is served by the page and the module adopts it
+        /// (`MarkupMode::None`) — and it carries generated ids, so the
+        /// adopted tree's id marker has to be rewritten per mount. Like
+        /// `EXTRACTED`, a delivery property the planner never sets.
+        const SERVED       = 1 << 37;
     }
 }
 
@@ -217,10 +224,11 @@ impl Scene {
         let mut dropped = false;
         let mut cull = |slot: &mut Option<String>| {
             if let Some(n) = slot
-                && !mentioned(n) {
-                    *slot = None;
-                    dropped = true;
-                }
+                && !mentioned(n)
+            {
+                *slot = None;
+                dropped = true;
+            }
         };
         // Both tables, the way `prune_names` does it: an instanced precomp
         // keeps its records on the asset, and those carry the effects every
@@ -654,9 +662,22 @@ pub fn shell(markup: &str) -> String {
 }
 
 /// A standalone sprite file holding one or more symbols.
+///
+/// The root keeps itself out of the page by being positioned out of flow at
+/// zero size — **never `display:none`**. A `<symbol>` draws nothing on its
+/// own either way, but the paint servers it carries (`ripple`'s gradient
+/// strokes) are referenced by id from wherever the symbol is *instanced*,
+/// and Chromium does not paint a gradient whose definition sits inside a
+/// `display:none` subtree: a page that inlines the sprite and draws
+/// `<use href="#id">` — the script-free first frame — then gets every plain
+/// fill and none of the gradient strokes. That was `ripple`'s "dots but no
+/// wires" (see HANDOFF, *Extracted markup*); masks and clip paths happen to
+/// survive it, which is why no other fixture showed anything. Inline style,
+/// not `width="0"` attributes, so a page's own `svg { width: 100% }` cannot
+/// undo it.
 pub fn sprite(symbols: &[String]) -> String {
     format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" style=\"display:none\">{}</svg>",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" style=\"position:absolute;width:0;height:0\">{}</svg>",
         symbols.concat()
     )
 }
@@ -697,12 +718,6 @@ pub fn merge_sprite(existing: &str, symbol: &str, id: &str) -> String {
     sprite(&kept)
 }
 
-/// Substitute the per-instance id marker. The runtime does this with a unique
-/// suffix per mount; a standalone document uses a fixed one.
-pub fn resolve_ids(markup: &str, instance: u32) -> String {
-    markup.replace(svg::ID_MARK, &format!("-{instance}"))
-}
-
 // ---------------------------------------------------------------------------
 // Element arena
 // ---------------------------------------------------------------------------
@@ -722,8 +737,8 @@ pub(crate) struct El {
 // Planner
 // ---------------------------------------------------------------------------
 
-pub fn plan(payload: &Payload, keep_z: bool) -> Result<Scene> {
-    plan_with(payload, keep_z, DEFAULT_INLINE_LIMIT, false)
+pub fn plan(payload: &Payload, keep_z: bool, bodies: &[ir::Expression]) -> Result<Scene> {
+    plan_with(payload, keep_z, DEFAULT_INLINE_LIMIT, false, bodies)
 }
 
 /// Above this many bytes of markup, repeated subtrees are factored out rather
@@ -748,10 +763,12 @@ pub fn plan_with(
     keep_z: bool,
     inline_limit: usize,
     instance_precomps: bool,
+    bodies: &[ir::Expression],
 ) -> Result<Scene> {
     let mut p = Planner {
         payload,
         keep_z,
+        bodies,
         els: Vec::new(),
         bindings: Vec::new(),
         slots: Vec::new(),
@@ -785,6 +802,8 @@ pub fn plan_with(
         uses_clone_ids: false,
         defs_local: None,
         id_seq: 0,
+        expr_cache: std::cell::RefCell::new(HashMap::new()),
+        expr_depth: std::cell::Cell::new(0),
     };
 
     let roots = p.build_layer_forest(&payload.l, build::TimeCtx::Root)?;
@@ -960,12 +979,22 @@ pub(crate) struct Planner<'a> {
     /// inside the cloned body instead of the document's shared `<defs>`.
     defs_local: Option<Vec<usize>>,
     id_seq: usize,
+    /// Expression bodies, indexed by the `Prop::Expr` id — what the bake's
+    /// frame-aware interpreter ([`bake`]) runs. Empty when there are none.
+    bodies: &'a [ir::Expression],
+    /// Bake-time expression evaluation: `(id, owner, frame) → value`, so a
+    /// body many bindings share is interpreted once. Also the cycle breaker
+    /// under the depth cap.
+    expr_cache: std::cell::RefCell<ExprCache>,
+    expr_depth: std::cell::Cell<u32>,
 }
+
+/// Bake-time expression evaluation: `(id, owner, frame) → value`.
+type ExprCache = HashMap<(u32, Option<u32>, u64), Option<prop::Prop>>;
 
 /// Containers whose children describe a region rather than draw one. A `<path>`
 /// in here is a contour of a shape, not a mark on the canvas.
 const NON_RENDERING: &[&str] = &["defs", "clipPath", "mask", "symbol", "pattern", "marker"];
-
 
 impl<'a> Planner<'a> {
     // -- arena --------------------------------------------------------------
@@ -1007,7 +1036,6 @@ impl<'a> Planner<'a> {
     }
 
     // -- pruning ------------------------------------------------------------
-
 
     /// Drop groups that carry nothing: no attributes, no bindings, or no
     /// children at all. A `<g>` that only ever existed to hold an identity
@@ -1311,14 +1339,7 @@ impl<'a> Planner<'a> {
         }
     }
 
-    fn expand_one(
-        &mut self,
-        asset: u32,
-        el_base: u32,
-        parent_slot: u32,
-        offset: f64,
-        rate: f64,
-    ) {
+    fn expand_one(&mut self, asset: u32, el_base: u32, parent_slot: u32, offset: f64, rate: f64) {
         // An unstretched use folds its start time into each first-level row;
         // a stretched one needs a clock of its own, because
         // `(parent − offset) / rate` does not distribute over the rows'
@@ -1484,9 +1505,12 @@ mod sprite_tests {
     #[test]
     fn a_sprite_holds_several_symbols_and_does_not_render() {
         let out = sprite(&[symbol(DOC, "a"), symbol(DOC, "b")]);
-        assert!(
-            out.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\" style=\"display:none\">")
-        );
+        assert!(out.starts_with(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" style=\"position:absolute;width:0;height:0\">"
+        ));
+        // Out of flow, not `display:none`: the paint servers inside would not
+        // be painted through `<use>` otherwise (see `sprite`).
+        assert!(!out.contains("display:none"));
         assert!(out.contains("id=\"a\"") && out.contains("id=\"b\""));
         assert!(out.ends_with("</svg>"));
     }

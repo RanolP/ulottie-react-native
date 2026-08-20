@@ -35,7 +35,11 @@ struct Cli {
 
     /// Write the animation's document template — one standalone SVG with every
     /// compile-time-resolvable value in it — instead of a JS module. Renders
-    /// with no script, so it works for SSR, `<noscript>`, or hydration.
+    /// with no script, so it works for SSR, `<noscript>`, or hydration (pair
+    /// it with `--no-markup` for the module that hydrates it). Generated ids
+    /// keep their `--u` marker: valid as-is, rewritten per mount by the
+    /// hydrating module; a page inlining several copies *without* hydrating
+    /// them should replace the marker per copy.
     #[arg(long)]
     document: bool,
 
@@ -67,6 +71,14 @@ struct Cli {
     #[arg(long, value_name = "ID")]
     symbol_id: Option<String>,
 
+    /// Compile the hydration module for a server-rendered document: the module
+    /// carries no markup at all, and `init(el)` adopts the `<svg>` already in
+    /// `el` — the one `--document` wrote, served in the HTML — rewriting its
+    /// id marker per mount. Strictly smaller than the default module, which
+    /// carries the same document as a string it never reads on that path.
+    #[arg(long, conflicts_with = "extract")]
+    no_markup: bool,
+
     /// Force precomp instancing on. By default the compiler decides per
     /// animation, by compiling both ways and keeping the smaller compressed
     /// module — a large win on heavily-instanced files, a loss on light ones.
@@ -76,6 +88,68 @@ struct Cli {
     /// Force precomp instancing off.
     #[arg(long)]
     no_instance_precomps: bool,
+
+    /// Extract embedded images above a size threshold (default 4096 decoded
+    /// bytes) into files under this directory, written next to the output
+    /// file, and reference them by URL instead of a data URI. Larger images
+    /// then load concurrently with the module instead of inside it.
+    ///
+    /// `<DIR>/manifest.json` lists them (`url`, `file`, `mime`, `bytes`) so a
+    /// web server can emit 103 Early Hints / `<link rel=preload>` for exactly
+    /// what the markup will request. The files must be served alongside the
+    /// module at `<DIR>/`, and the markup references them as `<DIR>/<file>`.
+    #[arg(long, value_name = "DIR")]
+    assets: Option<String>,
+
+    /// Only images whose decoded size is *strictly above* this many bytes are
+    /// extracted; smaller ones stay inline as data URIs (a data URI smaller
+    /// than the request that would replace it is the cheaper delivery).
+    /// Only meaningful with `--assets`.
+    #[arg(long, default_value_t = 4096)]
+    asset_threshold: usize,
+}
+
+/// The asset options implied by `--assets <DIR>`: on, with `url_base` taken
+/// from the directory (slash-terminated) so the markup and the manifest agree.
+fn asset_options(cli: &Cli) -> ulottie_compiler::AssetOptions {
+    match &cli.assets {
+        Some(dir) => ulottie_compiler::AssetOptions {
+            extract: true,
+            url_base: if dir.ends_with('/') {
+                dir.clone()
+            } else {
+                format!("{dir}/")
+            },
+            threshold: cli.asset_threshold,
+        },
+        None => ulottie_compiler::AssetOptions::default(),
+    }
+}
+
+/// Write the extracted assets and their manifest under `dir`, relative to the
+/// output file the markup ships next to — the same convention `--extract`
+/// uses for the sprite.
+fn write_assets(
+    output: &std::path::Path,
+    dir: &str,
+    assets: &[ulottie_compiler::ExtractedAsset],
+    manifest: &str,
+) -> Result<()> {
+    if assets.is_empty() && manifest == "[]" {
+        return Ok(());
+    }
+    let root = output.parent().unwrap_or(std::path::Path::new(".")).join(dir);
+    std::fs::create_dir_all(&root)?;
+    for a in assets {
+        std::fs::write(root.join(&a.name), &a.bytes)?;
+    }
+    std::fs::write(root.join("manifest.json"), manifest)?;
+    eprintln!(
+        "Extracted {} asset(s) -> {}",
+        assets.len(),
+        root.display()
+    );
+    Ok(())
 }
 
 /// The symbol id for `--extract`: explicit, or the input's file stem.
@@ -122,22 +196,39 @@ fn main() -> Result<()> {
     ulottie_compiler::check_supported(&json, &allow)?;
 
     if cli.document {
-        let svg = if cli.pretty {
-            ulottie_compiler::compile_document_pretty(&json)?
-        } else {
-            ulottie_compiler::compile_document(&json)?
-        };
         let output = cli
             .output
+            .clone()
             .unwrap_or_else(|| cli.input.with_extension("svg"));
-        std::fs::write(&output, &svg)?;
+        let assets = asset_options(&cli);
+        if assets.extract {
+            let out = ulottie_compiler::compile_document_with(&json, &ulottie_compiler::CompileOptions {
+                assets,
+                ..Default::default()
+            })?;
+            let svg = if cli.pretty {
+                ulottie_compiler::markup_pretty(&out.svg)
+            } else {
+                out.svg
+            };
+            std::fs::write(&output, &svg)?;
+            write_assets(&output, cli.assets.as_deref().unwrap(), &out.assets, &out.manifest)?;
+        } else {
+            let svg = if cli.pretty {
+                ulottie_compiler::compile_document_pretty(&json)?
+            } else {
+                ulottie_compiler::compile_document(&json)?
+            };
+            std::fs::write(&output, &svg)?;
+        }
         eprintln!("Wrote {} -> {}", cli.input.display(), output.display());
         return Ok(());
     }
 
-    let markup = match &cli.extract {
-        None => ulottie_compiler::MarkupMode::Inline,
-        Some(_) => ulottie_compiler::MarkupMode::Extracted(symbol_id(&cli)?),
+    let markup = match (&cli.extract, cli.no_markup) {
+        (Some(_), _) => ulottie_compiler::MarkupMode::Extracted(symbol_id(&cli)?),
+        (None, true) => ulottie_compiler::MarkupMode::None,
+        (None, false) => ulottie_compiler::MarkupMode::Inline,
     };
 
     let options = ulottie_compiler::CompileOptions {
@@ -151,16 +242,31 @@ fn main() -> Result<()> {
             (_, true) => ulottie_compiler::Instancing::Never,
             _ => ulottie_compiler::Instancing::Auto,
         },
+        assets: asset_options(&cli),
     };
-    let js = ulottie_compiler::compile_with(&json, &options)?;
+    let output = cli.output.clone().unwrap_or_else(|| cli.input.with_extension("js"));
 
-    let output = cli.output.unwrap_or_else(|| cli.input.with_extension("js"));
+    let (js, extracted) = if options.assets.extract {
+        let out = ulottie_compiler::compile_with_output(&json, &options)?;
+        (out.module.clone(), Some(out))
+    } else {
+        (ulottie_compiler::compile_with(&json, &options)?, None)
+    };
     std::fs::write(&output, &js)?;
+    if let Some(out) = &extracted {
+        write_assets(
+            &output,
+            cli.assets.as_deref().unwrap(),
+            &out.assets,
+            &out.manifest,
+        )?;
+    }
 
     eprintln!("Compiled {} -> {}", cli.input.display(), output.display());
 
     if let (Some(path), ulottie_compiler::MarkupMode::Extracted(id)) = (&cli.extract, &markup) {
-        let symbol = ulottie_compiler::compile_symbol(&json, id)?;
+        let symbol_out = ulottie_compiler::compile_symbol_with(&json, id, &options)?;
+        let symbol = symbol_out.svg;
         let sprite = match std::fs::read_to_string(path) {
             Ok(existing) => ulottie_compiler::scene::merge_sprite(&existing, &symbol, id),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -174,6 +280,14 @@ fn main() -> Result<()> {
             sprite
         };
         std::fs::write(path, &sprite)?;
+        if options.assets.extract {
+            write_assets(
+                path,
+                cli.assets.as_deref().unwrap(),
+                &symbol_out.assets,
+                &symbol_out.manifest,
+            )?;
+        }
         eprintln!("Extracted markup -> {} (#{id})", path.display());
     }
 

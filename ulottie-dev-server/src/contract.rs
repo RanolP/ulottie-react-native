@@ -52,6 +52,10 @@ pub struct Sizes {
     pub sprite: SizeEntry,
     /// Self-contained: runtime tree-shaken and inlined.
     pub js_embedded: SizeEntry,
+    /// Server-rendered: the baked document (what goes out in the HTML) and
+    /// the self-contained module that hydrates it, which carries no markup.
+    pub document: SizeEntry,
+    pub js_hydrate: SizeEntry,
     pub features: FeatureReport,
     /// The baseline a regular Lottie pipeline ships for the same fixture.
     pub lottie_runtime: SizeEntry,
@@ -100,6 +104,8 @@ pub struct CompileResponse {
     /// it is actually counting.
     pub js_extracted_url: String,
     pub sprite_url: String,
+    pub document_url: String,
+    pub js_hydrate_url: String,
     pub slice_url: String,
     /// The same artifacts unminified, from the compiler's own `--pretty` path
     /// — the form the snapshots are reviewed in. The viewer shows these rather
@@ -110,6 +116,8 @@ pub struct CompileResponse {
     pub js_embedded_pretty_url: String,
     pub js_extracted_pretty_url: String,
     pub sprite_pretty_url: String,
+    pub document_pretty_url: String,
+    pub js_hydrate_pretty_url: String,
     pub slice_pretty_url: String,
     pub name: Option<String>,
     pub total_frames: f64,
