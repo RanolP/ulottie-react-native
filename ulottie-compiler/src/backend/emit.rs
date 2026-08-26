@@ -90,7 +90,7 @@ pub fn modules() -> &'static [Mod] {
 ///
 /// Which capability each one needs is [`scene::caps_for_op`], not a column
 /// here — the planner sets the same bits when it binds.
-const OPS: [(u8, &str, &str, &str); 23] = [
+pub(crate) const OPS: [(u8, &str, &str, &str); 23] = [
     (op::TRANSFORM, "bTransform", "oTransform", "ops/tx.js"),
     (op::TRANSLATE, "bTranslate", "oTranslate", "ops/txt.js"),
     (op::OPACITY, "bOpacity", "oOpacity", "ops/opacity.js"),
@@ -215,7 +215,7 @@ fn roots(caps: Caps, helpers: &[&'static str]) -> Vec<&'static str> {
 }
 
 /// Every top-level declaration in the runtime, in dependency order.
-fn all_declarations() -> Vec<shake::Decl> {
+pub(crate) fn all_declarations() -> Vec<shake::Decl> {
     MODS.iter()
         .flat_map(|m| shake::declarations(m.src))
         .collect()
@@ -929,7 +929,7 @@ fn readable(
 
 /// Human-readable capability list, so a review diff shows when a change made an
 /// animation stop needing (or start needing) a runtime feature.
-fn caps_list(caps: Caps) -> String {
+pub(crate) fn caps_list(caps: Caps) -> String {
     let names: Vec<&str> = caps.iter_names().map(|(n, _)| n).collect();
     if names.is_empty() {
         "none".into()
@@ -1053,7 +1053,7 @@ fn fmt(v: f64) -> String {
 
 /// Single-quoted JS string literal. Generated markup only ever uses double
 /// quotes for attributes, so the common case needs no escaping at all.
-fn js_string(s: &str) -> String {
+pub(crate) fn js_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('\'');
     for ch in s.chars() {

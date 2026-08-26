@@ -45,6 +45,25 @@ pub enum Instancing {
     Never,
 }
 
+/// What the emitted module runs against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Target {
+    /// A browser: SVG markup plus per-frame attribute writes. The default.
+    #[default]
+    Web,
+    /// React Native: a static react-native-svg element-tree descriptor plus
+    /// per-frame prop-store writes, with every per-frame function emitted as a
+    /// reanimated worklet. Always self-contained, always inline-planned, and
+    /// stricter about what it accepts — see `backend::rn`.
+    ReanimatedAot,
+    /// React Native via @shopify/react-native-skia: a static display-list
+    /// descriptor plus the same per-frame prop writes, drawn imperatively into
+    /// an SkPicture by a worklet. Shares the reanimated-aot plumbing (wire,
+    /// programs, worklet emission) with the write point swapped — see
+    /// `backend::skia`.
+    SkiaAot,
+}
+
 /// Where a module's initial markup comes from.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum MarkupMode {
@@ -145,6 +164,11 @@ pub struct CompileOptions {
     /// Whether oversized embedded images become URL references plus a
     /// manifest of files to serve alongside the module.
     pub assets: AssetOptions,
+    /// What the emitted module runs against. [`Target::ReanimatedAot`] ignores
+    /// `runtime_mode`, `minify`, `inline_limit`, `markup`, `instance_precomps`
+    /// and `assets` — the RN module is always self-contained, unminified
+    /// (Metro workletizes and minifies downstream) and fully inlined.
+    pub target: Target,
 }
 
 impl Default for CompileOptions {
@@ -157,6 +181,7 @@ impl Default for CompileOptions {
             allow: Default::default(),
             instance_precomps: Instancing::default(),
             assets: AssetOptions::default(),
+            target: Target::default(),
         }
     }
 }
@@ -171,7 +196,7 @@ pub fn compile(json: &str) -> Result<String> {
 /// Same work as [`compile_with`]; the extra return value is what the size panel
 /// needs to explain a number instead of just printing it.
 pub fn compile_report(json: &str, options: &CompileOptions) -> Result<backend::Report> {
-    check_supported(json, &options.allow)?;
+    check_supported_for(json, &options.allow, options.target)?;
     let animation: lottie::Animation = serde_json::from_str(json)?;
     let module = ir::lower(&animation)?;
     backend::report(&module, options)?
@@ -179,7 +204,7 @@ pub fn compile_report(json: &str, options: &CompileOptions) -> Result<backend::R
 }
 
 pub fn compile_with(json: &str, options: &CompileOptions) -> Result<String> {
-    check_supported(json, &options.allow)?;
+    check_supported_for(json, &options.allow, options.target)?;
     let animation: lottie::Animation = serde_json::from_str(json)?;
     let module = ir::lower(&animation)?;
     backend::compile(&module, options)?
@@ -204,7 +229,7 @@ pub struct CompiledOutput {
 /// to `<url_base><asset.name>` and served alongside the module, or the images
 /// 404. The manifest's `url` entries use the same `url_base`.
 pub fn compile_with_output(json: &str, options: &CompileOptions) -> Result<CompiledOutput> {
-    check_supported(json, &options.allow)?;
+    check_supported_for(json, &options.allow, options.target)?;
     let animation: lottie::Animation = serde_json::from_str(json)?;
     let module = ir::lower(&animation)?;
     let report = backend::report(&module, options)?
@@ -223,8 +248,24 @@ pub fn check_supported(
     json: &str,
     allow: &std::collections::BTreeSet<support::Feature>,
 ) -> Result<()> {
+    check_supported_for(json, allow, Target::Web)
+}
+
+/// [`check_supported`], against one target's implemented set — the RN target
+/// refuses features the web emitter handles (filters, animated gradients,
+/// images, blend modes, expressions).
+pub fn check_supported_for(
+    json: &str,
+    allow: &std::collections::BTreeSet<support::Feature>,
+    target: Target,
+) -> Result<()> {
     let doc: serde_json::Value = serde_json::from_str(json)?;
-    if let Some(msg) = support::reject(&support::scan(&doc), allow) {
+    let findings = match target {
+        Target::Web => support::scan(&doc),
+        Target::ReanimatedAot => support::scan_rn(&doc),
+        Target::SkiaAot => support::scan_skia(&doc),
+    };
+    if let Some(msg) = support::reject(&findings, allow) {
         anyhow::bail!(msg);
     }
     Ok(())

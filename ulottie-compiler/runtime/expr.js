@@ -427,10 +427,14 @@ function zip(op, unit) {
   };
 }
 
-export const sum = zip((a, b) => a + b, 0);
-export const sub = zip((a, b) => a - b, 0);
-export const mul = zip((a, b) => a * b, 1);
-export const div = zip((a, b) => a / b, 1);
+// Written as function declarations calling zip per invocation, not as
+// `const sum = zip(...)` top-level calls: the reanimated babel plugin rewrites
+// 'worklet' function declarations into assignments, which kills hoisting, so a
+// top-level call of zip crashes on Hermes before zip is assigned.
+export function sum(a, b) { return zip((x, y) => x + y, 0)(a, b); }
+export function sub(a, b) { return zip((x, y) => x - y, 0)(a, b); }
+export function mul(a, b) { return zip((x, y) => x * y, 1)(a, b); }
+export function div(a, b) { return zip((x, y) => x / y, 1)(a, b); }
 export function clamp(v, lo, hi) {
   return Array.isArray(v)
     ? v.map((x) => Math.max(lo, Math.min(hi, x)))

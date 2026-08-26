@@ -107,6 +107,23 @@ struct Cli {
     /// Only meaningful with `--assets`.
     #[arg(long, default_value_t = 4096)]
     asset_threshold: usize,
+
+    /// Compilation target: `web` (the default) emits a browser module;
+    /// `reanimated-aot` emits a React Native module for react-native-svg +
+    /// react-native-reanimated — always self-contained and unminified (Metro
+    /// workletizes, then minifies), with the markup replaced by a static
+    /// element-tree descriptor. `skia-aot` is its @shopify/react-native-skia
+    /// twin: the markup becomes a display-list descriptor drawn imperatively
+    /// into an SkPicture by a worklet.
+    #[arg(long, value_enum, default_value_t = TargetArg::Web)]
+    target: TargetArg,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum TargetArg {
+    Web,
+    ReanimatedAot,
+    SkiaAot,
 }
 
 /// The asset options implied by `--assets <DIR>`: on, with `url_base` taken
@@ -188,12 +205,36 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    let target = match cli.target {
+        TargetArg::Web => ulottie_compiler::Target::Web,
+        TargetArg::ReanimatedAot => ulottie_compiler::Target::ReanimatedAot,
+        TargetArg::SkiaAot => ulottie_compiler::Target::SkiaAot,
+    };
+    if target != ulottie_compiler::Target::Web {
+        // These flags shape a browser module; the RN target is always
+        // self-contained, fully inlined, never instanced, tree-descriptored.
+        for (set, flag) in [
+            (cli.embedded, "--embedded"),
+            (cli.document, "--document"),
+            (cli.extract.is_some(), "--extract"),
+            (cli.no_markup, "--no-markup"),
+            (cli.assets.is_some(), "--assets"),
+            (cli.instance_precomps, "--instance-precomps"),
+        ] {
+            anyhow::ensure!(
+                !set,
+                "{flag} does not apply to a React Native target (the RN module is always \
+                 self-contained, fully inlined and never instanced)"
+            );
+        }
+    }
+
     let runtime_mode = if cli.embedded {
         ulottie_compiler::RuntimeMode::Embedded
     } else {
         ulottie_compiler::RuntimeMode::Extern
     };
-    ulottie_compiler::check_supported(&json, &allow)?;
+    ulottie_compiler::check_supported_for(&json, &allow, target)?;
 
     if cli.document {
         let output = cli
@@ -243,6 +284,7 @@ fn main() -> Result<()> {
             _ => ulottie_compiler::Instancing::Auto,
         },
         assets: asset_options(&cli),
+        target,
     };
     let output = cli.output.clone().unwrap_or_else(|| cli.input.with_extension("js"));
 

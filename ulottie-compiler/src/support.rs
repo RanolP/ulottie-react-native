@@ -27,6 +27,10 @@ pub enum Feature {
     TextGlyphMissing,
     UnknownLayerType,
     TrackMatte,
+    /// An inverted track matte (`tt: 2`/`tt: 4`). Only the reanimated-aot
+    /// target reports it — the web target inverts with an SVG filter that
+    /// react-native-svg does not implement.
+    TrackMatteInverted,
     BlendMode,
     TimeRemap,
     AutoOrient,
@@ -43,6 +47,9 @@ pub enum Feature {
     AnimatedGradient,
     ImageAsset,
     LayerEffect,
+    /// A property driven by an expression. Only the reanimated-aot target
+    /// reports it — the web target ships an expression engine.
+    Expression,
 }
 
 impl Feature {
@@ -59,6 +66,7 @@ impl Feature {
             TextGlyphMissing => "text-glyph-missing",
             UnknownLayerType => "unknown-layer-type",
             TrackMatte => "track-matte",
+            TrackMatteInverted => "track-matte-inverted",
             BlendMode => "blend-mode",
             TimeRemap => "time-remap",
             AutoOrient => "auto-orient",
@@ -75,6 +83,7 @@ impl Feature {
             AnimatedGradient => "animated-gradient",
             ImageAsset => "image-asset",
             LayerEffect => "layer-effect",
+            Expression => "expression",
         }
     }
 
@@ -91,6 +100,9 @@ impl Feature {
             TextGlyphMissing => "the text is not drawn (a character has no outline)",
             UnknownLayerType => "the layer is not drawn",
             TrackMatte => "the masked layer draws unmasked",
+            TrackMatteInverted => {
+                "the inverted track matte loses its inversion and masks like a plain one"
+            }
             BlendMode => "the layer composites normally",
             TimeRemap => "the time remap is ignored and the layer plays linearly",
             AutoOrient => "the layer keeps its authored rotation",
@@ -107,6 +119,7 @@ impl Feature {
             AnimatedGradient => "the gradient ramp is read as static and may render as NaN",
             ImageAsset => "the image has no source to draw from",
             LayerEffect => "the layer is drawn without the effect",
+            Expression => "the expression is ignored and the property plays its keyframes",
         }
     }
 
@@ -122,6 +135,7 @@ impl Feature {
             TextGlyphMissing,
             UnknownLayerType,
             TrackMatte,
+            TrackMatteInverted,
             BlendMode,
             TimeRemap,
             AutoOrient,
@@ -138,6 +152,7 @@ impl Feature {
             AnimatedGradient,
             ImageAsset,
             LayerEffect,
+            Expression,
         ];
         ALL.iter().copied().find(|f| f.name() == s)
     }
@@ -459,6 +474,189 @@ fn scan_shapes(shapes: &[Value], where_: &str, out: &mut Vec<Finding>) {
 }
 
 
+
+/// [`scan`], plus everything the reanimated-aot target refuses on top of the
+/// web set.
+///
+/// The RN emitter has no SVG filters, no per-stop gradient rebinding, no
+/// `<image>`, no `mix-blend-mode` and no expression engine — so features the
+/// web scan skips as implemented are findings here. The `--allow` escape hatch
+/// works the same way.
+pub fn scan_rn(doc: &Value) -> Vec<Finding> {
+    let mut out = scan(doc);
+    if let Some(layers) = doc.get("layers").and_then(Value::as_array) {
+        rn_layers(layers, "layers", &mut out);
+    }
+    for (i, asset) in doc
+        .get("assets")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .enumerate()
+    {
+        let id = asset.get("id").and_then(Value::as_str).unwrap_or("?");
+        let where_ = format!("assets[{i}] `{id}`");
+        // The web scan reports only a *sourceless* image; the RN tree has no
+        // `<image>` element at all, so any image asset is a refusal.
+        if asset.get("layers").is_none()
+            && !asset.get("p").and_then(Value::as_str).unwrap_or("").is_empty()
+        {
+            push(&mut out, Feature::ImageAsset, &where_);
+        }
+        if let Some(layers) = asset.get("layers").and_then(Value::as_array) {
+            rn_layers(layers, &where_, &mut out);
+        }
+    }
+    rn_expressions(doc, "", &mut out);
+    out.sort_by(|a, b| a.feature.cmp(&b.feature).then(a.location.cmp(&b.location)));
+    out.dedup_by(|a, b| a.feature == b.feature && a.location == b.location);
+    out
+}
+
+fn rn_layers(layers: &[Value], where_: &str, out: &mut Vec<Finding>) {
+    for (i, l) in layers.iter().enumerate() {
+        let name = l.get("nm").and_then(Value::as_str).unwrap_or("");
+        let at = if name.is_empty() {
+            format!("{where_}[{i}]")
+        } else {
+            format!("{where_}[{i}] `{name}`")
+        };
+        // The web emitter builds SVG filters for tint/fill/drop-shadow/blur;
+        // react-native-svg has no dependable counterpart, so every rendering
+        // effect is a refusal here.
+        for e in l
+            .get("ef")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+        {
+            let Some(ty) = e.get("ty").and_then(Value::as_u64) else {
+                continue;
+            };
+            if !RENDERING_EFFECTS.contains(&ty) || !matches!(ty, 20 | 21 | 25 | 29) {
+                continue;
+            }
+            let nm = e.get("nm").and_then(Value::as_str).unwrap_or("");
+            push(out, Feature::LayerEffect, &format!("{at} effect `{nm}`"));
+        }
+        // The web emitter writes blend modes 1–15 as CSS `mix-blend-mode`;
+        // there is no CSS on a react-native-svg element.
+        if matches!(l.get("bm").and_then(Value::as_u64), Some(1..=15)) {
+            push(out, Feature::BlendMode, &at);
+        }
+        // An inverted matte (`tt: 2` alpha, `tt: 4` luma) is inverted by an SVG
+        // `<filter><feComponentTransfer>`, which lives in markup rather than in
+        // a capability bit — so without this the RN scan waves it through. The
+        // RN emitter lowers that table to a `<feColorMatrix>` (the stubbed
+        // FeComponentTransfer would render the whole matte blank), but SVG
+        // filters inside masks are the least-trodden react-native-svg path, so
+        // the finding stays allow-gated rather than silently waved through.
+        if matches!(l.get("tt").and_then(Value::as_u64), Some(2) | Some(4)) {
+            push(out, Feature::TrackMatteInverted, &at);
+        }
+        if let Some(shapes) = l.get("shapes").and_then(Value::as_array) {
+            rn_shapes(shapes, &at, out);
+        }
+    }
+}
+
+fn rn_shapes(shapes: &[Value], where_: &str, out: &mut Vec<Finding>) {
+    for s in shapes {
+        // The web target rebinds `<stop>` elements per frame for the ramps it
+        // can represent; the RN tree keeps gradients static, so any animated
+        // gradient property refuses (ramp or geometry — `g`/`s`/`e`/`h`/`a`).
+        if s.get("g").is_some() {
+            let animated = ["g", "s", "e", "h", "a"].iter().any(|k| {
+                s.get(k)
+                    .map(|p| {
+                        p.get("a").and_then(Value::as_u64) == Some(1)
+                            || p.get("k")
+                                .and_then(|k| k.get("a"))
+                                .and_then(Value::as_u64)
+                                == Some(1)
+                    })
+                    .unwrap_or(false)
+            });
+            if animated {
+                push(out, Feature::AnimatedGradient, where_);
+            }
+        }
+        if let Some(items) = s.get("it").and_then(Value::as_array) {
+            rn_shapes(items, where_, out);
+        }
+    }
+}
+
+/// Any property object carrying an expression (`x` as a string next to `k`),
+/// anywhere in the document. The web target compiles these; the RN target has
+/// no engine yet.
+fn rn_expressions(v: &Value, path: &str, out: &mut Vec<Finding>) {
+    match v {
+        Value::Object(map) => {
+            if map.get("x").map(Value::is_string).unwrap_or(false) && map.contains_key("k") {
+                push(out, Feature::Expression, path);
+            }
+            for (k, child) in map {
+                let p = if path.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{path}.{k}")
+                };
+                rn_expressions(child, &p, out);
+            }
+        }
+        Value::Array(items) => {
+            for (i, child) in items.iter().enumerate() {
+                rn_expressions(child, &format!("{path}[{i}]"), out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// What the `skia-aot` target refuses.
+///
+/// Phase 2 implements the Skia-only capabilities the react-native-svg target
+/// cannot express — blend modes, animated gradients, the layer-effect filters
+/// the web emitter builds (tint/fill/drop-shadow/blur), and inverted mattes
+/// without the allow-gate — so this is the web [`scan`] plus exactly two
+/// additions: image assets whose source is not an embedded data URI (phase 3
+/// decodes embedded images at mount; an external URL has no loader on this
+/// target) and expressions (no engine on either RN target).
+pub fn scan_skia(doc: &Value) -> Vec<Finding> {
+    let mut out = scan(doc);
+    for (i, asset) in doc
+        .get("assets")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .enumerate()
+    {
+        let id = asset.get("id").and_then(Value::as_str).unwrap_or("?");
+        // The web scan reports only a *sourceless* image. Here an embedded
+        // data URI draws (decoded at mount), so the refusal narrows to
+        // sources the runtime cannot reach: external files and non-base64
+        // data URIs. The resolved source mirrors `scene::build_image` —
+        // `p` alone when `e` marks it complete, `u` + `p` otherwise.
+        if asset.get("layers").is_none() {
+            let p = asset.get("p").and_then(Value::as_str).unwrap_or("");
+            if !p.is_empty() {
+                let embedded = asset.get("e").and_then(Value::as_i64) == Some(1)
+                    && p.starts_with("data:")
+                    && p.contains(";base64,");
+                if !embedded {
+                    push(&mut out, Feature::ImageAsset, &format!("assets[{i}] `{id}`"));
+                }
+            }
+        }
+    }
+    rn_expressions(doc, "", &mut out);
+    out.sort_by(|a, b| a.feature.cmp(&b.feature).then(a.location.cmp(&b.location)));
+    out.dedup_by(|a, b| a.feature == b.feature && a.location == b.location);
+    out
+}
 
 /// Findings not covered by `allow`, formatted as a build error.
 pub fn reject(findings: &[Finding], allow: &BTreeSet<Feature>) -> Option<String> {

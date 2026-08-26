@@ -2,7 +2,9 @@
   "name": "ulottie",
   "private": true,
   "workspaces": [
-    "ulottie-dev-server"
+    "ulottie-dev-server",
+    "ulottie-react-native",
+    "examples/*"
   ],
   "packageManager": "yarn@4.18.0"
 }

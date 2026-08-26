@@ -10,8 +10,10 @@ pub mod emit;
 pub mod emit_expressions;
 pub mod layers;
 pub mod pretty;
+pub mod rn;
 pub mod runtime;
 pub mod shake;
+pub mod skia;
 
 use anyhow::Result;
 
@@ -140,6 +142,12 @@ fn describe(
 }
 
 pub fn report(module: &ir::Module, options: &crate::CompileOptions) -> Result<Option<Report>> {
+    if options.target == crate::Target::ReanimatedAot {
+        return rn::report(module, options);
+    }
+    if options.target == crate::Target::SkiaAot {
+        return skia::report(module, options);
+    }
     let runtime_mode = options.runtime_mode;
     if !data::can_encode(module) {
         return Ok(None);
