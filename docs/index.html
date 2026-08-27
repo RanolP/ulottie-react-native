@@ -209,6 +209,8 @@ details.more > summary {
 }
 details.more[open] > summary { border-bottom: 1px solid var(--grid); }
 details.more .tw { border: 0; border-radius: 0; margin: 12px 0; background: transparent; }
+details.more > figure.chart { border: 0; background: transparent; padding-left: 0; padding-right: 0; }
+details.more > details.more { margin-bottom: 16px; }
 details.more > .sec { margin: 14px 0 0; }
 
 /* ---------- svg line chart ---------- */
@@ -482,16 +484,17 @@ footer p { max-width: 74ch; }
 <section id="perf">
   <h2>Performance</h2>
   <p class="sec">
-    All timings come from dev-mode Metro bundles on a simulator or emulator.
+    The load is <b>mixed16</b>: 16 distinct heavy fixtures mounted at once (node sum 2281), 10 s probe, median of 3.
+    The rn-svg player mounts only the 12 it can compile (node sum 2185).
+    iOS is an iPhone 17 simulator; Android is an arm64 AVD (android-35, 60 Hz).
+    All timings come from dev-mode Metro bundles.
     <b>Read them as relative, not as production absolutes.</b>
-    Skottie by margelo was measured in a separate RN 0.74 old-arch app — cross-app comparison is indicative only.
+  </p>
+  <p class="sec">
+    Each metric below gets one iOS chart and one Android chart, both listing all eight players.
   </p>
 
-  <h3>The mixed16 load — iOS</h3>
-  <p class="sec">
-    16 distinct heavy fixtures mounted at once (node sum 2281), iPhone 17 simulator, 10 s probe, median of 3.
-    The rn-svg player mounts only the 12 it can compile (node sum 2185).
-  </p>
+  <h3>Mount → first frame</h3>
 
   <figure class="chart">
     <figcaption>Mount → first frame, iOS mixed16 (ms, median of 3)</figcaption>
@@ -554,6 +557,73 @@ footer p { max-width: 74ch; }
       row: 12 fixtures (node sum 2185), steady mean 206.2 ms, steady p50 218.0 ms, 42 dropped per 10 s.
     </div>
   </figure>
+
+  <figure class="chart">
+    <figcaption>Mount → first frame, Android mixed16 (ms, median of 3)</figcaption>
+    <p class="sub">Lower is better. Scale 0–1000 ms. Each bar is that player's best-available measured Android run; the tooltip names the sweep it came from and carries every other sweep that player appears in.</p>
+    <div class="legend">
+      <span><i class="swatch"></i>Existing player</span>
+      <span><i class="swatch s2"></i>μLottie target</span>
+      <span><i class="swatch gray"></i>Probe only, no player</span>
+    </div>
+    <div class="bars">
+      <div class="row" title="dotlottie — bar from sweep C (fresh ulottie_perf AVD, contended host): 136.4 ms median mount, 25.4 ms steady mean, p50 16.67 ms, 102 dropped / 10 s. Not run in sweep A (cut short) or sweep B.">
+        <span class="rlabel"><b>dotlottie</b> · baseline<br>sweep C</span>
+        <div class="track"><div class="bar" style="--w:13.64%"></div></div>
+        <span class="rval">136.4 ms</span>
+      </div>
+      <div class="row" title="lottie-react-native — bar from sweep B (contended host): 549.0 ms median mount, 126.8 ms steady mean, p50 116.7 ms, 78 dropped / 10 s. Not run in sweep A (cut short) or sweep C.">
+        <span class="rlabel"><b>lottie-react-native</b><br>sweep B</span>
+        <div class="track"><div class="bar" style="--w:54.90%"></div></div>
+        <span class="rval">549.0 ms</span>
+      </div>
+      <div class="row" title="Skottie via rn-skia — bar from sweep A (sole emulator on the host): 443.9 ms median mount, 29.8 ms steady mean, p50 16.67 ms, 129 dropped / 10 s. Sweep B (contended host): 1137.3 ms median mount, 181.1 ms steady mean, p50 183.3 ms, 53 dropped / 10 s.">
+        <span class="rlabel"><b>Skottie via rn-skia</b><br>sweep A</span>
+        <div class="track"><div class="bar" style="--w:44.39%"></div></div>
+        <span class="rval">443.9 ms</span>
+      </div>
+      <div class="row" title="Skottie by margelo — bar from the legacy app (examples/compare-legacy, RN 0.74.1 old architecture, contended arm64 API 35 emulator): 413 ms median mount, cold first mount 2,048 ms, 52.3 ms steady mean ≈19 fps, p50 50 ms, 191 dropped / 10 s. One complete session — 2 of 3 crashed. Never in sweeps A–C: incompatible with RN 0.86 new-arch.">
+        <span class="rlabel"><b>Skottie by margelo</b><br>legacy app</span>
+        <div class="track"><div class="bar" style="--w:41.30%"></div></div>
+        <span class="rval">413 ms</span>
+      </div>
+      <div class="row" title="μLottie rn-svg — did not finish on Android. Two attempts in sweep B, two upstream crashes; detail under Compatibility.">
+        <span class="rlabel"><b>μLottie rn-svg</b><br>sweep B</span>
+        <div class="track"></div>
+        <span class="rval"><span class="flag bad">DNF</span></span>
+      </div>
+      <div class="row" title="μLottie rn-skia — bar from sweep B (contended host): 989.5 ms median mount, 239.8 ms steady mean, p50 200.0 ms, 41 dropped / 10 s. Not run in sweep A (cut short) or sweep C.">
+        <span class="rlabel"><b>μLottie rn-skia</b><br>sweep B</span>
+        <div class="track"><div class="bar s2" style="--w:98.95%"></div></div>
+        <span class="rval">989.5 ms</span>
+      </div>
+      <div class="row" title="μLottie rn-thorvg — bar from sweep C (fresh ulottie_perf AVD, contended host, same session as the dotlottie row): 124.4 ms median mount, 19.5 ms steady mean, p50 16.67 ms, 42 dropped / 10 s. Sweep A (sole emulator on the host): 135.4 ms median mount, 18.5 ms steady mean, p50 16.67 ms, 37 dropped / 10 s. Sweep B (contended host): 328.4 ms median mount, 111.2 ms steady mean, p50 100.0 ms, 89 dropped / 10 s.">
+        <span class="rlabel"><b>μLottie rn-thorvg</b><br>sweep C</span>
+        <div class="track"><div class="bar s2" style="--w:12.44%"></div></div>
+        <span class="rval">124.4 ms</span>
+      </div>
+      <div class="row" title="μLottie rn-tiny-skia — bar from sweep A (sole emulator on the host): 132.7 ms median mount, 36.3 ms steady mean, p50 33.33 ms, 157 dropped / 10 s. Sweep B (contended host): 361.3 ms median mount, 140.5 ms steady mean, p50 133.3 ms, 72 dropped / 10 s.">
+        <span class="rlabel"><b>μLottie rn-tiny-skia</b><br>sweep A</span>
+        <div class="track"><div class="bar s2" style="--w:13.27%"></div></div>
+        <span class="rval">132.7 ms</span>
+      </div>
+      <div class="row" title="none (probe only) — bar from sweep C (1 run): 50.4 ms median mount, 16.8 ms steady mean, p50 16.67 ms, 3 dropped / 10 s. Sweep B (contended host): 102.5 ms median mount, 17.1 ms steady mean, p50 16.67 ms, 5 dropped / 10 s. Legacy app, same probe: 16.8 ms steady mean, 3 dropped / 10 s.">
+        <span class="rlabel"><b>none</b> (probe only)<br>sweep C</span>
+        <div class="track"><div class="bar gray" style="--w:5.04%"></div></div>
+        <span class="rval">50.4 ms</span>
+      </div>
+    </div>
+    <div class="axisrow"><div class="ticks"><span>0</span><span>250</span><span>500</span><span>750</span><span>1000 ms</span></div></div>
+    <p class="note">
+      <b>Indicative only.</b> The three sweeps ran in separate sessions under different host contention, and Skottie
+      by margelo ran in a separate RN 0.74 old-arch app, so bars from different sessions are not a like-for-like
+      race. Sweep A had the emulator to itself; sweeps B and C shared the host, which inflates them.
+      Sweep C is the one session that anchors dotlottie and rt-thorvg against each other.
+      <b>μLottie rn-svg did not finish on Android</b> — two attempts, two crashes; detail under Compatibility.
+    </p>
+  </figure>
+
+  <h3>Steady-state mean frame time</h3>
 
   <figure class="chart">
     <figcaption>Steady-state mean frame time, iOS mixed16 (ms)</figcaption>
@@ -619,195 +689,77 @@ footer p { max-width: 74ch; }
     </div>
   </figure>
 
-  <h3>The mixed16 load — Android</h3>
-  <p class="sec">
-    arm64 AVD (android-35, 60 Hz), same app and protocol, three sweeps.
-    <b>Sweeps B and C ran on a contended host, so their absolute numbers are inflated. Compare within one sweep
-    only.</b>
-  </p>
-
   <figure class="chart">
-    <figcaption>Sweep A — steady-state mean frame time (ms), sole emulator on the host</figcaption>
-    <p class="sub">Lower is better. The hairline marks 16.67 ms, one 60 Hz vsync. The sweep was cut short, so it covers three players.</p>
-    <div class="legend">
-      <span><i class="swatch"></i>Existing player</span>
-      <span><i class="swatch s2"></i>μLottie target</span>
-    </div>
-    <div class="bars">
-      <div class="row" title="dotlottie: not in this sweep — measured in sweep C">
-        <span class="rlabel"><b>dotlottie</b> · baseline</span>
-        <div class="track"><span class="refline" style="left:41.68%"></span></div>
-        <span class="rval na">sweep C</span>
-      </div>
-      <div class="row" title="lottie-react-native: not run — sweep cut short">
-        <span class="rlabel"><b>lottie-react-native</b></span>
-        <div class="track"><span class="refline" style="left:41.68%"></span></div>
-        <span class="rval na">not run</span>
-      </div>
-      <div class="row" title="Skottie via rn-skia: 443.9 ms median mount, 29.8 ms steady mean, p50 16.67 ms, 129 dropped / 10 s">
-        <span class="rlabel"><b>Skottie via rn-skia</b></span>
-        <div class="track"><div class="bar" style="--w:74.50%"></div><span class="refline" style="left:41.68%"></span></div>
-        <span class="rval">29.8 ms</span>
-      </div>
-      <div class="row" title="Skottie by margelo: incompatible with RN 0.86 new-arch, so it was never in this sweep — its own legacy-app chart follows below">
-        <span class="rlabel"><b>Skottie by margelo</b></span>
-        <div class="track"><span class="refline" style="left:41.68%"></span></div>
-        <span class="rval na">legacy app</span>
-      </div>
-      <div class="row" title="μLottie rn-svg: not run — sweep cut short">
-        <span class="rlabel"><b>μLottie rn-svg</b></span>
-        <div class="track"><span class="refline" style="left:41.68%"></span></div>
-        <span class="rval na">not run</span>
-      </div>
-      <div class="row" title="μLottie rn-skia: not run — sweep cut short">
-        <span class="rlabel"><b>μLottie rn-skia</b></span>
-        <div class="track"><span class="refline" style="left:41.68%"></span></div>
-        <span class="rval na">not run</span>
-      </div>
-      <div class="row" title="μLottie rn-thorvg: 135.4 ms median mount, 18.5 ms steady mean, p50 16.67 ms, 37 dropped / 10 s">
-        <span class="rlabel"><b>μLottie rn-thorvg</b></span>
-        <div class="track"><div class="bar s2" style="--w:46.25%"></div><span class="refline" style="left:41.68%"></span></div>
-        <span class="rval">18.5 ms</span>
-      </div>
-      <div class="row" title="μLottie rn-tiny-skia: 132.7 ms median mount, 36.3 ms steady mean, p50 33.33 ms, 157 dropped / 10 s">
-        <span class="rlabel"><b>μLottie rn-tiny-skia</b></span>
-        <div class="track"><div class="bar s2" style="--w:90.75%"></div><span class="refline" style="left:41.68%"></span></div>
-        <span class="rval">36.3 ms</span>
-      </div>
-    </div>
-    <div class="axisrow"><div class="ticks"><span>0</span><span>10</span><span>20</span><span>30</span><span>40 ms</span></div></div>
-    <span class="reflabel">Hairline: 16.67 ms = one 60 Hz vsync frame.</span>
-    <p class="note">
-      Mount, steady p50 and dropped-frame figures ride in each row's tooltip. rt-tiny-skia sits a full vsync behind
-      at p50 33.33 ms, the same ~30 fps ceiling iOS showed.
-    </p>
-  </figure>
-
-  <figure class="chart">
-    <figcaption>Sweep B — steady-state mean frame time (ms), contended host</figcaption>
-    <p class="sub">Another emulator shared the host CPU throughout, so these values are inflated — read the ordering, not the numbers. The gray bar is the probe with no player mounted.</p>
+    <figcaption>Steady-state mean frame time, Android mixed16 (ms)</figcaption>
+    <p class="sub">Lower is better. Scale 0–250 ms. The hairline marks 16.67 ms, one 60 Hz vsync. Each bar is that player's best-available measured Android run; the tooltip names the sweep it came from and carries every other sweep that player appears in.</p>
     <div class="legend">
       <span><i class="swatch"></i>Existing player</span>
       <span><i class="swatch s2"></i>μLottie target</span>
       <span><i class="swatch gray"></i>Probe only, no player</span>
     </div>
     <div class="bars">
-      <div class="row" title="dotlottie: not in this sweep — measured in sweep C">
-        <span class="rlabel"><b>dotlottie</b> · baseline</span>
-        <div class="track"></div>
-        <span class="rval na">sweep C</span>
+      <div class="row" title="dotlottie — bar from sweep C (fresh ulottie_perf AVD, contended host): 25.4 ms steady mean, p50 16.67 ms, 102 dropped / 10 s, 136.4 ms median mount. Not run in sweep A (cut short) or sweep B.">
+        <span class="rlabel"><b>dotlottie</b> · baseline<br>sweep C</span>
+        <div class="track"><div class="bar" style="--w:10.16%"></div><span class="refline" style="left:6.67%"></span></div>
+        <span class="rval">25.4 ms</span>
       </div>
-      <div class="row" title="lottie-react-native: 549.0 ms median mount, 126.8 ms steady mean, p50 116.7 ms, 78 dropped / 10 s (contended host)">
-        <span class="rlabel"><b>lottie-react-native</b></span>
-        <div class="track"><div class="bar" style="--w:50.72%"></div></div>
+      <div class="row" title="lottie-react-native — bar from sweep B (contended host): 126.8 ms steady mean, p50 116.7 ms, 78 dropped / 10 s, 549.0 ms median mount. Not run in sweep A (cut short) or sweep C.">
+        <span class="rlabel"><b>lottie-react-native</b><br>sweep B</span>
+        <div class="track"><div class="bar" style="--w:50.72%"></div><span class="refline" style="left:6.67%"></span></div>
         <span class="rval">126.8 ms</span>
       </div>
-      <div class="row" title="Skottie via rn-skia: 1137.3 ms median mount, 181.1 ms steady mean, p50 183.3 ms, 53 dropped / 10 s (contended host)">
-        <span class="rlabel"><b>Skottie via rn-skia</b></span>
-        <div class="track"><div class="bar" style="--w:72.44%"></div></div>
-        <span class="rval">181.1 ms</span>
+      <div class="row" title="Skottie via rn-skia — bar from sweep A (sole emulator on the host): 29.8 ms steady mean, p50 16.67 ms, 129 dropped / 10 s, 443.9 ms median mount. Sweep B (contended host): 181.1 ms steady mean, p50 183.3 ms, 53 dropped / 10 s, 1137.3 ms median mount.">
+        <span class="rlabel"><b>Skottie via rn-skia</b><br>sweep A</span>
+        <div class="track"><div class="bar" style="--w:11.92%"></div><span class="refline" style="left:6.67%"></span></div>
+        <span class="rval">29.8 ms</span>
       </div>
-      <div class="row" title="Skottie by margelo: incompatible with RN 0.86 new-arch, so it was never in this sweep — its own legacy-app chart follows below">
-        <span class="rlabel"><b>Skottie by margelo</b></span>
-        <div class="track"></div>
-        <span class="rval na">legacy app</span>
-      </div>
-      <div class="row" title="μLottie rn-svg: did not finish on Android">
-        <span class="rlabel"><b>μLottie rn-svg</b></span>
-        <div class="track"></div>
-        <span class="rval"><span class="flag bad">DNF</span></span>
-      </div>
-      <div class="row" title="μLottie rn-skia: 989.5 ms median mount, 239.8 ms steady mean, p50 200.0 ms, 41 dropped / 10 s (contended host)">
-        <span class="rlabel"><b>μLottie rn-skia</b></span>
-        <div class="track"><div class="bar s2" style="--w:95.92%"></div></div>
-        <span class="rval">239.8 ms</span>
-      </div>
-      <div class="row" title="μLottie rn-thorvg: 328.4 ms median mount, 111.2 ms steady mean, p50 100.0 ms, 89 dropped / 10 s (contended host)">
-        <span class="rlabel"><b>μLottie rn-thorvg</b></span>
-        <div class="track"><div class="bar s2" style="--w:44.48%"></div></div>
-        <span class="rval">111.2 ms</span>
-      </div>
-      <div class="row" title="μLottie rn-tiny-skia: 361.3 ms median mount, 140.5 ms steady mean, p50 133.3 ms, 72 dropped / 10 s (contended host)">
-        <span class="rlabel"><b>μLottie rn-tiny-skia</b></span>
-        <div class="track"><div class="bar s2" style="--w:56.20%"></div></div>
-        <span class="rval">140.5 ms</span>
-      </div>
-      <div class="row" title="none (probe only): 102.5 ms median mount, 17.1 ms steady mean, p50 16.67 ms, 5 dropped / 10 s">
-        <span class="rlabel"><b>none</b> (probe only)</span>
-        <div class="track"><div class="bar gray" style="--w:6.84%"></div></div>
-        <span class="rval">17.1 ms</span>
-      </div>
-    </div>
-    <div class="axisrow"><div class="ticks"><span>0</span><span>50</span><span>100</span><span>150</span><span>200</span><span>250 ms</span></div></div>
-    <p class="note">
-      The ordering reproduces iOS. Mount, steady p50 and dropped-frame figures ride in each row's tooltip.
-      <b>μLottie rn-svg did not finish on Android</b> — two attempts, two crashes; detail under Compatibility.
-    </p>
-  </figure>
-
-  <figure class="chart">
-    <figcaption>Sweep C — dropped frames per 10 s, contended host</figcaption>
-    <p class="sub">dotlottie plus two same-run anchors on a fresh <code>ulottie_perf</code> AVD. Contended host: these three rows compare only against each other.</p>
-    <div class="legend">
-      <span><i class="swatch"></i>Existing player</span>
-      <span><i class="swatch s2"></i>μLottie target</span>
-      <span><i class="swatch gray"></i>Probe only, no player</span>
-    </div>
-    <div class="bars">
-      <div class="row" title="dotlottie: 136.4 ms median mount, 25.4 ms steady mean, p50 16.67 ms, 102 dropped frames per 10 s (sweep C)">
-        <span class="rlabel"><b>dotlottie</b> · baseline</span>
-        <div class="track"><div class="bar" style="--w:85.00%"></div></div>
-        <span class="rval">102</span>
-      </div>
-      <div class="row" title="μLottie rn-thorvg: 124.4 ms median mount, 19.5 ms steady mean, p50 16.67 ms, 42 dropped frames per 10 s (sweep C)">
-        <span class="rlabel"><b>μLottie rn-thorvg</b></span>
-        <div class="track"><div class="bar s2" style="--w:35.00%"></div></div>
-        <span class="rval">42</span>
-      </div>
-      <div class="row" title="none (probe only, 1 run): 50.4 ms median mount, 16.8 ms steady mean, p50 16.67 ms, 3 dropped frames per 10 s (sweep C)">
-        <span class="rlabel"><b>none</b> (probe only)</span>
-        <div class="track"><div class="bar gray" style="--w:2.50%"></div></div>
-        <span class="rval">3</span>
-      </div>
-    </div>
-    <div class="axisrow"><div class="ticks"><span>0</span><span>30</span><span>60</span><span>90</span><span>120</span></div></div>
-    <p class="note">
-      dotlottie animates on its own render thread (Android default: the Compose view's software rasterizer), so the
-      probe measures induced load on the UI thread: 102 dropped frames against rt-thorvg's 42 under the same
-      contention. The two anchors ran in the same session so the baseline has something valid to read against;
-      mount, steady mean and p50 ride in each row's tooltip.
-    </p>
-  </figure>
-
-  <figure class="chart">
-    <figcaption>Skottie by margelo, legacy app — steady-state mean frame time (ms), Android mixed16</figcaption>
-    <p class="sub">Its own chart: this player was never in sweeps A–C. Same probe, same mixed16 grid, but a separate RN 0.74 old-arch app on a contended arm64 API 35 emulator, so it compares against that app's own no-player baseline only. One complete session — 2 of 3 crashed.</p>
-    <div class="legend">
-      <span><i class="swatch"></i>Existing player</span>
-      <span><i class="swatch gray"></i>Probe only, no player</span>
-    </div>
-    <div class="bars">
-      <div class="row" title="Skottie by margelo (legacy app): 413 ms median mount (cold first mount 2,048 ms), 52.3 ms steady mean ≈19 fps, p50 50 ms, 191 dropped / 10 s; single complete session, contended host">
-        <span class="rlabel"><b>Skottie by margelo</b><br>(legacy app)</span>
-        <div class="track"><div class="bar" style="--w:87.17%"></div><span class="refline" style="left:27.78%"></span></div>
+      <div class="row" title="Skottie by margelo — bar from the legacy app (examples/compare-legacy, RN 0.74.1 old architecture, contended arm64 API 35 emulator): 52.3 ms steady mean ≈19 fps, p50 50 ms, 191 dropped / 10 s, 413 ms median mount, cold first mount 2,048 ms. One complete session — 2 of 3 crashed. Never in sweeps A–C: incompatible with RN 0.86 new-arch.">
+        <span class="rlabel"><b>Skottie by margelo</b><br>legacy app</span>
+        <div class="track"><div class="bar" style="--w:20.92%"></div><span class="refline" style="left:6.67%"></span></div>
         <span class="rval">52.3 ms</span>
       </div>
-      <div class="row" title="none (probe only, same legacy app): 16.8 ms steady mean, 3 dropped / 10 s">
-        <span class="rlabel"><b>none</b> (probe only)</span>
-        <div class="track"><div class="bar gray" style="--w:28.00%"></div><span class="refline" style="left:27.78%"></span></div>
+      <div class="row" title="μLottie rn-svg — did not finish on Android. Two attempts in sweep B, two upstream crashes; detail under Compatibility.">
+        <span class="rlabel"><b>μLottie rn-svg</b><br>sweep B</span>
+        <div class="track"><span class="refline" style="left:6.67%"></span></div>
+        <span class="rval"><span class="flag bad">DNF</span></span>
+      </div>
+      <div class="row" title="μLottie rn-skia — bar from sweep B (contended host): 239.8 ms steady mean, p50 200.0 ms, 41 dropped / 10 s, 989.5 ms median mount. Not run in sweep A (cut short) or sweep C.">
+        <span class="rlabel"><b>μLottie rn-skia</b><br>sweep B</span>
+        <div class="track"><div class="bar s2" style="--w:95.92%"></div><span class="refline" style="left:6.67%"></span></div>
+        <span class="rval">239.8 ms</span>
+      </div>
+      <div class="row" title="μLottie rn-thorvg — bar from sweep C (fresh ulottie_perf AVD, contended host, same session as the dotlottie row): 19.5 ms steady mean, p50 16.67 ms, 42 dropped / 10 s, 124.4 ms median mount. Sweep A (sole emulator on the host): 18.5 ms steady mean, p50 16.67 ms, 37 dropped / 10 s, 135.4 ms median mount. Sweep B (contended host): 111.2 ms steady mean, p50 100.0 ms, 89 dropped / 10 s, 328.4 ms median mount.">
+        <span class="rlabel"><b>μLottie rn-thorvg</b><br>sweep C</span>
+        <div class="track"><div class="bar s2" style="--w:7.80%"></div><span class="refline" style="left:6.67%"></span></div>
+        <span class="rval">19.5 ms</span>
+      </div>
+      <div class="row" title="μLottie rn-tiny-skia — bar from sweep A (sole emulator on the host): 36.3 ms steady mean, p50 33.33 ms, 157 dropped / 10 s, 132.7 ms median mount. Sweep B (contended host): 140.5 ms steady mean, p50 133.3 ms, 72 dropped / 10 s, 361.3 ms median mount.">
+        <span class="rlabel"><b>μLottie rn-tiny-skia</b><br>sweep A</span>
+        <div class="track"><div class="bar s2" style="--w:14.52%"></div><span class="refline" style="left:6.67%"></span></div>
+        <span class="rval">36.3 ms</span>
+      </div>
+      <div class="row" title="none (probe only) — bar from sweep C (1 run): 16.8 ms steady mean, p50 16.67 ms, 3 dropped / 10 s, 50.4 ms median mount. Sweep B (contended host): 17.1 ms steady mean, p50 16.67 ms, 5 dropped / 10 s, 102.5 ms median mount. Legacy app, same probe: 16.8 ms steady mean, 3 dropped / 10 s.">
+        <span class="rlabel"><b>none</b> (probe only)<br>sweep C</span>
+        <div class="track"><div class="bar gray" style="--w:6.72%"></div><span class="refline" style="left:6.67%"></span></div>
         <span class="rval">16.8 ms</span>
       </div>
     </div>
-    <div class="axisrow"><div class="ticks"><span>0</span><span>15</span><span>30</span><span>45</span><span>60 ms</span></div></div>
+    <div class="axisrow"><div class="ticks"><span>0</span><span>50</span><span>100</span><span>150</span><span>200</span><span>250 ms</span></div></div>
     <span class="reflabel">Hairline: 16.67 ms = one 60 Hz vsync frame.</span>
     <p class="note">
-      The no-player baseline holds one vsync in the same session, so the ~19 fps is the player, not the harness.
-      <b>Treat this as a single-session indication</b>: the app or the emulator guest died mid-sweep in 2 of 3 attempts.
-      Mount, p50 and dropped-frame figures ride in the row's tooltip.
+      <b>Indicative only</b>, for the same reason as the mount chart: separate sessions, different host contention,
+      and a separate RN 0.74 old-arch app for Skottie by margelo. The no-player probe row is the floor each session
+      was read against; in the legacy app it held one vsync in the same session, so margelo's ~19 fps is the player,
+      not the harness.
+      The ordering reproduces iOS. rt-tiny-skia sits a full vsync behind at p50 33.33 ms, the same ~30 fps ceiling
+      iOS showed. dotlottie animates on its own render thread (Android default: the Compose view's software
+      rasterizer), so the probe measures induced UI-thread load — 102 dropped frames against rt-thorvg's 42 in the
+      same sweep C session.
     </p>
   </figure>
 
-  <h3>The homogeneous sweep — one small fixture, 1 to 16 instances</h3>
+  <details class="more">
+    <summary>The homogeneous sweep — one small fixture, 1 to 16 instances (2 charts)</summary>
   <p class="sec">
     iPhone 17 simulator, <code>boucing_ball</code>, 10 s probe, best of 3. This sweep predates the rt targets,
     Skottie and dotlottie, so it covers three players only; "baseline (no player)" is the probe itself.
@@ -973,6 +925,7 @@ footer p { max-width: 74ch; }
       (16.7 / 33.1 / 49.5 / 66.7 ms) and cut worst-of-3 at ×16 from 123 ms to 69 ms. On rn-skia at ×16, the 16
       <code>init()</code> calls cost ~11 ms together (10.6 ms is the first decode, ~0.03 ms each for the 15 cache
       hits) and the 16 first picture records ~2.7 ms. The ramp is per-instance native-view creation, not decode.</p>
+  </details>
   </details>
 </section>
 
