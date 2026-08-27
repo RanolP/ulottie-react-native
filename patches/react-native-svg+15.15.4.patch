@@ -1,0 +1,68 @@
+diff --git a/node_modules/react-native-svg/android/src/main/java/com/horcrux/svg/GroupView.java b/node_modules/react-native-svg/android/src/main/java/com/horcrux/svg/GroupView.java
+index 1c90e0a..99c99dc 100644
+--- a/node_modules/react-native-svg/android/src/main/java/com/horcrux/svg/GroupView.java
++++ b/node_modules/react-native-svg/android/src/main/java/com/horcrux/svg/GroupView.java
+@@ -95,22 +95,28 @@ class GroupView extends RenderableView {
+     final GroupView self = this;
+     final RectF groupRect = new RectF();
+ 
++    // mLayerCanvas must never alias an external canvas: on a later frame with
++    // mOpacity != 1, setBitmap() would run against that alias and reset the save
++    // stack of a canvas an ancestor group still holds a save() on, making its
++    // restore() below throw "Underflow in restore - more restores than saves".
++    final Canvas layerCanvas;
+     if (mOpacity != 1) {
+-      if (mLayerBitmap == null) {
+-        mLayerBitmap =
+-            Bitmap.createBitmap(canvas.getWidth(), canvas.getHeight(), Bitmap.Config.ARGB_8888);
++      if (mLayerBitmap != null) {
++        mLayerBitmap.recycle();
++      }
++      mLayerBitmap =
++          Bitmap.createBitmap(canvas.getWidth(), canvas.getHeight(), Bitmap.Config.ARGB_8888);
++      if (mLayerCanvas == null) {
+         mLayerCanvas = new Canvas(mLayerBitmap);
+       } else {
+-        mLayerBitmap.recycle();
+-        mLayerBitmap =
+-            Bitmap.createBitmap(canvas.getWidth(), canvas.getHeight(), Bitmap.Config.ARGB_8888);
+         mLayerCanvas.setBitmap(mLayerBitmap);
+       }
+       // Copy current matrix from original canvas
+       mLayerCanvas.save();
+       mLayerCanvas.setMatrix(canvas.getMatrix());
++      layerCanvas = mLayerCanvas;
+     } else {
+-      mLayerCanvas = canvas;
++      layerCanvas = canvas;
+     }
+ 
+     elements = new ArrayList<>();
+@@ -129,15 +135,15 @@ class GroupView extends RenderableView {
+           ((RenderableView) node).mergeProperties(self);
+         }
+ 
+-        int count = node.saveAndSetupCanvas(mLayerCanvas, mCTM);
+-        node.render(mLayerCanvas, paint, opacity);
++        int count = node.saveAndSetupCanvas(layerCanvas, mCTM);
++        node.render(layerCanvas, paint, opacity);
+         RectF r = node.getClientRect();
+ 
+         if (r != null) {
+           groupRect.union(r);
+         }
+ 
+-        node.restoreCanvas(mLayerCanvas, count);
++        node.restoreCanvas(layerCanvas, count);
+ 
+         if (node instanceof RenderableView) {
+           ((RenderableView) node).resetProperties();
+@@ -169,7 +175,7 @@ class GroupView extends RenderableView {
+ 
+     if (mOpacity != 1) {
+       // Restore copied canvas and temporary reset original canvas matrix to draw bitmap 1:1
+-      mLayerCanvas.restore();
++      layerCanvas.restore();
+       int saveCount = canvas.save();
+       canvas.setMatrix(null);
+       mLayerPaint.setAlpha((int) (mOpacity * 255));
