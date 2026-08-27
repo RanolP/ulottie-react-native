@@ -16,13 +16,21 @@ const files = readdirSync(assets);
 // for skia-aot; skia-only fixtures (no `.lottie.json`) get skia numbers only.
 const svgNames = new Set(
   files
-    .filter((f) => f.endsWith('.lottie.json') && !f.endsWith('.skia.lottie.json'))
+    .filter(
+      (f) =>
+        f.endsWith('.lottie.json') &&
+        !f.endsWith('.skia.lottie.json') &&
+        !f.endsWith('.rt.lottie.json'),
+    )
     .map((f) => f.replace(/\.lottie\.json$/, '')),
 );
 const skiaNames = new Set(
   files.filter((f) => f.endsWith('.skia.lottie.json')).map((f) => f.replace(/\.skia\.lottie\.json$/, '')),
 );
-const names = [...new Set([...svgNames, ...skiaNames])].sort();
+const rtNames = new Set(
+  files.filter((f) => f.endsWith('.rt.lottie.json')).map((f) => f.replace(/\.rt\.lottie\.json$/, '')),
+);
+const names = [...new Set([...svgNames, ...skiaNames, ...rtNames])].sort();
 
 const gz = (buf) => gzipSync(buf, { level: 9 }).length;
 const ratio = (a, b) => Math.round((a / b) * 100) / 100;
@@ -43,6 +51,14 @@ const rows = names.map((name) => {
     row.skiaBytes = Buffer.byteLength(js, 'utf8');
     row.skiaGzip = gz(Buffer.from(js, 'utf8'));
     row.skiaRatio = ratio(row.skiaBytes, row.jsonBytes);
+  }
+  if (rtNames.has(name)) {
+    const js = compileLottie(src, `${name}.rt.lottie.json`, {
+      allow: ['track-matte-inverted'],
+    });
+    row.rtBytes = Buffer.byteLength(js, 'utf8');
+    row.rtGzip = gz(Buffer.from(js, 'utf8'));
+    row.rtRatio = ratio(row.rtBytes, row.jsonBytes);
   }
   return row;
 });

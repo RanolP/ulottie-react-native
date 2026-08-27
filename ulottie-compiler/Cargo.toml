@@ -41,6 +41,13 @@ js-sys = { version = "0.3", optional = true }
 # Pure-Rust deflate, used only to *decide* whether instancing a precomp pays.
 # `default-features = false` keeps it off the C zlib.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"], optional = true }
+# The rt target's wire model + track player — the very structs the device
+# runtime decodes, so the two sides cannot skew. Featureless: no tiny-skia in
+# the compiler (and the wasm build stays clean).
+ulottie-rt = { path = "../ulottie-rt", default-features = false }
+# Decoding embedded PNGs to raw RGBA at compile time for the rt target — the
+# device runtime receives pixels, never a PNG.
+png = "0.17"
 
 [features]
 # Pure-Rust frame emulator (Payload → structured `Frame`). On by default

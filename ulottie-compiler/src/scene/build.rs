@@ -1232,7 +1232,9 @@ impl Planner<'_> {
                         lin,
                         "values",
                         format!(
-                            "0.3086 0.6094 0.082 0 0 0.3086 0.6094 0.082 0 0 0.3086 0.6094 0.082 0 0 0 0 0 {} 0",
+                            // lottie-web's `linearFilterValue`, verbatim: an
+                            // equal-weight average, not a real luma vector.
+                            "0.3333 0.3333 0.3333 0 0 0.3333 0.3333 0.3333 0 0 0.3333 0.3333 0.3333 0 0 0 0 0 {} 0",
                             svg::n(opacity)
                         ),
                     );

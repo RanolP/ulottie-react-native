@@ -11,6 +11,7 @@ pub mod emit_expressions;
 pub mod layers;
 pub mod pretty;
 pub mod rn;
+pub mod rt;
 pub mod runtime;
 pub mod shake;
 pub mod skia;
@@ -147,6 +148,9 @@ pub fn report(module: &ir::Module, options: &crate::CompileOptions) -> Result<Op
     }
     if options.target == crate::Target::SkiaAot {
         return skia::report(module, options);
+    }
+    if options.target == crate::Target::Rt {
+        return rt::report(module, options);
     }
     let runtime_mode = options.runtime_mode;
     if !data::can_encode(module) {

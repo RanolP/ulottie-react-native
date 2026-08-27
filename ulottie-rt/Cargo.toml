@@ -1,0 +1,47 @@
+[package]
+name = "ulottie-rt"
+version = "0.0.1"
+edition = "2024"
+
+[lib]
+# `staticlib` is what the iOS/Android packages link; `rlib` keeps the crate
+# consumable as a normal Rust dependency (tests, the compiler's rt backend).
+crate-type = ["staticlib", "rlib"]
+
+[features]
+default = ["tinyskia"]
+tinyskia = ["dep:tiny-skia"]
+# Second rasterizer backend: ThorVG's SW engine, compiled from a pinned
+# v1.1.1 source tarball by build.rs (cc crate — no meson). See build.rs for
+# the fetch/verify/compile pipeline and src/thorvg.rs for the renderer.
+thorvg = []
+
+[build-dependencies]
+# Unconditional: build scripts see features only as env vars, not cfg, so the
+# script must always compile; without the thorvg feature it exits immediately.
+cc = "1"
+
+[dependencies]
+# The RTDL wire format is these structs serialized with postcard — the
+# compiler (`ulottie-compiler`, `default-features = false`) encodes with the
+# very same code that decodes here, so the two sides cannot skew.
+serde = { version = "1.0", default-features = false, features = [
+  "derive",
+  "alloc",
+] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+# `simd` gives the NEON arms on aarch64; `png-format` stays off — images
+# arrive through the RTDL as raw RGBA, decoded at compile time.
+tiny-skia = { version = "0.12", default-features = false, features = [
+  "std",
+  "simd",
+], optional = true }
+
+[dev-dependencies]
+# The parity test (`tests/parity.rs`) compiles the fixture corpus itself, so
+# every run measures the current compiler + rasterizer pair. A dev-dependency
+# cycle (the compiler depends on this crate) is fine for cargo.
+ulottie-compiler = { path = "../ulottie-compiler", default-features = false }
+base64 = "0.22"
+# Reading the lottie-web reference screenshots in `tests/refs/`.
+png = "0.17"

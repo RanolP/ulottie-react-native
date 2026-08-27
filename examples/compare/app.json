@@ -9,6 +9,9 @@
     "ios": {
       "bundleIdentifier": "dev.ulottie.compare",
       "supportsTablet": false
+    },
+    "android": {
+      "package": "dev.ulottie.compare"
     }
   }
 }

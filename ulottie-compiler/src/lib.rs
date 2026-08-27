@@ -62,6 +62,12 @@ pub enum Target {
     /// programs, worklet emission) with the write point swapped — see
     /// `backend::skia`.
     SkiaAot,
+    /// React Native via the native tiny-skia rasterizer (`ulottie-rt`): the
+    /// scene compiles to RTDL — a renderer-agnostic binary display list plus
+    /// numeric keyframe tracks — loaded into the native instance once at
+    /// mount; per-frame JS work is a single `renderFrame(id, frame)` JSI
+    /// call. Accepts exactly what `skia-aot` accepts — see `backend::rt`.
+    Rt,
 }
 
 /// Where a module's initial markup comes from.
@@ -263,7 +269,9 @@ pub fn check_supported_for(
     let findings = match target {
         Target::Web => support::scan(&doc),
         Target::ReanimatedAot => support::scan_rn(&doc),
-        Target::SkiaAot => support::scan_skia(&doc),
+        // The rt target draws the same display list natively, so it refuses
+        // exactly what skia-aot refuses.
+        Target::SkiaAot | Target::Rt => support::scan_skia(&doc),
     };
     if let Some(msg) = support::reject(&findings, allow) {
         anyhow::bail!(msg);

@@ -25,15 +25,15 @@
 //
 // The profile says the time is in path-string assembly (`pathD` + `pdPair` +
 // `pdSep`, 15% together) and in `setAttribute` and `evalExpr` — not here.
+//
+// A fraction keeps its leading zero even though SVG parses ".5" fine. The
+// react-native-svg target shares this helper, and its JS prop parser rejects
+// ".47" ("not a valid number or percentage string"), leaves the prop a String,
+// and Fabric's generated RNSVGGroupManagerDelegate.setProperty then throws
+// ClassCastException: String cannot be cast to Double — an app-killing crash on
+// Android, observed on a Pixel 8 with the `mixed16` fixture.
 function fmt(x, scale) { 'worklet';
-  const s = '' + Math.round(x * scale) / scale;
-  // A bare leading zero is redundant in SVG: ".5" and "-.5" parse identically
-  // and are shorter.
-  if (s.charCodeAt(0) === 48 && s.charCodeAt(1) === 46) return s.slice(1);
-  if (s.charCodeAt(0) === 45 && s.charCodeAt(1) === 48 && s.charCodeAt(2) === 46) {
-    return '-' + s.slice(2);
-  }
-  return s;
+  return '' + Math.round(x * scale) / scale;
 }
 
 /** Coordinates and plain attribute values: 3 decimals. */
@@ -1954,13 +1954,13 @@ function P0(x, B, e, l, q, a) { 'worklet'; return [bTransform(x, B[0], e, l, q, 
 function A0(x, S) { 'worklet'; oTransform(x, S[0]); oTranslate(x, S[1]); oOpacity(x, S[2]); oDisplay(x, S[3]); oShape(x, S[4]); oEllipse(x, S[5]); }
 
 const D = "0gmqe0gipob0q10sh1mtk10000g400gt7gt7gr5mv2io6io6uk1uk1kl5gt7uk1uk1mj5gt7ok3qp2sn6gn6uk1uk1ku2gt7uk1uk1kk2gt7qp20mj5gt7uk1uk1oo6qm7sv2so7qm6gt7uk1uk1ig4gt7om40ms1gt7ki40op2gt7qp20io6io6uk1uk1mj5ut6qp2gq2io6io6un10io6qm6uk1qn1kh5uk6kp3io3ik6qk6gp3qk2io6il6uk1um1gh4gg5ip3il3io6qp6mv3u8io6io6uk10mj5gt7oi1gt7st3gt7uk1uk10gt7gt70io6io6uk1uk1io6mi7oj1ibgh6gt7su40io6io6uk1uk1gp1gt7gk60io6io6i80uo1kv2uo1kv2uo1kv2uo1kv2uo1kv2uo1kv2uo1kv2uo1kv2uo1kv2uo1kv2uo1kv2uo1kv2uo1kv2uo1kv2uo1kv2uo1kv2qh1uo1qh1uo1gm1on1gm1on1gm1on1gm1on1gm1on1gm1on1qh1uo1qh1uo1qh1uo1qh1uo1qh1uo1qh1uo1qh1uo1qh1uo1qh1uo1og1qh1og1qh1og1qh1og1qh1og1qh1og1qh1sbqh1sbqh1oeqh1sbqh1sbqh1sbqh1sbqh1sbqh1sbqh1sbqh1m6sbm6sbu8gbu8gbm6q7m6q7m6sbm6sbm6sbm6sbm6sbo1g3o1g30m60m60m6mvl5g10gqs8munboosfimqi1otrl1orvp1gmku1uvrp4svhq2uhtp4iukp6sigp4smtm7ukgl4oqvr8srqq3oitv8upkg4qtil8mhuh5mrtg9omtl6gkvn9s20000000000vql1okkc00rll4ntq7uij5ojcopt6knu400grl1nkkc00sll4otq7rkt3hg9npt6jnu4ptn7hs3i34mkgj2uint1mkh5ci2s2g4m5g6q6gi3nmg1gu3nmg1gi3nmg1gi3nmg1kh4ltckh4nmg1ee0eu2i34umhg6ghii8i34kkm7kkm724rp4sp400mc6m6g7o7gous1vlmk2vjiu5mc6m6g7o7oknp2vindnvlp3ms16u8u9saoknp2vindvipo5q10a24u3466i8u6s6q6o6ki2up2up2up2up2mq2ot2ot2ot2ot2gu2ou2ou2ou2ou2gv2kv2kg3kh3kh3mvk5c0gmt6ojufkqsj1mgrs1gmku1ipmo6qtopo1sprg7opjhh1msnj8ston5ihnnbston5mshq1ihul3slu3qhsl30000qqt5povp2vmuk1ggrk4hqor2vn500trn6ssnu2gur6rnim1ioqi4um800msg54m6qbqhjg4sjjk7qhjg4unti8mvl5i1gnuo1ojjr1usgt1ggkv1goij2muvl2mmgo2grnq2gpmt2vmjdgsql1gnsu1srgg5koll5srir1mvhl2htgl1vmjdgsql1gnsu1srgg5koll5srir1mvhl2htgl1vmjdgsql1g20i2k2m20o2q2rh5miug1qokn2ghs4rmehpvfviou1rkr3rucmsth1qokn2ghs4rmehpvfviou1rkr3pokn2vgs4smeipvfgjou1skr3suclsth1pokn2vgs4smeipvfgjou1skr3oq7rsig1msh56sbsg1oh1glhop1mtqmg1gtucsuqpcmih7suqpc0g3msh5i1sbkdmeqeifofsfog1mh1uhrg2smtp1uhrg2ovmn1uhrg2smtp1uhrg2spip1uhrg2smtp1uhrg2mskp1uhrg2smtp1uhrg2smtp1srgi2ujo1i3k3000000mvk58gmut2inqj3gnvv3gkng4vpitu1vghi1hqnll1nvjk6ovieqhpr1gskt1ojmp100onin6jrh1ush5ir8nnin6krh1vnrtg1lqqs1nii5jt8msh5ckg1og1gi1ij1sk1in1smov1gnuk3gssv1ougs2qirg2umnr1isog2unlu1mpqg2ojvr1orpg2kuqs10k1m1o1emsh5ckg1og1gi1ij1sk1in1smov1gpmg3gssv1ougs2qirg2umnr1isog2unlu1mpqg2ojvr1orpg2kuqs10k1m1o1emvl56gptk4osii5grih6pjjk3gmshbhptl3inun9prou4urgi9m3o300lis1pgn5ijg2gpj600msh58ol1gm1um1on1osks2shvu3sogt2quvj3stmt2mojs2stmt2qltt206emsh54im1um1iugk9ojnu8knlk9sosp86msh54qh1uk1kohl5uitj2oprh4uitj2cmsh54qh1uo1kohl5uitj2oprh4uitj2cmsh54qh1kk1kqip5qpho1qtkr3qpho1cmsh54qh1ss1gitvbotik7kiiiaotik7cmsh54qh1oj1oqmu4miscsgoh4misccmsh54qh1sg2ghtkbknuo6qqvnaknuo6cmsh5m1oj1ik1sk1gm1sm1mn1un1mo1uo1sp1uq1sliu3ktpt1sliu3qqlr1sliu3ktpt1sliu3ktpt1sliu3ohkp1sliu3ktpt1sliu3urns1sliu3ktpt1sliu3ktpt1sliu3gggs1sliu3ktpt1aq30aq3aq30s3u3mtl5i1kgbssbgjcoocovcgsdspesofssg1poup5vkpkblgidnnmp4pvhs3vhqg2phjq5jtgt1njko7pmv4ntvk4umsu4mrpdglin2ogmr5iirm2umij9sguh400008000000000000000000000000000000000lhqftgqemsh56uq1qr1ms1kkng5svuj2kkng5mioj2kkng5svuj26q1msl58mn1kp1uq1gu1ikkg1qjmo1krkm1qjmo1mrrr1gskt1irku1milt102400kgi4h600jgi4i60000m32286g12k422u16s326266662662g382g620g800o700i6o5m50i40g4u3s3q30o3m30k300i202222468aceeg1ee0eeee0ee0g1i1k10m1rqkgp1rqkgp1rqkgp1ptop1nrug1rovtetjr2vthu1vkmo8vkmo8njtl6jnjl9jnjl9jnlk9viopaviopahnhjahnhjajiiiajqkpajqkpavrkoanjtl6pnt4nkvj1vrkt1nvl3litvn2litvn2litvn2jgpp1qkto5nghuetjr2othu9phnp7phnp7jutk8topq8topq8rosp8jmpg8jmpg8vstk7vstk7ntik7rlop6rlop6jnuo6jutk8pnt4qjso6vrkt1mlrh1om3om3om3or3os3il4sm4mr4qu4sh5uk5on5on5qp5sq5ur5gt5gt5iu5kv5kv5mg6uk5oh6in6sv6mh764sg1sh1oc064km1in1oc0o12oa66666k466666u4s4q4o4m4k4g3u2s2q2o2m2op8op8op8op8op8op8kq8kq8kq8kq8kq8kq8i804686468666646686a666666666666666886668686666666888666666466666668000gst5gst5gnuo1gnuo1gnuo1gnuo1gnuo1gnuo1gnuo1grqi2grqi2gnuo1gnuo1gmut2gmut2gmut2gmut2gmut2gmut2gmut2gkqo3gmut2gmut2gkng4gkng4gkng4gkng4gkng4gkng4gptk4gptk4gptk4gptk4gptk4gptk4gptk4gptk4gptk4ggvl5ggvl5ggvl5ggvl5ggvl5ggvl5gptk4gptk4grih6grih6grih6grih6grih6grih6grih6grih6grih6grih6grih6grih6grih6grih6grih6grih6gnuo1gnuo1gnuo1gorbgorbgmut2gmut2gmut2gmut2gmut2gpst1gpst1govq2govq2gmut2gmut2gptk4gptk4gptk4gptk4gptk4gptk4gptk4gptk4gptk4gptk4gptk4gptk4gptk4gptk4gptk4gptk4grih6grih6grih6grih6grih6grih6grih6grih6grih6gssr5gssr5gssr5gssr5gssr5gssr5grih6grih6gipobgipobgipobgipobgipobgipobgipobgipobgipobgipobgipobgipobgipobgipobgipobgipobkbepgl4pums1jvnh1svmg1vsjp1otkbrqhk1qvo3qqkp1kipl1oovp1qrll1ktok4gjll100uooctog2gmbsul3hki4uoejpjn1kql6pu3qg1tvti2lhi100vjg4umavlbtul3ihqbhuo2gk1n5qu3pg100kb6ohp7ursj4gljclrl3gljcvnvna00ptbkrtn1mh9umpk2ghn2hurn1gkr1hotm300kb6shh3qvmi4gjl7lrl3gjl7vnvna00ptbkrtn1mh9umpk2ghn2hurn1gkr1hotm300kf8gk6vhibonkbnu3gk6glqanvnanu3lig600lig6mig600mig6mig600mig6lig600lig6kbcvvveiiiv1pigfghhm1piki1sgjdjvtj1qghbhuni1ppn3ksio1ukq5nu3qjq4v5uis2s6o7km7spbttt4kuu3jssj10u3jq4o9jim4hh9nialmu2tto4qsgchrr900kf8ihjg6kuup8ojun6urji8ihjg6opoq7quno5urji8jgk400kgk4kgk400jgk4kgk400jgk4jgk400kgk4kf8gk6jlo8sqq8nu3gk6kog8riu7nu3lhp400lhp4mhp400mhp4mhp400mhp4lhp400lhp4kf8gk6vlm8oro8nu3gk6gpu7njs7nu3hgo400hgo4igo400igo4igo400igo4hgo400hgo4kf8gk6vvs7olv7nu3gk6gjl7nti7nu3jti400jti4kti400kti4kti400kti4jti400jti4k34rlgdlj2msmg3k8k34iidvkqehidglqek34gtdrtqcvsdstqck34mtuvbmrgpi1urjq6ghujh1k34unmmbmlirfusqs6okrgh1k34unpuauuuvcmtvp6gioug1k34tqrempiki1uins4gulkh1k34tpkcmjnueusmt4okrgh1k34ileumtjdmvpv4gootg1k34kvmo7smmo6ornmaovko6k34immq2mggmh1uhvk5onljh1k34ilsv2mqovfmssk5oqtih1k34igjj3utrsemmsl5gkthh1k34iino2mggmh1uhvk5onljh1k34itqj3mhghg1mssk5oqtih1k34ilsv2unrtemmsl5gkthh1k34mr6tilatgi2gvli2k34vrq6hi1uhvk2kk2k34vrq6hi1mqlu1kk2mg14am60o7q12gv2imdgv22mg14i2m70o7q12gv2qndgv22m46o1k2u2ul7kk2m4m46o1k2u2gt7io3m42ipdiqdgv22m46o1k2u2gt7qu2m42ipdsrdgv22m44m6g8mr2gt72gv2mtdgv22g1io2m44g5ocsg3gu42sudgvdgv22m44m6gg1sg3gu42sudmgegv22mk16m6u7qj1ug1mr2gt7s1u12gv2shegv22mc4m6o7onr9qpui1g3qpui12qjemkegv22mc6m6g7o7onr9ussdgnhh1mc6m6g7o7qpui1umsg1gnhh12klekmegv22ms16u8u9saoqgh1onr9ikul1q10ms16u8u9saoqgh1qpui1ikul1q102uneipegv22ms16u8u9saoqgh1oqlcikul1q102greipegv22m44u4sbim6gt7g1sr54gv2usegv22gv2qtegv22m44m6kdim6gt74gv2gvegv22gv2qtegv22m46sbgcoest2sh3ih52gv2ugfgv22mk14ieij1kf0a0m52oifmjfgv22mk14ufuk1kf0a2kkfmjfgv2264kg1mi1g500oc2slfomfgv2264oesh10oc2gv2mnfgv22mk16sbqfoh1mn3kh7qk7g1i12gv2sofgv22mk18sbscqg1oi1um2mn3kh7qk70g1i12gv2qqfgv22m46og1sg1sh1uu5ip2gp1m86og1sg1sh1ktk4ivr2gqf2usfutfgv22m46og1sg1sh1il6kt2gp1m86og1sg1sh1okp4urj2gqf2ovfogg1gv22m46og1sg1sh1qm6ir2gp1m86og1sg1sh1kpo4ujh2gqf2iig1ijg1gv22m46og1sg1sh1mq6mq3gp1m86og1sg1sh1olo4mlh3gqf2skg1slg1gv22m46og1sg1sh1kj6sr2gp1m86og1sg1sh1ohn4mtp2gqf2mng1mog1gv22m46og1sg1sh1on6mh3gp1m86og1sg1sh1gip4ihq2gqf2gqg1grg1gv22mk14qh1mq1sg20amk14qh1mq1mr3ij5a2qsg1otg1gv22m46gm1km1in1sl6kt3gp1m86gm1km1in1sho4iun2gqf2gvg1ggh1gv22m46gm1km1in1uu5sq3gp1m86gm1km1in1snn4qnm2gqf2qhh1qih1gv22m46gm1km1in1ul6kn4gp1m86gm1km1in1goo4inu2gqf2kkh1klh1gv22m46gm1km1in1ki6gh4gp1m86gm1km1in1glm4iun2gqf2umh1unh1gv22m46gm1km1in1sv5sv3gp1m86gm1km1in1khm4qnm2gqf2oph1oqh1gv22m46gm1km1in1kn6sk4gp1m86gm1km1in1snn4inu2gqf2ish1ith1gv22mk14im1st1ol3ip362gv2suh1gv22mk14im1us1oj2on262gv2kgi1gv22mk14im1qu1qb062shi1mjfgv22mk14im1ks1qq2in262kji1mjfgv22mk14im1ot1qr1gl16g1uu22ski1qli1gv22mk14im1ot1sf06mk14im1ot1kt4ij562omi1mni1gv222gv2omfgv22mg14im1ot1u9oc62gv2opi1gv22mk14im1qt1mt1qi362gv2gri1gv22g1gj1mk14im1qt1sm6gh762osi1ssi1gv22mk14im1gu1og2uj26mk14im1gu1kh5sr562kui1ivi1gv22q52e844g1666466686m166c666666666s3866666o1666c46cc6cg8u7s7q7m7k7i7g7u6s6q6o6m6k6u5s5q5m5k5i5g5u4s4q4o4m4k4i3g3u2s2q2o2m2g2u1s1q1m1k1i1ea84moamoautamgbuibimbimbuibuqbiubmhcqkcmoamoauibuncuncqocmpcimbimbiqcuqcqrcmscitcutcqucmvcigdugdqhdmidijdujdqkduncuncmldqucqocmpcuibimbmoagndoodirdssdiudsvdihegjeqkeknemqekseutesveuhfqjfilfsmfiofgqfksfuufohg1ikg1smg1mpg1gsg1mug1ghh1qjh1kmh1uoh1orh1iuh1qvh1ihi1qii1iki1uli1koi1uoi1mqi1uri1qti1ggj1msg54i2m2klnr1kogp2klnr1klnr1msg56mg1og1qg1klnr1klnr1klnr1kokm1klnr1klnr1msg56ul1gm1im1klnr1klnr1klnr1kmok1klnr1klnr12400628m6sci8i6i2mnk1mok1spk1irk1irk1irk1coi3gl7gr8sv8qgj1qrk1";
-const SP = ['matrix(4.95002,0,0,4.95195,', 'matrix(.87222,0,0,.87256,', 'matrix(.86631,0,0,.86631,', 'matrix(8.12277,0,0,8.12594,', 'matrix(.09225,0,0,.09225,', 'matrix(1.542,0,0,1.542,', 'matrix(1.0059,0,0,1.0059,', 'matrix(4.53347,0,0,4.53523,', 'matrix(.16529,0,0,.16529,', 'matrix(1.0217,0,0,1.0217,', 'matrix(.1727,0,0,.1727,'];
+const SP = ['matrix(4.95002,0,0,4.95195,', 'matrix(0.87222,0,0,0.87256,', 'matrix(0.86631,0,0,0.86631,', 'matrix(8.12277,0,0,8.12594,', 'matrix(0.09225,0,0,0.09225,', 'matrix(1.542,0,0,1.542,', 'matrix(1.0059,0,0,1.0059,', 'matrix(4.53347,0,0,4.53523,', 'matrix(0.16529,0,0,0.16529,', 'matrix(1.0217,0,0,1.0217,', 'matrix(0.1727,0,0,0.1727,'];
 
 export const dl =
 { k: 0, c: [
   { k: 0, clip: { r: [0, 0, 281, 500] }, c: [
     { k: 0, s: 1, m: [4.95002, 0, -605.97, 0, 4.95195, -504.36, 0, 0, 1], c: [
-      { k: 0, s: 2, m: [.15138, 0, 144.98, 0, .15138, 118.06, 0, 0, 1], c: [
+      { k: 0, s: 2, m: [0.15138, 0, 144.98, 0, 0.15138, 118.06, 0, 0, 1], c: [
         { k: 0, m: [1, 0, 40, 0, 1, -210, 0, 0, 1], c: [
           { k: 3, s: 4, cx: 0, cy: 0, rx: 28.117, ry: 42.017, paint: { f: '#00d1c2' } }
         ] }
@@ -1977,14 +1977,14 @@ export const dl =
           { k: 1, s: 11, hd: 1, paint: { cap: 1, ml: 10, sc: '#00d1c2', sw: 9.194 } }
         ] }
       ] },
-      { k: 0, s: 12, m: [.20202, 0, 146.62, 0, .20194, 210.4, 0, 0, 1], hd: 1, c: [
+      { k: 0, s: 12, m: [0.20202, 0, 146.62, 0, 0.20194, 210.4, 0, 0, 1], hd: 1, c: [
         { k: 1, s: 13, paint: { cap: 1, sc: '#33cfc2', sw: 3 } }
       ] },
-      { k: 0, s: 14, m: [.20202, 0, 146.62, 0, .20194, 210.4, 0, 0, 1], hd: 1, c: [
+      { k: 0, s: 14, m: [0.20202, 0, 146.62, 0, 0.20194, 210.4, 0, 0, 1], hd: 1, c: [
         { k: 1, s: 15, paint: { cap: 1, sc: '#33cfc2', sw: 3 } }
       ] }
     ] },
-    { k: 0, s: 16, m: [.87222, 0, 79.14, 0, .87256, 185.63, 0, 0, 1], c: [
+    { k: 0, s: 16, m: [0.87222, 0, 79.14, 0, 0.87256, 185.63, 0, 0, 1], c: [
       { k: 0, s: 17, hd: 1, c: [
         { k: 0, m: [1, 0, 40, 0, 1, -210, 0, 0, 1], c: [
           { k: 3, cx: 0, cy: 0, rx: 28.117, ry: 28.117, paint: { f: '#00d1c2' } }
@@ -2013,21 +2013,21 @@ export const dl =
         ] }
       ] },
       { k: 0, s: 33, hd: 1, c: [
-        { k: 1, s: 34, paint: { sc: '#00d1c2', sw: .5 } }
+        { k: 1, s: 34, paint: { sc: '#00d1c2', sw: 0.5 } }
       ] },
       { k: 0, s: 35, hd: 1, c: [
         { k: 0, m: [1, 0, 196, 0, 1, 267, 0, 0, 1], c: [
-          { k: 1, s: 37, paint: { cap: 1, sc: '#00d1c2', sw: .5 } }
+          { k: 1, s: 37, paint: { cap: 1, sc: '#00d1c2', sw: 0.5 } }
         ] }
       ] },
       { k: 0, s: 38, hd: 1, c: [
         { k: 0, m: [1, 0, 196, 0, 1, 267, 0, 0, 1], c: [
-          { k: 1, s: 40, paint: { cap: 1, sc: '#00d1c2', sw: .5 } }
+          { k: 1, s: 40, paint: { cap: 1, sc: '#00d1c2', sw: 0.5 } }
         ] }
       ] },
       { k: 0, s: 41, hd: 1, c: [
         { k: 0, m: [1, 0, 196, 0, 1, 267, 0, 0, 1], c: [
-          { k: 1, s: 43, paint: { cap: 1, sc: '#00d1c2', sw: .5 } }
+          { k: 1, s: 43, paint: { cap: 1, sc: '#00d1c2', sw: 0.5 } }
         ] }
       ] },
       { k: 0, m: [5.9, 0, 157.88, 0, 5.9, -400.47, 0, 0, 1], c: [
@@ -2044,7 +2044,7 @@ export const dl =
       ] }
     ] },
     { k: 0, s: 51, m: [8.12277, 0, 348.39, 0, 8.12594, 50.41, 0, 0, 1], c: [
-      { k: 0, s: 52, m: [.09225, 0, 61.42, 0, .09225, 47.38, 0, 0, 1], c: [
+      { k: 0, s: 52, m: [0.09225, 0, 61.42, 0, 0.09225, 47.38, 0, 0, 1], c: [
         { k: 0, s: 53, hd: 1, c: [
           { k: 0, m: [1, 0, 40, 0, 1, -210, 0, 0, 1], c: [
             { k: 3, s: 55, cx: 0, cy: 0, rx: 0, ry: 0, paint: { f: '#00d1c2' } }
@@ -2053,10 +2053,10 @@ export const dl =
       ] },
       { k: 0, s: 56, m: [1.0059, 0, -212.56, 0, 1.0059, -189.98, 0, 0, 1], hd: 1, c: [
         { k: 0, m: [1, 0, 196, 0, 1, 267, 0, 0, 1], c: [
-          { k: 3, cx: .8, cy: -.5, rx: 22.3, ry: 22.3, paint: { sc: '#007a87', sw: 9 } }
+          { k: 3, cx: 0.8, cy: -0.5, rx: 22.3, ry: 22.3, paint: { sc: '#007a87', sw: 9 } }
         ] }
       ] },
-      { k: 0, s: 59, m: [-.99062, .17467, 133.79, -.17467, -.99062, 376.48, 0, 0, 1], hd: 1, c: [
+      { k: 0, s: 59, m: [-0.99062, 0.17467, 133.79, -0.17467, -0.99062, 376.48, 0, 0, 1], hd: 1, c: [
         { k: 0, m: [1, 0, 196, 0, 1, 267, 0, 0, 1], c: [
           { k: 1, s: 61, paint: { cap: 1, sc: '#00d1c2', sw: 9.194 } }
         ] }
@@ -2096,32 +2096,32 @@ export const dl =
           { k: 1, s: 82, paint: { cap: 1, ml: 10, sc: '#00d1c2', sw: 9.194 } }
         ] }
       ] },
-      { k: 0, s: 83, m: [.12311, 0, 43.66, 0, .12306, -11.94, 0, 0, 1], hd: 1, c: [
+      { k: 0, s: 83, m: [0.12311, 0, 43.66, 0, 0.12306, -11.94, 0, 0, 1], hd: 1, c: [
         { k: 0, s: 84, c: [
           { k: 1, s: 85, paint: { cap: 1, sc: '#00d1c2', sw: 2 } }
         ] }
       ] },
-      { k: 0, s: 86, m: [.12311, 0, 43.66, 0, .12306, -11.94, 0, 0, 1], hd: 1, c: [
+      { k: 0, s: 86, m: [0.12311, 0, 43.66, 0, 0.12306, -11.94, 0, 0, 1], hd: 1, c: [
         { k: 0, s: 87, c: [
           { k: 1, s: 88, paint: { cap: 1, sc: '#00d1c2', sw: 2 } }
         ] }
       ] },
-      { k: 0, s: 89, m: [.12311, 0, 43.66, 0, .12306, -11.94, 0, 0, 1], hd: 1, c: [
+      { k: 0, s: 89, m: [0.12311, 0, 43.66, 0, 0.12306, -11.94, 0, 0, 1], hd: 1, c: [
         { k: 0, s: 90, c: [
           { k: 1, s: 91, paint: { cap: 1, sc: '#00d1c2', sw: 2 } }
         ] }
       ] },
-      { k: 0, s: 92, m: [.12311, 0, 43.66, 0, .12306, -11.94, 0, 0, 1], hd: 1, c: [
+      { k: 0, s: 92, m: [0.12311, 0, 43.66, 0, 0.12306, -11.94, 0, 0, 1], hd: 1, c: [
         { k: 0, s: 93, c: [
           { k: 1, s: 94, paint: { cap: 1, sc: '#00d1c2', sw: 2 } }
         ] }
       ] },
-      { k: 0, s: 95, m: [.12311, 0, 43.66, 0, .12306, -11.94, 0, 0, 1], hd: 1, c: [
+      { k: 0, s: 95, m: [0.12311, 0, 43.66, 0, 0.12306, -11.94, 0, 0, 1], hd: 1, c: [
         { k: 0, s: 96, c: [
           { k: 1, s: 97, paint: { cap: 1, sc: '#00d1c2', sw: 2 } }
         ] }
       ] },
-      { k: 0, s: 98, m: [.12311, 0, 43.66, 0, .12306, -11.94, 0, 0, 1], hd: 1, c: [
+      { k: 0, s: 98, m: [0.12311, 0, 43.66, 0, 0.12306, -11.94, 0, 0, 1], hd: 1, c: [
         { k: 0, s: 99, c: [
           { k: 1, s: 100, paint: { cap: 1, sc: '#00d1c2', sw: 2 } }
         ] }
@@ -2130,47 +2130,47 @@ export const dl =
     { k: 0, s: 101, m: [4.53347, 0, -315.45, 0, 4.53523, 91.97, 0, 0, 1], c: [
       { k: 0, s: 102, hd: 1, c: [
         { k: 0, m: [1, 0, 304.14, 0, 1, 282.41, 0, 0, 1], c: [
-          { k: 1, d: 'M.859-21.143C.859-21.143-.3-.812-1.526,20.687', paint: { cap: 2, ml: 10, sc: '#007a87', sw: 9 } }
+          { k: 1, d: 'M0.859-21.143C0.859-21.143-0.3-0.812-1.526,20.687', paint: { cap: 2, ml: 10, sc: '#007a87', sw: 9 } }
         ] }
       ] },
       { k: 0, s: 105, m: [1.0059, 0, -214.87, 0, 1.0059, -154.94, 0, 0, 1], c: [
         { k: 0, s: 106, hd: 1, c: [
           { k: 0, m: [1, 0, 304.14, 0, 1, 282.41, 0, 0, 1], c: [
-            { k: 1, d: 'M.859-21.143C.859-21.143-.3-.812-1.526,20.687', paint: { cap: 2, ml: 10, sc: '#00d1c2', sw: 9.194 } }
+            { k: 1, d: 'M0.859-21.143C0.859-21.143-0.3-0.812-1.526,20.687', paint: { cap: 2, ml: 10, sc: '#00d1c2', sw: 9.194 } }
           ] }
         ] }
       ] },
       { k: 0, s: 109, hd: 1, c: [
         { k: 0, m: [1, 0, 344.67, 0, 1, 261.88, 0, 0, 1], c: [
-          { k: 1, d: 'M-13.664-.145C-13.664-.145-1.129-.084,14.55-.008', paint: { cap: 1, ml: 10, sc: '#00d1c2', sw: 9.6 } }
+          { k: 1, d: 'M-13.664-0.145C-13.664-0.145-1.129-0.084,14.55-0.008', paint: { cap: 1, ml: 10, sc: '#00d1c2', sw: 9.6 } }
         ] }
       ] },
       { k: 0, s: 112, hd: 1, c: [
         { k: 0, m: [1, 0, 344.67, 0, 1, 261.88, 0, 0, 1], c: [
-          { k: 1, d: 'M-13.664-.145C-13.664-.145-1.129-.084,14.55-.008', paint: { cap: 1, ml: 10, sc: '#007a87', sw: 9.562 } }
+          { k: 1, d: 'M-13.664-0.145C-13.664-0.145-1.129-0.084,14.55-0.008', paint: { cap: 1, ml: 10, sc: '#007a87', sw: 9.562 } }
         ] }
       ] },
       { k: 0, s: 115, hd: 1, c: [
         { k: 0, m: [1, 0, 331.66, 0, 1, 238.14, 0, 0, 1], c: [
-          { k: 1, d: 'M-26.67-.283C-26.67-.283-.83-.211,27.432-.133', paint: { cap: 1, ml: 10, sc: '#007a87', sw: 9.3 } }
+          { k: 1, d: 'M-26.67-0.283C-26.67-0.283-0.83-0.211,27.432-0.133', paint: { cap: 1, ml: 10, sc: '#007a87', sw: 9.3 } }
         ] }
       ] },
       { k: 0, s: 118, m: [1.0059, 0, -151.4, 0, 1.0059, -189.98, 0, 0, 1], c: [
         { k: 0, s: 119, hd: 1, c: [
           { k: 0, m: [1, 0, 331.66, 0, 1, 238.14, 0, 0, 1], c: [
-            { k: 1, d: 'M-26.67-.283C-26.67-.283-.83-.211,27.432-.133', paint: { cap: 1, ml: 10, sc: '#00d1c2', sw: 9.562 } }
+            { k: 1, d: 'M-26.67-0.283C-26.67-0.283-0.83-0.211,27.432-0.133', paint: { cap: 1, ml: 10, sc: '#00d1c2', sw: 9.562 } }
           ] }
         ] }
       ] },
       { k: 0, s: 122, hd: 1, c: [
         { k: 0, m: [1, 0, 344.67, 0, 1, 214.84, 0, 0, 1], c: [
-          { k: 1, d: 'M-13.664-.145C-13.664-.145-.556-.07,14.761,.018', paint: { cap: 1, ml: 10, sc: '#007a87', sw: 9.3 } }
+          { k: 1, d: 'M-13.664-0.145C-13.664-0.145-0.556-0.07,14.761,0.018', paint: { cap: 1, ml: 10, sc: '#007a87', sw: 9.3 } }
         ] }
       ] },
       { k: 0, s: 125, m: [1.0059, 0, -186.11, 0, 1.0059, -189.98, 0, 0, 1], c: [
         { k: 0, s: 126, hd: 1, c: [
           { k: 0, m: [1, 0, 344.67, 0, 1, 214.84, 0, 0, 1], c: [
-            { k: 1, d: 'M-13.664-.145C-13.664-.145-.556-.07,14.761,.018', paint: { cap: 1, ml: 10, sc: '#00d1c2', sw: 9.562 } }
+            { k: 1, d: 'M-13.664-0.145C-13.664-0.145-0.556-0.07,14.761,0.018', paint: { cap: 1, ml: 10, sc: '#00d1c2', sw: 9.562 } }
           ] }
         ] }
       ] },
@@ -2216,7 +2216,7 @@ export const dl =
           { k: 1, d: 'M1.681-29.992L-1.681,29.992', paint: { cap: 2, ml: 10, sc: '#007a87', sw: 9.194 } }
         ] }
       ] },
-      { k: 0, s: 154, m: [.16529, 0, 117.36, 0, .16529, 50.73, 0, 0, 1], c: [
+      { k: 0, s: 154, m: [0.16529, 0, 117.36, 0, 0.16529, 50.73, 0, 0, 1], c: [
         { k: 0, s: 155, hd: 1, c: [
           { k: 0, m: [1, 0, 40, 0, 1, -210, 0, 0, 1], c: [
             { k: 3, s: 157, cx: 0, cy: 0, rx: 0, ry: 0, paint: { f: '#00d1c2' } }
@@ -2224,7 +2224,7 @@ export const dl =
         ] }
       ] }
     ] },
-    { k: 0, m: [.74933, 0, 115.4, 0, .74963, 198.15, 0, 0, 1], c: [
+    { k: 0, m: [0.74933, 0, 115.4, 0, 0.74963, 198.15, 0, 0, 1], c: [
       { k: 0, s: 159, m: [1.0059, 0, -212.56, 0, 1.0059, -189.98, 0, 0, 1], hd: 1, c: [
         { k: 0, m: [1, 0, 304.14, 0, 1, 282.41, 0, 0, 1], c: [
           { k: 1, s: 161, paint: { cap: 2, ml: 10, sc: '#00d1c2', sw: 9.194 } }
@@ -2247,7 +2247,7 @@ export const dl =
       ] },
       { k: 0, s: 171, m: [1.0059, 0, -212.56, 0, 1.0059, -189.98, 0, 0, 1], hd: 1, c: [
         { k: 0, m: [1, 0, 344.67, 0, 1, 214.84, 0, 0, 1], c: [
-          { k: 1, d: 'M-13.664-.145C-13.664-.145-.556-.07,14.761,.018', paint: { cap: 1, ml: 10, sc: '#00d1c2', sw: 9.562 } }
+          { k: 1, d: 'M-13.664-0.145C-13.664-0.145-0.556-0.07,14.761,0.018', paint: { cap: 1, ml: 10, sc: '#00d1c2', sw: 9.562 } }
         ] }
       ] },
       { k: 0, s: 174, m: [1.0059, 0, -212.56, 0, 1.0059, -189.98, 0, 0, 1], hd: 1, c: [
@@ -2265,7 +2265,7 @@ export const dl =
       ] },
       { k: 0, s: 182, m: [1.0059, 0, -212.56, 0, 1.0059, -189.98, 0, 0, 1], hd: 1, c: [
         { k: 0, m: [1, 0, 227.68, 0, 1, 234.38, 0, 0, 1], c: [
-          { k: 1, d: 'M-31.912,38.005C-33.812,31.908-37.358,27.058-37.397,27.014C-38.558,25.714-39.752,24.147-40.698,22.661C-46.637,13.334-47.84,.933-37.873-7.117C-13.196-27.046,8.96,11.559,49.506,11.559', paint: { cap: 1, ml: 10, sc: '#007a87', sw: 8.6 } }
+          { k: 1, d: 'M-31.912,38.005C-33.812,31.908-37.358,27.058-37.397,27.014C-38.558,25.714-39.752,24.147-40.698,22.661C-46.637,13.334-47.84,0.933-37.873-7.117C-13.196-27.046,8.96,11.559,49.506,11.559', paint: { cap: 1, ml: 10, sc: '#007a87', sw: 8.6 } }
         ] }
       ] },
       { k: 0, s: 185, m: [1.0059, 0, -212.56, 0, 1.0059, -189.98, 0, 0, 1], hd: 1, c: [
@@ -2275,10 +2275,10 @@ export const dl =
       ] },
       { k: 0, s: 188, m: [1.0059, 0, -212.56, 0, 1.0059, -189.98, 0, 0, 1], hd: 1, c: [
         { k: 0, m: [1, 0, 196, 0, 1, 267, 0, 0, 1], c: [
-          { k: 3, cx: .8, cy: -.5, rx: 22.3, ry: 22.3, paint: { sc: '#00d1c2', sw: 9.194 } }
+          { k: 3, cx: 0.8, cy: -0.5, rx: 22.3, ry: 22.3, paint: { sc: '#00d1c2', sw: 9.194 } }
         ] }
       ] },
-      { k: 0, s: 191, m: [.81379, .59125, -332.32, -.59125, .81379, -22.43, 0, 0, 1], hd: 1, c: [
+      { k: 0, s: 191, m: [0.81379, 0.59125, -332.32, -0.59125, 0.81379, -22.43, 0, 0, 1], hd: 1, c: [
         { k: 0, m: [1, 0, 196, 0, 1, 267, 0, 0, 1], c: [
           { k: 1, s: 193, paint: { cap: 1, sc: '#007a87', sw: 9.194 } }
         ] }

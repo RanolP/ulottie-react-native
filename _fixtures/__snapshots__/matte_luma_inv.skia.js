@@ -25,15 +25,15 @@
 //
 // The profile says the time is in path-string assembly (`pathD` + `pdPair` +
 // `pdSep`, 15% together) and in `setAttribute` and `evalExpr` — not here.
+//
+// A fraction keeps its leading zero even though SVG parses ".5" fine. The
+// react-native-svg target shares this helper, and its JS prop parser rejects
+// ".47" ("not a valid number or percentage string"), leaves the prop a String,
+// and Fabric's generated RNSVGGroupManagerDelegate.setProperty then throws
+// ClassCastException: String cannot be cast to Double — an app-killing crash on
+// Android, observed on a Pixel 8 with the `mixed16` fixture.
 function fmt(x, scale) { 'worklet';
-  const s = '' + Math.round(x * scale) / scale;
-  // A bare leading zero is redundant in SVG: ".5" and "-.5" parse identically
-  // and are shorter.
-  if (s.charCodeAt(0) === 48 && s.charCodeAt(1) === 46) return s.slice(1);
-  if (s.charCodeAt(0) === 45 && s.charCodeAt(1) === 48 && s.charCodeAt(2) === 46) {
-    return '-' + s.slice(2);
-  }
-  return s;
+  return '' + Math.round(x * scale) / scale;
 }
 
 /** Coordinates and plain attribute values: 3 decimals. */
@@ -1543,16 +1543,16 @@ const D = "0gmqe0givr22q1sb0gg40000o200gt7gt7sn30gm2gt7uk10gm2gt7sm30i6gt7qp20mj
 export const dl =
 { k: 0, c: [
   { k: 0, clip: { r: [0, 0, 100, 100] }, c: [
-    { k: 0, s: 1, m: [.99255, .12187, -9.93, -.12187, .99255, 6.72, 0, 0, 1], c: [
+    { k: 0, s: 1, m: [0.99255, 0.12187, -9.93, -0.12187, 0.99255, 6.72, 0, 0, 1], c: [
       { k: 0, clip: { r: [0, 0, 100, 100] }, c: [
         { k: 0, m: [1, 0, 302, 0, 1, 462, 0, 0, 1], c: [
           { k: 1, d: 'M-252-444C-234.327-444-220-429.673-220-412C-220-394.327-234.327-380-252-380C-269.673-380-284-394.327-284-412C-284-429.673-269.673-444-252-444Z', paint: { f: '#ffe096' } }
         ] }
       ] }
     ] },
-    { k: 0, s: 5, m: [.99255, .12187, -9.93, -.12187, .99255, 6.72, 0, 0, 1], c: [
-      { k: 0, s: 6, m: [.98163, .19081, -13.62, -.19081, .98163, 10.46, 0, 0, 1], c: [
-        { k: 0, s: 7, m: [.98769, -.15643, 8.44, .15643, .98769, -7.21, 0, 0, 1], c: [
+    { k: 0, s: 5, m: [0.99255, 0.12187, -9.93, -0.12187, 0.99255, 6.72, 0, 0, 1], c: [
+      { k: 0, s: 6, m: [0.98163, 0.19081, -13.62, -0.19081, 0.98163, 10.46, 0, 0, 1], c: [
+        { k: 0, s: 7, m: [0.98769, -0.15643, 8.44, 0.15643, 0.98769, -7.21, 0, 0, 1], c: [
           { k: 0, clip: { r: [0, 0, 100, 100] }, c: [
             { k: 0, m: [1, 0, -34, 0, 1, 462, 0, 0, 1], c: [
               { k: 1, s: 10, d: 'M84-398.906C88.971-398.906,91.5-399.5,91.5-397C91.5-394.406,88.971-395,84-395C79.029-395,76.75-394.781,76.75-397C76.75-399.344,79.029-398.906,84-398.906Z', paint: { f: '#f59e85' } }
@@ -1582,13 +1582,13 @@ export const dl =
           ] }
         ] }
       ] },
-      { k: 0, s: 17, m: [.98163, .19081, -13.62, -.19081, .98163, 10.46, 0, 0, 1], c: [
+      { k: 0, s: 17, m: [0.98163, 0.19081, -13.62, -0.19081, 0.98163, 10.46, 0, 0, 1], c: [
         { k: 0, clip: { r: [0, 0, 100, 100] }, c: [
           { k: 0, m: [1, 0, -34, 0, 1, 462, 0, 0, 1], c: [
-            { k: 0, s: 20, m: [.8, 0, 14.06, 0, .8, -83.27, 0, 0, 1], c: [
+            { k: 0, s: 20, m: [0.8, 0, 14.06, 0, 0.8, -83.27, 0, 0, 1], c: [
               { k: 1, d: 'M70.5-423C74.09-423,77-420.09,77-416.5C77-412.91,74.09-410,70.5-410C66.91-410,64-412.91,64-416.5C64-420.09,66.91-423,70.5-423Z', paint: { f: '#faf2f0' } }
             ] },
-            { k: 0, s: 22, m: [.8, 0, 19.48, 0, .8, -83.3, 0, 0, 1], c: [
+            { k: 0, s: 22, m: [0.8, 0, 19.48, 0, 0.8, -83.3, 0, 0, 1], c: [
               { k: 1, d: 'M97.5-423C101.09-423,104-420.09,104-416.5C104-412.91,101.09-410,97.5-410C93.91-410,91-412.91,91-416.5C91-420.09,93.91-423,97.5-423Z', paint: { f: '#faf2f0' } }
             ] }
           ] },

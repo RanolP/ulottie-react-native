@@ -11,6 +11,10 @@ const config = getDefaultConfig(__dirname);
 // lookup off routes every import through the correct copies.
 config.resolver.disableHierarchicalLookup = true;
 
+// dotLottie archives ship as opaque assets (fetched by the native
+// @lottiefiles/dotlottie-react-native player), not as JS modules.
+config.resolver.assetExts = [...config.resolver.assetExts, 'lottie'];
+
 // lottie_logo_1 carries an inverted alpha track matte (tt: 2); rn-svg has no
 // working filter primitives, so its `.lottie.json` compile only passes as an
 // explicit degradation — it renders without the inversion. The `.skia.…` twin

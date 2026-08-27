@@ -25,15 +25,15 @@
 //
 // The profile says the time is in path-string assembly (`pathD` + `pdPair` +
 // `pdSep`, 15% together) and in `setAttribute` and `evalExpr` — not here.
+//
+// A fraction keeps its leading zero even though SVG parses ".5" fine. The
+// react-native-svg target shares this helper, and its JS prop parser rejects
+// ".47" ("not a valid number or percentage string"), leaves the prop a String,
+// and Fabric's generated RNSVGGroupManagerDelegate.setProperty then throws
+// ClassCastException: String cannot be cast to Double — an app-killing crash on
+// Android, observed on a Pixel 8 with the `mixed16` fixture.
 function fmt(x, scale) { 'worklet';
-  const s = '' + Math.round(x * scale) / scale;
-  // A bare leading zero is redundant in SVG: ".5" and "-.5" parse identically
-  // and are shorter.
-  if (s.charCodeAt(0) === 48 && s.charCodeAt(1) === 46) return s.slice(1);
-  if (s.charCodeAt(0) === 45 && s.charCodeAt(1) === 48 && s.charCodeAt(2) === 46) {
-    return '-' + s.slice(2);
-  }
-  return s;
+  return '' + Math.round(x * scale) / scale;
 }
 
 /** Coordinates and plain attribute values: 3 decimals. */
@@ -1095,12 +1095,12 @@ export const dl =
 { k: 0, c: [
   { k: 0, clip: { r: [0, 0, 512, 512] }, c: [
     { k: 0, m: [1, 0, 388, 0, 1, 388, 0, 0, 1], c: [
-      { k: 0, fx: [[{ cf: [0, 0, 0, 0, 1, 0, 0, 0, 0, .55, 0, 0, 0, 0, .1, 0, 0, 0, .8, 0] }]], c: [
+      { k: 0, fx: [[{ cf: [0, 0, 0, 0, 1, 0, 0, 0, 0, 0.55, 0, 0, 0, 0, 0.1, 0, 0, 0, 0.8, 0] }]], c: [
         { k: 2, h: 140, w: 140, x: -70, y: -70, paint: { f: '#999' } }
       ] }
     ] },
     { k: 0, m: [1, 0, 124, 0, 1, 388, 0, 0, 1], c: [
-      { k: 0, fx: [[0, { cf: [0.3086, 0.6094, 0.082, 0, 0, 0.3086, 0.6094, 0.082, 0, 0, 0.3086, 0.6094, 0.082, 0, 0, 0, 0, 0, 1, 0] }, { cf2: [[.8, 0, 0, 0, .2, .9, 0, 0, 0, 0, 0, 0, 0, 0, .4, 0, 0, 0, 1, 0], [0.3086, 0.6094, 0.082, 0, 0, 0.3086, 0.6094, 0.082, 0, 0, 0.3086, 0.6094, 0.082, 0, 0, 0, 0, 0, 1, 0]] }]], c: [
+      { k: 0, fx: [[0, { cf: [0.3333, 0.3333, 0.3333, 0, 0, 0.3333, 0.3333, 0.3333, 0, 0, 0.3333, 0.3333, 0.3333, 0, 0, 0, 0, 0, 1, 0] }, { cf2: [[0.8, 0, 0, 0, 0.2, 0.9, 0, 0, 0, 0, 0, 0, 0, 0, 0.4, 0, 0, 0, 1, 0], [0.3333, 0.3333, 0.3333, 0, 0, 0.3333, 0.3333, 0.3333, 0, 0, 0.3333, 0.3333, 0.3333, 0, 0, 0, 0, 0, 1, 0]] }]], c: [
         { k: 2, h: 140, w: 140, x: -70, y: -70, paint: { f: '#4073d9' } }
       ] }
     ] },

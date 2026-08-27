@@ -311,9 +311,10 @@ fn expression_bodies_only_call_what_the_module_declares() {
             let t = line.trim_start();
             // `catch (e$$4)` binds a name too, and Bodymovin emits one.
             if let Some(rest) = t.split_once("catch (")
-                && let Some((binding, _)) = rest.1.split_once(')') {
-                    known.insert(binding.trim().to_string());
-                }
+                && let Some((binding, _)) = rest.1.split_once(')')
+            {
+                known.insert(binding.trim().to_string());
+            }
             // Arrow parameters: the preamble stubs are all arrows, and
             // `((mode, n) => value)` binds two names in passing.
             for (at, _) in t.match_indices("=>") {

@@ -4,7 +4,9 @@
   "workspaces": [
     "ulottie-dev-server",
     "ulottie-react-native",
-    "examples/*"
+    "ulottie-react-native-rt-tiny-skia",
+    "ulottie-react-native-rt-thorvg",
+    "examples/compare"
   ],
   "packageManager": "yarn@4.18.0"
 }

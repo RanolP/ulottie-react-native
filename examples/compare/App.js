@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import ParityScreen from './src/ParityScreen';
 import PerfScreen from './src/PerfScreen';
+import RtScreen from './src/RtScreen';
 
 export default function App() {
   const [tab, setTab] = useState('parity');
@@ -24,8 +25,21 @@ export default function App() {
         >
           <Text style={styles.tabText}>Perf</Text>
         </Pressable>
+        <Pressable
+          testID="tab-rt"
+          onPress={() => setTab('rt')}
+          style={[styles.tab, tab === 'rt' && styles.tabSelected]}
+        >
+          <Text style={styles.tabText}>RT</Text>
+        </Pressable>
       </View>
-      {tab === 'parity' ? <ParityScreen /> : <PerfScreen />}
+      {tab === 'parity' ? (
+        <ParityScreen />
+      ) : tab === 'perf' ? (
+        <PerfScreen />
+      ) : (
+        <RtScreen />
+      )}
     </View>
   );
 }

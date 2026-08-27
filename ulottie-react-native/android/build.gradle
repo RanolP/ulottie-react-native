@@ -1,0 +1,75 @@
+// The backend-agnostic half of the rt native code, as an Android library:
+// libulottiertshared.so holds the `global.UlottieRtApi` JSI host object and
+// the nativeId -> view registry it dispatches through (../cpp, the same
+// sources the iOS UlottieRtShared pod compiles). The library publishes a
+// prefab module so each rasterizer package (ulottie-react-native-rt-tiny-skia,
+// ulottie-react-native-rt-thorvg) links against it — the DT_NEEDED edge is
+// what guarantees an app with both backends gets exactly ONE registry and one
+// JS binding (two copies compiled into two .so files would be two registries:
+// Android loads app libraries RTLD_LOCAL, so nothing else deduplicates them).
+apply plugin: 'com.android.library'
+
+def safeExtGet(prop, fallback) {
+    rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
+}
+
+def prefabHeadersDir = file("$buildDir/prefab-headers")
+
+// The prefab module exposes the public headers under the same
+// `UlottieRtShared/...` prefix the iOS pod uses (`header_dir`), so consumer
+// code includes `<UlottieRtShared/UlottieRtRegistry.h>` on both platforms.
+task prepareUlottieRtSharedHeaders(type: Copy) {
+    from("$projectDir/../cpp") { include '**/*.h' }
+    // The Android-only adapter header (needs <jni.h>, so it lives outside
+    // the platform-agnostic cpp/ the iOS pod compiles).
+    from("$projectDir/src/main/cpp") { include '**/*.h' }
+    into "$prefabHeadersDir/UlottieRtShared"
+}
+preBuild.dependsOn prepareUlottieRtSharedHeaders
+
+android {
+    namespace 'dev.ulottie.rtshared'
+    compileSdk safeExtGet('compileSdkVersion', 36)
+
+    defaultConfig {
+        minSdk safeExtGet('minSdkVersion', 24)
+        externalNativeBuild {
+            cmake {
+                arguments '-DANDROID_STL=c++_shared'
+                // The rt packages ship Rust archives for arm64-v8a and x86_64
+                // only; intersect with what the app asked for.
+                def asked = (project.findProperty('reactNativeArchitectures') ?: 'arm64-v8a,x86_64')
+                    .split(',').collect { it.trim() }
+                abiFilters(*asked.findAll { it in ['arm64-v8a', 'x86_64'] })
+            }
+        }
+    }
+
+    buildFeatures {
+        prefab true
+        prefabPublishing true
+    }
+
+    prefab {
+        ulottiertshared {
+            headers prefabHeadersDir.absolutePath
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'CMakeLists.txt'
+        }
+    }
+
+    // Prefab publishes to consumers; keep our own headers out of the AAR dup check.
+    packagingOptions {
+        excludes += ['**/libc++_shared.so', '**/libjsi.so']
+    }
+}
+
+dependencies {
+    // Version resolved by the React Native gradle plugin's root-project
+    // dependency substitution (the app applies com.facebook.react.rootproject).
+    implementation 'com.facebook.react:react-android'
+}

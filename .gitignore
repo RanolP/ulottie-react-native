@@ -25,3 +25,16 @@ _fixtures/animations/tmp/
 /ulottie-dev-server/demo/public/wasm/
 /ulottie-dev-server/demo/public/_fixtures/
 /ulottie-compiler/pkg/
+
+# react-native packages: native build output and cargo-built archives
+# (scripts/build-rust.sh products — build them locally, never commit them)
+/ulottie-react-native/android/.cxx/
+/ulottie-react-native/android/build/
+/ulottie-react-native-rt-tiny-skia/android/.cxx/
+/ulottie-react-native-rt-tiny-skia/android/build/
+/ulottie-react-native-rt-tiny-skia/android/rust/
+/ulottie-react-native-rt-tiny-skia/ios/rust/*.a
+/ulottie-react-native-rt-thorvg/android/.cxx/
+/ulottie-react-native-rt-thorvg/android/build/
+/ulottie-react-native-rt-thorvg/android/rust/
+/ulottie-react-native-rt-thorvg/ios/rust/*.a

@@ -13,9 +13,9 @@
 //! closure. A frame is a straight loop over those closures — no tree walk, no
 //! variant dispatch, and for a fully static animation, no loop at all.
 
+pub mod assets;
 mod bake;
 mod build;
-pub mod assets;
 pub mod flat;
 mod instance;
 pub mod prop;
@@ -765,6 +765,46 @@ pub fn plan_with(
     instance_precomps: bool,
     bodies: &[ir::Expression],
 ) -> Result<Scene> {
+    plan_inner(
+        payload,
+        keep_z,
+        inline_limit,
+        instance_precomps,
+        bodies,
+        None,
+    )
+    .map(|(s, _)| s)
+}
+
+/// One frame's samples: per binding that produced attributes, its
+/// document-order element index (the rn/skia slot number), its op, and the
+/// attributes the op's runtime twin would have written.
+pub type SampleFrame = Vec<(u32, u8, Vec<(String, String)>)>;
+
+/// Plan a fully-inlined scene (the RN targets' shape: never instanced, no
+/// template factoring) and bake every binding at each of `frames`.
+///
+/// This is the rt target's front half: instead of shipping the op stream to a
+/// JS runtime, the compile-time bake — already the op-for-op twin of
+/// `runtime/ops/*` — is evaluated at every integer frame and the samples become
+/// numeric keyframe tracks. Sampling has to happen inside planning because
+/// `emit` stamps `Binding::el_index` and the planner is dismantled right after.
+pub fn plan_sampled(
+    payload: &Payload,
+    bodies: &[ir::Expression],
+    frames: &[f64],
+) -> Result<(Scene, Vec<SampleFrame>)> {
+    plan_inner(payload, false, usize::MAX, false, bodies, Some(frames))
+}
+
+fn plan_inner(
+    payload: &Payload,
+    keep_z: bool,
+    inline_limit: usize,
+    instance_precomps: bool,
+    bodies: &[ir::Expression],
+    sample_at: Option<&[f64]>,
+) -> Result<(Scene, Vec<SampleFrame>)> {
     let mut p = Planner {
         payload,
         keep_z,
@@ -841,6 +881,11 @@ pub fn plan_with(
 
     // The fully-expanded document, for `Scene::markup`.
     let markup = p.emit(&root_children, payload);
+    // `emit` just stamped `el_index` on every binding, and the planner is
+    // still whole — the only window where sampling can run.
+    let samples: Vec<SampleFrame> = sample_at
+        .map(|frames| frames.iter().map(|&f| p.sample_frame(f)).collect())
+        .unwrap_or_default();
     // What the module inlines: precomp bodies are always placeholders, and the
     // repeated-subtree pass may factor out more on top of that.
     let with_instances = p.emit_inline(&root_children, payload);
@@ -918,7 +963,7 @@ pub fn plan_with(
     // above keep only offsets into it. This is the last thing planning does, so
     // the planner itself never has to think in offsets.
     scene.seal()?;
-    Ok(scene)
+    Ok((scene, samples))
 }
 
 pub(crate) struct Planner<'a> {

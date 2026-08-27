@@ -114,7 +114,8 @@ struct Cli {
     /// workletizes, then minifies), with the markup replaced by a static
     /// element-tree descriptor. `skia-aot` is its @shopify/react-native-skia
     /// twin: the markup becomes a display-list descriptor drawn imperatively
-    /// into an SkPicture by a worklet.
+    /// into an SkPicture by a worklet. `rt` compiles the same display list to
+    /// a binary RTDL blob rasterized natively by tiny-skia (`ulottie-rt`).
     #[arg(long, value_enum, default_value_t = TargetArg::Web)]
     target: TargetArg,
 }
@@ -124,6 +125,7 @@ enum TargetArg {
     Web,
     ReanimatedAot,
     SkiaAot,
+    Rt,
 }
 
 /// The asset options implied by `--assets <DIR>`: on, with `url_base` taken
@@ -209,6 +211,7 @@ fn main() -> Result<()> {
         TargetArg::Web => ulottie_compiler::Target::Web,
         TargetArg::ReanimatedAot => ulottie_compiler::Target::ReanimatedAot,
         TargetArg::SkiaAot => ulottie_compiler::Target::SkiaAot,
+        TargetArg::Rt => ulottie_compiler::Target::Rt,
     };
     if target != ulottie_compiler::Target::Web {
         // These flags shape a browser module; the RN target is always

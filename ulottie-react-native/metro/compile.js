@@ -31,7 +31,8 @@ function resolveCompilerBin() {
  *
  * @param {string | Buffer} src the .lottie.json contents
  * @param {string} displayName used in error messages, and to pick the target:
- *   a `*.skia.lottie.json` name compiles as 'skia-aot' regardless of `opts`
+ *   a `*.skia.lottie.json` name compiles as 'skia-aot' and a `*.rt.lottie.json`
+ *   name as 'rt' (the native tiny-skia rasterizer), regardless of `opts`
  * @param {{ allow?: string[], target?: string }} [opts] `allow` accepts the
  *   compiler's named degradations (`--allow <name>` per entry) — e.g.
  *   'track-matte-inverted'; `target` defaults to 'reanimated-aot'
@@ -46,7 +47,9 @@ function compileLottie(src, displayName, opts) {
     fs.writeFileSync(input, src);
     const target = /\.skia\.lottie\.json$/.test(displayName || '')
       ? 'skia-aot'
-      : (opts && opts.target) || 'reanimated-aot';
+      : /\.rt\.lottie\.json$/.test(displayName || '')
+        ? 'rt'
+        : (opts && opts.target) || 'reanimated-aot';
     const args = ['--target', target];
     for (const name of (opts && opts.allow) || []) args.push('--allow', name);
     args.push('--output', output, input);

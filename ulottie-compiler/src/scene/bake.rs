@@ -107,12 +107,39 @@ impl crate::expr::interp::Host for Planner<'_> {
 impl Planner<'_> {
     /// Every binding's value at the composition's first frame, as attributes.
     pub(crate) fn initial_frame(&self) -> Overlay {
-        let f = self.payload.c.ip;
-        let times = self.slot_times(f);
         let mut out: Overlay = HashMap::new();
+        self.bake_frame(self.payload.c.ip, |b, attrs| {
+            if !attrs.is_empty() {
+                out.entry(b.el).or_default().extend(attrs);
+            }
+        });
+        out
+    }
+
+    /// Every binding's value at composition frame `f`, keyed by document-order
+    /// element index rather than arena id. The rt target samples this at every
+    /// integer frame to build its numeric keyframe tracks, so it is only
+    /// meaningful after `emit` has stamped `el_index` on the bindings.
+    ///
+    /// A binding gated off at `f` yields no entry — the runtime retains the
+    /// previous value in that case, and the track builder mirrors that by
+    /// holding. A *live* binding that wrote nothing still yields an (empty)
+    /// entry: for DISPLAY that emptiness IS the value (visible — the runtime
+    /// clears the attribute), and the track builder must tell it apart from
+    /// a gated-off frame.
+    pub(crate) fn sample_frame(&self, f: f64) -> Vec<(u32, u8, Vec<(String, String)>)> {
+        let mut out = Vec::new();
+        self.bake_frame(f, |b, attrs| out.push((b.el_index, b.op, attrs)));
+        out
+    }
+
+    /// The shared bake loop: gate check on the composition clock, per-slot
+    /// timeline clock, then the op's compile-time twin. Calls `sink` once per
+    /// live binding — see the `gateOn` loop in core.js for why gated-off
+    /// bindings are skipped (retain semantics).
+    fn bake_frame(&self, f: f64, mut sink: impl FnMut(&Binding, Vec<(String, String)>)) {
+        let times = self.slot_times(f);
         for (i, b) in self.bindings.iter().enumerate() {
-            // Gates are evaluated on the composition clock, not the binding's
-            // own — see the `gateOn` loop in core.js.
             let gate = self.bind_gate.get(i).copied().unwrap_or(0);
             if gate > 0 {
                 let [lo, hi] = self.gates[gate as usize - 1];
@@ -124,11 +151,8 @@ impl Planner<'_> {
             let at = times.get(slot).copied().unwrap_or(f);
             let mut attrs = Vec::new();
             self.bake(b, at, &mut attrs);
-            if !attrs.is_empty() {
-                out.entry(b.el).or_default().extend(attrs);
-            }
+            sink(b, attrs);
         }
-        out
     }
 
     /// The frame each clock slot reads at composition frame `f`. Mirrors the

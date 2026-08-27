@@ -351,7 +351,11 @@ fn is_zero(v: &u8) -> bool {
 #[allow(clippy::large_enum_variant)]
 pub enum Style {
     #[serde(rename = "fl")]
-    Fill { c: InlineProp, o: InlineProp, fr: u8 },
+    Fill {
+        c: InlineProp,
+        o: InlineProp,
+        fr: u8,
+    },
     #[serde(rename = "st")]
     Stroke {
         c: InlineProp,

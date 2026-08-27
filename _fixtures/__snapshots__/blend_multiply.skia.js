@@ -25,15 +25,15 @@
 //
 // The profile says the time is in path-string assembly (`pathD` + `pdPair` +
 // `pdSep`, 15% together) and in `setAttribute` and `evalExpr` — not here.
+//
+// A fraction keeps its leading zero even though SVG parses ".5" fine. The
+// react-native-svg target shares this helper, and its JS prop parser rejects
+// ".47" ("not a valid number or percentage string"), leaves the prop a String,
+// and Fabric's generated RNSVGGroupManagerDelegate.setProperty then throws
+// ClassCastException: String cannot be cast to Double — an app-killing crash on
+// Android, observed on a Pixel 8 with the `mixed16` fixture.
 function fmt(x, scale) { 'worklet';
-  const s = '' + Math.round(x * scale) / scale;
-  // A bare leading zero is redundant in SVG: ".5" and "-.5" parse identically
-  // and are shorter.
-  if (s.charCodeAt(0) === 48 && s.charCodeAt(1) === 46) return s.slice(1);
-  if (s.charCodeAt(0) === 45 && s.charCodeAt(1) === 48 && s.charCodeAt(2) === 46) {
-    return '-' + s.slice(2);
-  }
-  return s;
+  return '' + Math.round(x * scale) / scale;
 }
 
 /** Coordinates and plain attribute values: 3 decimals. */
@@ -1196,13 +1196,13 @@ function P0(x, B, e, l, q, a) { 'worklet'; return [bTranslate(x, B[0], e, l, q, 
 function A0(x, S) { 'worklet'; oTranslate(x, S[0]); }
 
 const D = "0gljc0gqmo10q100k60000400gt7gt7st50kv1gt7msl560i3i6gstvfgottk2gstvfgkhhs2gstvfgottk2220qkjj100000qkjj12042jqln5rjnq8s22m5";
-const SP = ['matrix(.70711,-.70711,.70711,.70711,'];
+const SP = ['matrix(0.70711,-0.70711,0.70711,0.70711,'];
 
 export const dl =
 { k: 0, c: [
   { k: 0, clip: { r: [0, 0, 1080, 2330] }, c: [
     { k: 2, h: 2330, w: 1080, x: 0, y: 0, paint: { f: '#ffffff' } },
-    { k: 0, s: 2, m: [.70711, .70711, 345.1, -.70711, .70711, 924.45, 0, 0, 1], c: [
+    { k: 0, s: 2, m: [0.70711, 0.70711, 345.1, -0.70711, 0.70711, 924.45, 0, 0, 1], c: [
       { k: 0, m: [1, 0, -74, 0, 1, 327, 0, 0, 1], c: [
         { k: 2, h: 300, w: 300, x: -150, y: -150, paint: { f: '#1caff4', sc: '#000', sw: 24 } }
       ] }

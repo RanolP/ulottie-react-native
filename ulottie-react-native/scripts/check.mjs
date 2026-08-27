@@ -192,7 +192,34 @@ console.log(
   'ok: skia-only caps (blend mode, animated gradient, inverted matte, layer effects, embedded image) drain',
 );
 
-// 8. No forward references between generated top-level worklet functions.
+// 8. The rt target, selected by the `*.rt.lottie.json` naming convention:
+// rtdl/meta/init contract, and the rtdl export is a base64 blob for the
+// native rasterizer (its structure is pinned by ulottie-compiler's
+// tests/rt_snapshot.rs and ulottie-rt's parity suite; here only the module
+// shape the player consumes is checked).
+const rtJs = compileLottie(fs.readFileSync(fixture), 'boucing_ball.rt.lottie.json');
+let rtMod;
+const tmp3 = fs.mkdtempSync(path.join(os.tmpdir(), 'ulottie-check-'));
+try {
+  const modPath = path.join(tmp3, 'boucing_ball.rt.mjs');
+  fs.writeFileSync(modPath, rtJs);
+  rtMod = await import(pathToFileURL(modPath).href);
+} finally {
+  fs.rmSync(tmp3, { recursive: true, force: true });
+}
+assert.deepEqual(Object.keys(rtMod).sort(), ['init', 'meta', 'rtdl']);
+assert.equal(typeof rtMod.rtdl, 'string');
+const rtdlBytes = Buffer.from(rtMod.rtdl, 'base64');
+assert.ok(rtdlBytes.length > 0, 'rtdl decodes to a non-empty blob');
+// base64 round-trip proves the string is well-formed base64, not just prefix-decodable.
+assert.equal(rtdlBytes.toString('base64'), rtMod.rtdl);
+assert.ok(rtMod.meta.fr > 0 && rtMod.meta.op > rtMod.meta.ip, 'rt meta is playable');
+const rh = rtMod.init();
+assert.equal(rh.op, rtMod.meta.op, 'rt init() hands back the meta the clock needs');
+
+console.log('ok: rt compile step + module contract (rtdl/meta/init) verified on boucing_ball');
+
+// 9. No forward references between generated top-level worklet functions.
 // The worklets babel plugin rewrites `function f() { 'worklet'; ... }` into a
 // factory ASSIGNMENT that eagerly captures f's free variables at module
 // evaluation, so a worklet referencing one defined later captures `undefined`

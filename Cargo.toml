@@ -3,4 +3,16 @@ resolver = "2"
 members = [
   "ulottie-compiler",
   "ulottie-dev-server",
+  "ulottie-rt",
 ]
+
+# Profile for the on-device rasterizer static libraries (`ulottie-rt`).
+# Separate from `release` so the dev server and wasm builds keep their own
+# settings; `panic = "abort"` and fat LTO are what keep the iOS/Android
+# archive small.
+[profile.rt]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+panic = "abort"
+codegen-units = 1

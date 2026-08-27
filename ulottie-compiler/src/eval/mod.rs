@@ -219,7 +219,15 @@ fn build_geometry(shape: &Shape, frame: f64) -> Result<Geometry> {
                 None => 0.0,
             };
             Ok(Geometry::Path(geometry::polystar_to_path(
-                *sy, pos, points, outer, inner, rot, osr, isr, *rv != 0,
+                *sy,
+                pos,
+                points,
+                outer,
+                inner,
+                rot,
+                osr,
+                isr,
+                *rv != 0,
             )))
         }
     }
@@ -235,7 +243,11 @@ fn build_style(style: &Style, frame: f64) -> Result<RenderedStyle> {
             } else {
                 FillRule::NonZero
             };
-            Ok(RenderedStyle::Paint(Paint::Solid { color, opacity, rule }))
+            Ok(RenderedStyle::Paint(Paint::Solid {
+                color,
+                opacity,
+                rule,
+            }))
         }
         Style::Stroke {
             c,

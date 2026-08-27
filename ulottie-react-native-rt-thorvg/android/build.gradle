@@ -1,0 +1,46 @@
+// The ThorVG rasterizer backend for Android: libulottiertthorvg.so links
+// the cargo-built Rust archive (android/rust/<abi>/libulottie_rt.a, built by
+// scripts/build-rust.sh android) plus a thin JNI adapter, and depends on the
+// shared registry/JSI library published by ulottie-react-native via prefab.
+apply plugin: 'com.android.library'
+apply plugin: 'com.facebook.react'
+
+def safeExtGet(prop, fallback) {
+    rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
+}
+
+android {
+    namespace 'dev.ulottie.rtthorvg'
+    compileSdk safeExtGet('compileSdkVersion', 36)
+
+    defaultConfig {
+        minSdk safeExtGet('minSdkVersion', 24)
+        consumerProguardFiles 'proguard-rules.pro'
+        externalNativeBuild {
+            cmake {
+                arguments '-DANDROID_STL=c++_shared'
+                // Rust archives exist for arm64-v8a and x86_64 only.
+                def asked = (project.findProperty('reactNativeArchitectures') ?: 'arm64-v8a,x86_64')
+                    .split(',').collect { it.trim() }
+                abiFilters(*asked.findAll { it in ['arm64-v8a', 'x86_64'] })
+            }
+        }
+    }
+
+    buildFeatures {
+        prefab true
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'CMakeLists.txt'
+        }
+    }
+}
+
+dependencies {
+    implementation 'com.facebook.react:react-android'
+    // libulottiertshared.so + its headers (prefab): the one registry / JSI
+    // binding an app with both rasterizer backends must share.
+    implementation project(':ulottie-react-native')
+}

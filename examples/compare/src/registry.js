@@ -5,6 +5,62 @@
 // module; the plain `*.json` twin stays raw JSON for lottie-react-native.
 import { createUlottie } from 'ulottie-react-native';
 import { createUlottieSkia } from 'ulottie-react-native/skia';
+import { createUlottieRt } from 'ulottie-react-native-rt-tiny-skia';
+import { createUlottieRt as createUlottieRtThorvg } from 'ulottie-react-native-rt-thorvg';
+import { createSkiaSkottie, createDotLottie } from './baselines';
+
+// `.lottie` twins (same JSON zipped into a dotLottie archive) for the
+// @lottiefiles/dotlottie-react-native baseline, which only accepts a file
+// source. Metro treats them as opaque assets (see metro.config.js).
+const DOTLOTTIE_ASSETS = {
+  boucing_ball: require('../assets/boucing_ball.lottie'),
+  rectangle: require('../assets/rectangle.lottie'),
+  ellipse: require('../assets/ellipse.lottie'),
+  fill: require('../assets/fill.lottie'),
+  trim_path: require('../assets/trim_path.lottie'),
+  android_wave: require('../assets/android_wave.lottie'),
+  precomp_star_circle: require('../assets/precomp_star_circle.lottie'),
+  gradient_radial: require('../assets/gradient_radial.lottie'),
+  lottie_logo_1: require('../assets/lottie_logo_1.lottie'),
+  mask_subtract: require('../assets/mask_subtract.lottie'),
+  matte_alpha: require('../assets/matte_alpha.lottie'),
+  stroke_under_fill: require('../assets/stroke_under_fill.lottie'),
+  bodymoovin: require('../assets/bodymoovin.lottie'),
+  fireworks: require('../assets/fireworks.lottie'),
+  lottie_logo_2: require('../assets/lottie_logo_2.lottie'),
+  lottie_logo_3: require('../assets/lottie_logo_3.lottie'),
+  matte_luma: require('../assets/matte_luma.lottie'),
+  blend_multiply: require('../assets/blend_multiply.lottie'),
+  gradient_animated: require('../assets/gradient_animated.lottie'),
+  matte_luma_inv: require('../assets/matte_luma_inv.lottie'),
+  fx_effects: require('../assets/fx_effects.lottie'),
+  image_embedded: require('../assets/image_embedded.lottie'),
+};
+
+// `*.rt.lottie.json` twins compile to the rt target (RTDL blob); one module
+// feeds both native rasterizer backends.
+import * as boucing_ball_rt from '../assets/boucing_ball.rt.lottie.json';
+import * as rectangle_rt from '../assets/rectangle.rt.lottie.json';
+import * as ellipse_rt from '../assets/ellipse.rt.lottie.json';
+import * as fill_rt from '../assets/fill.rt.lottie.json';
+import * as trim_path_rt from '../assets/trim_path.rt.lottie.json';
+import * as android_wave_rt from '../assets/android_wave.rt.lottie.json';
+import * as precomp_star_circle_rt from '../assets/precomp_star_circle.rt.lottie.json';
+import * as gradient_radial_rt from '../assets/gradient_radial.rt.lottie.json';
+import * as lottie_logo_1_rt from '../assets/lottie_logo_1.rt.lottie.json';
+import * as mask_subtract_rt from '../assets/mask_subtract.rt.lottie.json';
+import * as matte_alpha_rt from '../assets/matte_alpha.rt.lottie.json';
+import * as stroke_under_fill_rt from '../assets/stroke_under_fill.rt.lottie.json';
+import * as bodymoovin_rt from '../assets/bodymoovin.rt.lottie.json';
+import * as fireworks_rt from '../assets/fireworks.rt.lottie.json';
+import * as lottie_logo_2_rt from '../assets/lottie_logo_2.rt.lottie.json';
+import * as lottie_logo_3_rt from '../assets/lottie_logo_3.rt.lottie.json';
+import * as matte_luma_rt from '../assets/matte_luma.rt.lottie.json';
+import * as blend_multiply_rt from '../assets/blend_multiply.rt.lottie.json';
+import * as gradient_animated_rt from '../assets/gradient_animated.rt.lottie.json';
+import * as matte_luma_inv_rt from '../assets/matte_luma_inv.rt.lottie.json';
+import * as fx_effects_rt from '../assets/fx_effects.rt.lottie.json';
+import * as image_embedded_rt from '../assets/image_embedded.rt.lottie.json';
 
 import * as boucing_ball_u from '../assets/boucing_ball.lottie.json';
 import * as boucing_ball_s from '../assets/boucing_ball.skia.lottie.json';
@@ -72,36 +128,40 @@ import * as image_embedded_s from '../assets/image_embedded.skia.lottie.json';
 import image_embedded_l from '../assets/image_embedded.json';
 
 const raw = [
-  ['boucing_ball', boucing_ball_u, boucing_ball_s, boucing_ball_l],
-  ['rectangle', rectangle_u, rectangle_s, rectangle_l],
-  ['ellipse', ellipse_u, ellipse_s, ellipse_l],
-  ['fill', fill_u, fill_s, fill_l],
-  ['trim_path', trim_path_u, trim_path_s, trim_path_l],
-  ['android_wave', android_wave_u, android_wave_s, android_wave_l],
-  ['precomp_star_circle', precomp_star_circle_u, precomp_star_circle_s, precomp_star_circle_l],
-  ['gradient_radial', gradient_radial_u, gradient_radial_s, gradient_radial_l],
-  ['lottie_logo_1', lottie_logo_1_u, lottie_logo_1_s, lottie_logo_1_l],
-  ['mask_subtract', mask_subtract_u, mask_subtract_s, mask_subtract_l],
-  ['matte_alpha', matte_alpha_u, matte_alpha_s, matte_alpha_l],
-  ['stroke_under_fill', stroke_under_fill_u, stroke_under_fill_s, stroke_under_fill_l],
-  ['bodymoovin', bodymoovin_u, bodymoovin_s, bodymoovin_l],
-  ['fireworks', fireworks_u, fireworks_s, fireworks_l],
-  ['lottie_logo_2', lottie_logo_2_u, lottie_logo_2_s, lottie_logo_2_l],
-  ['lottie_logo_3', lottie_logo_3_u, lottie_logo_3_s, lottie_logo_3_l],
-  ['matte_luma', matte_luma_u, matte_luma_s, matte_luma_l],
+  ['boucing_ball', boucing_ball_u, boucing_ball_s, boucing_ball_l, boucing_ball_rt],
+  ['rectangle', rectangle_u, rectangle_s, rectangle_l, rectangle_rt],
+  ['ellipse', ellipse_u, ellipse_s, ellipse_l, ellipse_rt],
+  ['fill', fill_u, fill_s, fill_l, fill_rt],
+  ['trim_path', trim_path_u, trim_path_s, trim_path_l, trim_path_rt],
+  ['android_wave', android_wave_u, android_wave_s, android_wave_l, android_wave_rt],
+  ['precomp_star_circle', precomp_star_circle_u, precomp_star_circle_s, precomp_star_circle_l, precomp_star_circle_rt],
+  ['gradient_radial', gradient_radial_u, gradient_radial_s, gradient_radial_l, gradient_radial_rt],
+  ['lottie_logo_1', lottie_logo_1_u, lottie_logo_1_s, lottie_logo_1_l, lottie_logo_1_rt],
+  ['mask_subtract', mask_subtract_u, mask_subtract_s, mask_subtract_l, mask_subtract_rt],
+  ['matte_alpha', matte_alpha_u, matte_alpha_s, matte_alpha_l, matte_alpha_rt],
+  ['stroke_under_fill', stroke_under_fill_u, stroke_under_fill_s, stroke_under_fill_l, stroke_under_fill_rt],
+  ['bodymoovin', bodymoovin_u, bodymoovin_s, bodymoovin_l, bodymoovin_rt],
+  ['fireworks', fireworks_u, fireworks_s, fireworks_l, fireworks_rt],
+  ['lottie_logo_2', lottie_logo_2_u, lottie_logo_2_s, lottie_logo_2_l, lottie_logo_2_rt],
+  ['lottie_logo_3', lottie_logo_3_u, lottie_logo_3_s, lottie_logo_3_l, lottie_logo_3_rt],
+  ['matte_luma', matte_luma_u, matte_luma_s, matte_luma_l, matte_luma_rt],
   // Skia-only (ulottieModule null → no reanimated-aot player).
-  ['blend_multiply', null, blend_multiply_s, blend_multiply_l],
-  ['gradient_animated', null, gradient_animated_s, gradient_animated_l],
-  ['matte_luma_inv', null, matte_luma_inv_s, matte_luma_inv_l],
-  ['fx_effects', null, fx_effects_s, fx_effects_l],
-  ['image_embedded', null, image_embedded_s, image_embedded_l],
+  ['blend_multiply', null, blend_multiply_s, blend_multiply_l, blend_multiply_rt],
+  ['gradient_animated', null, gradient_animated_s, gradient_animated_l, gradient_animated_rt],
+  ['matte_luma_inv', null, matte_luma_inv_s, matte_luma_inv_l, matte_luma_inv_rt],
+  ['fx_effects', null, fx_effects_s, fx_effects_l, fx_effects_rt],
+  ['image_embedded', null, image_embedded_s, image_embedded_l, image_embedded_rt],
 ];
 
-/** name → { name, Ulottie (null on skia-only), UlottieSkia, lottieSource (raw JSON), meta } */
-export const FIXTURES = raw.map(([name, ulottieModule, skiaModule, lottieSource]) => ({
+/** name → { name, Ulottie (null on skia-only), UlottieSkia, RtTinySkia, RtThorvg, lottieSource (raw JSON), meta } */
+export const FIXTURES = raw.map(([name, ulottieModule, skiaModule, lottieSource, rtModule]) => ({
   name,
   Ulottie: ulottieModule && createUlottie(ulottieModule),
   UlottieSkia: createUlottieSkia(skiaModule),
+  RtTinySkia: createUlottieRt(rtModule),
+  RtThorvg: createUlottieRtThorvg(rtModule),
+  SkiaSkottie: createSkiaSkottie(lottieSource),
+  DotLottie: createDotLottie(DOTLOTTIE_ASSETS[name]),
   lottieSource,
   meta: (ulottieModule || skiaModule).meta,
 }));

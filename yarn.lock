@@ -2160,6 +2160,36 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@lottiefiles/dotlottie-react-native@npm:^0.12.1":
+  version: 0.12.1
+  resolution: "@lottiefiles/dotlottie-react-native@npm:0.12.1"
+  dependencies:
+    "@lottiefiles/dotlottie-react": "npm:^0.19.4"
+  peerDependencies:
+    react: "*"
+    react-native: "*"
+  checksum: 10c0/d7a4fa4139f6c8059bbeeb4c3518106936c73f82a65761791ad134335544d8deb472043e8d8928344dd1905df5f459fbb0b553c293f695607e37f735f523c7d5
+  languageName: node
+  linkType: hard
+
+"@lottiefiles/dotlottie-react@npm:^0.19.4":
+  version: 0.19.15
+  resolution: "@lottiefiles/dotlottie-react@npm:0.19.15"
+  dependencies:
+    "@lottiefiles/dotlottie-web": "npm:0.79.2"
+  peerDependencies:
+    react: ^17 || ^18 || ^19
+  checksum: 10c0/8881fd3ebe017a1e85a3304b68c5d91f1d2f710595698ed0723f82fc0c775080e6aef10b69653e51fa9e736ae038d863b653c11e4e64753200601df9b639f9f6
+  languageName: node
+  linkType: hard
+
+"@lottiefiles/dotlottie-web@npm:0.79.2":
+  version: 0.79.2
+  resolution: "@lottiefiles/dotlottie-web@npm:0.79.2"
+  checksum: 10c0/126849e2f4903950aca3389ca22fc0159841973e3f2a68579e26cb4569ce853e618a893c31354df63a1e88ca760ce21570e0134f2d471188c0837fb97be2c71a
+  languageName: node
+  linkType: hard
+
 "@napi-rs/wasm-runtime@npm:^1.1.4":
   version: 1.1.4
   resolution: "@napi-rs/wasm-runtime@npm:1.1.4"
@@ -4027,6 +4057,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "compare@workspace:examples/compare"
   dependencies:
+    "@lottiefiles/dotlottie-react-native": "npm:^0.12.1"
     "@shopify/react-native-skia": "npm:^2.10.0"
     expo: "npm:^57.0.0"
     expo-status-bar: "npm:~57.0.1"
@@ -4037,6 +4068,8 @@ __metadata:
     react-native-svg: "npm:15.15.4"
     react-native-worklets: "npm:0.10.1"
     ulottie-react-native: "workspace:*"
+    ulottie-react-native-rt-thorvg: "workspace:*"
+    ulottie-react-native-rt-tiny-skia: "workspace:*"
   languageName: unknown
   linkType: soft
 
@@ -8274,6 +8307,28 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"ulottie-react-native-rt-thorvg@workspace:*, ulottie-react-native-rt-thorvg@workspace:ulottie-react-native-rt-thorvg":
+  version: 0.0.0-use.local
+  resolution: "ulottie-react-native-rt-thorvg@workspace:ulottie-react-native-rt-thorvg"
+  peerDependencies:
+    react: "*"
+    react-native: "*"
+    react-native-worklets: ~0.10.0
+    ulottie-react-native: "*"
+  languageName: unknown
+  linkType: soft
+
+"ulottie-react-native-rt-tiny-skia@workspace:*, ulottie-react-native-rt-tiny-skia@workspace:ulottie-react-native-rt-tiny-skia":
+  version: 0.0.0-use.local
+  resolution: "ulottie-react-native-rt-tiny-skia@workspace:ulottie-react-native-rt-tiny-skia"
+  peerDependencies:
+    react: "*"
+    react-native: "*"
+    react-native-worklets: ~0.10.0
+    ulottie-react-native: "*"
+  languageName: unknown
+  linkType: soft
+
 "ulottie-react-native@workspace:*, ulottie-react-native@workspace:ulottie-react-native":
   version: 0.0.0-use.local
   resolution: "ulottie-react-native@workspace:ulottie-react-native"
@@ -8287,10 +8342,21 @@ __metadata:
     react-native-worklets: "npm:~0.10.0"
     typescript: "npm:^5.9.2"
   peerDependencies:
+    "@shopify/react-native-skia": ">=2.10.0"
     react: "*"
     react-native: "*"
     react-native-reanimated: ^4.5.1
     react-native-svg: ^15.15.4
+    react-native-worklets: ~0.10.0
+  peerDependenciesMeta:
+    "@shopify/react-native-skia":
+      optional: true
+    react-native-reanimated:
+      optional: true
+    react-native-svg:
+      optional: true
+    react-native-worklets:
+      optional: true
   languageName: unknown
   linkType: soft
 

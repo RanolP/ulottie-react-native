@@ -25,15 +25,15 @@
 //
 // The profile says the time is in path-string assembly (`pathD` + `pdPair` +
 // `pdSep`, 15% together) and in `setAttribute` and `evalExpr` — not here.
+//
+// A fraction keeps its leading zero even though SVG parses ".5" fine. The
+// react-native-svg target shares this helper, and its JS prop parser rejects
+// ".47" ("not a valid number or percentage string"), leaves the prop a String,
+// and Fabric's generated RNSVGGroupManagerDelegate.setProperty then throws
+// ClassCastException: String cannot be cast to Double — an app-killing crash on
+// Android, observed on a Pixel 8 with the `mixed16` fixture.
 function fmt(x, scale) { 'worklet';
-  const s = '' + Math.round(x * scale) / scale;
-  // A bare leading zero is redundant in SVG: ".5" and "-.5" parse identically
-  // and are shorter.
-  if (s.charCodeAt(0) === 48 && s.charCodeAt(1) === 46) return s.slice(1);
-  if (s.charCodeAt(0) === 45 && s.charCodeAt(1) === 48 && s.charCodeAt(2) === 46) {
-    return '-' + s.slice(2);
-  }
-  return s;
+  return '' + Math.round(x * scale) / scale;
 }
 
 /** Coordinates and plain attribute values: 3 decimals. */
@@ -1495,7 +1495,7 @@ function P0(x, B, e, l, q, a) { 'worklet'; return [bTranslate(x, B[0], e, l, q, 
 function A0(x, S) { 'worklet'; oTranslate(x, S[0]); oShape(x, S[1]); oFill(x, S[2]); }
 
 const D = "0kiqe0gtmm50q100oh30000600gt7gt7qp200gt7id00gt7msl54saienmmj2huig1nmmj2hu820qqp20pqp2msl54iaienmmj2rn5nmmj2gmqf20kqq20jqq2msl54k8ubvlnm1gjifvlnm1rqng120vkk50glk5msl580o4og1gj1omjjj1gsrk2gjtj5ivsn1gjtj5ivsn1gvmkj1ktqha222rvrj4qqsg2nhfvn800qmnn2onjm100008046680024vhu4vhu40pllo2lom9lom90rqsr1k3u4o6i8kfcumpq1mmo4rmpq1mmo4jthv10rmpq1lmo4umpq1lmo4kthv10svn20000svn2rvn20000rvn200rvn200rvn200svn200svn2kfcipgi2kgp4rmpq1mmo4jthv10rmpq1lmo4ipgi2nsn4ovom2u9svn20000svn2rvn20000rvn200rvn200rvn200svn200svn2mgh64ug1oi1oekj14kfcgivt1mmo4vhvt1mmo4loni20vhvt1lmo4givt1lmo4moni20qvn20000svn2rvn20000rvn200rvn200rvn200qvn200svn2kfcohj9mnp4vhvt1mmo4loni20vhvt1lmo4ohj9lln4unrdgh1qvn20000svn2rvn20000rvn200rvn200rvn200qvn200svn2mgg64ug1oi1uo1qt1kfcmksj1mmo4lksj1mmo4rqko10lksj1lmo4mksj1lmo4sqko10qvn20000svn2rvn20000rvn200rvn200rvn200qvn200svn2kfcukgi2ojn4lksj1mmo4rqko10lksj1lmo4ukgi2jpp4krom2ti1qvn20000svn2rvn20000rvn200rvn200rvn200qvn200svn2mgh64ug1oi1ij2un2460868go1mi2qs2000i38sh300gt768o5q5geme0i4i4020m1uu2qv26sbot2ug3";
-const SP = ['matrix(.2,0,0,.255,', 'matrix(5,0,0,3.92157,'];
+const SP = ['matrix(0.2,0,0,0.255,', 'matrix(5,0,0,3.92157,'];
 
 export const dl =
 { k: 0, c: [
@@ -1511,7 +1511,7 @@ export const dl =
           { k: 1, s: 7, d: 'M61.328,9.267L-61.328,9.267C-66.446,9.267-70.595,5.118-70.595,0C-70.595-5.118-66.446-9.267-61.328-9.267L61.328-9.267C66.445-9.267,70.595-5.118,70.595,0C70.595,5.118,66.445,9.267,61.328,9.267Z', paint: { ml: 10, sc: '#9b2236', sw: 4 } }
         ] }
       ] },
-      { k: 0, s: 8, m: [.2, 0, -46, 0, .255, 31, 0, 0, 1], c: [
+      { k: 0, s: 8, m: [0.2, 0, -46, 0, 0.255, 31, 0, 0, 1], c: [
         { k: 0, m: [5, 0, -182.5, 0, 3.92157, -72.68, 0, 0, 1], c: [
           { k: 0, m: [1, 0, 59.75, 0, 1, 19.27, 0, 0, 1], c: [
             { k: 1, s: 11, d: 'M40.483,9.267L-40.483,9.267C-45.601,9.267-49.75,5.118-49.75,0C-49.75-5.118-45.601-9.267-40.483-9.267L40.483-9.267C45.6-9.267,49.75-5.118,49.75,0C49.75,5.118,45.6,9.267,40.483,9.267Z', paint: { f: 'rgba(101,0,0,0)', po: 1, ml: 10, sc: '#9b2236', sw: 4 } }
@@ -1519,7 +1519,7 @@ export const dl =
         ] },
         { k: 0, s: 12, m: [5, 0, 546.57, 0, 3.92157, 18.31, 0, 0, 1], c: [
           { k: 0, m: [1, 0, 16.52, 0, 1, 14.51, 0, 0, 1], c: [
-            { k: 1, d: 'M13.832-10.021L-13.436-14.031C-15.026-14.264-16.271-12.685-15.672-11.194L-6.19,12.438C-5.458,14.264-2.834,14.157-2.268,12.272C-.882,7.662,1.525,1.647,5.237-1.438C7.628-3.425,10.966-4.911,14.194-5.99C16.271-6.685,16-9.702,13.832-10.021Z', paint: { f: '#ca3149' } }
+            { k: 1, d: 'M13.832-10.021L-13.436-14.031C-15.026-14.264-16.271-12.685-15.672-11.194L-6.19,12.438C-5.458,14.264-2.834,14.157-2.268,12.272C-0.882,7.662,1.525,1.647,5.237-1.438C7.628-3.425,10.966-4.911,14.194-5.99C16.271-6.685,16-9.702,13.832-10.021Z', paint: { f: '#ca3149' } }
           ] }
         ] }
       ] }

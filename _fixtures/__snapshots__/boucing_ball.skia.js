@@ -25,15 +25,15 @@
 //
 // The profile says the time is in path-string assembly (`pathD` + `pdPair` +
 // `pdSep`, 15% together) and in `setAttribute` and `evalExpr` — not here.
+//
+// A fraction keeps its leading zero even though SVG parses ".5" fine. The
+// react-native-svg target shares this helper, and its JS prop parser rejects
+// ".47" ("not a valid number or percentage string"), leaves the prop a String,
+// and Fabric's generated RNSVGGroupManagerDelegate.setProperty then throws
+// ClassCastException: String cannot be cast to Double — an app-killing crash on
+// Android, observed on a Pixel 8 with the `mixed16` fixture.
 function fmt(x, scale) { 'worklet';
-  const s = '' + Math.round(x * scale) / scale;
-  // A bare leading zero is redundant in SVG: ".5" and "-.5" parse identically
-  // and are shorter.
-  if (s.charCodeAt(0) === 48 && s.charCodeAt(1) === 46) return s.slice(1);
-  if (s.charCodeAt(0) === 45 && s.charCodeAt(1) === 48 && s.charCodeAt(2) === 46) {
-    return '-' + s.slice(2);
-  }
-  return s;
+  return '' + Math.round(x * scale) / scale;
 }
 
 /** Coordinates and plain attribute values: 3 decimals. */
@@ -1295,7 +1295,7 @@ export const dl =
 { k: 0, c: [
   { k: 0, clip: { r: [0, 0, 1080, 1080] }, c: [
     { k: 2, h: 1080, w: 1080, x: 0, y: 0, paint: { f: '#ffffff' } },
-    { k: 0, s: 2, m: [.4, 0, 492.16, 0, .4, 842.45, 0, 0, 1], c: [
+    { k: 0, s: 2, m: [0.4, 0, 492.16, 0, 0.4, 842.45, 0, 0, 1], c: [
       { k: 0, m: [1, 0, 128.98, 0, 1, 64.97, 0, 0, 1], c: [
         { k: 2, h: 413.95, rx: 206.975, ry: 206.975, w: 413.95, x: -206.975, y: -206.975, paint: { f: '#63d3bf' } }
       ] }

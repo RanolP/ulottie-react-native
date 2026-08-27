@@ -25,15 +25,15 @@
 //
 // The profile says the time is in path-string assembly (`pathD` + `pdPair` +
 // `pdSep`, 15% together) and in `setAttribute` and `evalExpr` — not here.
+//
+// A fraction keeps its leading zero even though SVG parses ".5" fine. The
+// react-native-svg target shares this helper, and its JS prop parser rejects
+// ".47" ("not a valid number or percentage string"), leaves the prop a String,
+// and Fabric's generated RNSVGGroupManagerDelegate.setProperty then throws
+// ClassCastException: String cannot be cast to Double — an app-killing crash on
+// Android, observed on a Pixel 8 with the `mixed16` fixture.
 function fmt(x, scale) { 'worklet';
-  const s = '' + Math.round(x * scale) / scale;
-  // A bare leading zero is redundant in SVG: ".5" and "-.5" parse identically
-  // and are shorter.
-  if (s.charCodeAt(0) === 48 && s.charCodeAt(1) === 46) return s.slice(1);
-  if (s.charCodeAt(0) === 45 && s.charCodeAt(1) === 48 && s.charCodeAt(2) === 46) {
-    return '-' + s.slice(2);
-  }
-  return s;
+  return '' + Math.round(x * scale) / scale;
 }
 
 /** Coordinates and plain attribute values: 3 decimals. */
@@ -1804,7 +1804,7 @@ export const dl =
       { k: 0, s: 4, m: [1, 0, 104.78, 0, 1, -2.53, 0, 0, 1], c: [
         { k: 0, s: 5, hd: 1, c: [
           { k: 0, m: [1, 0, 196, 0, 1, 267, 0, 0, 1], c: [
-            { k: 3, cx: .8, cy: -.5, rx: 4.6, ry: 4.6, paint: { f: '#fff' } }
+            { k: 3, cx: 0.8, cy: -0.5, rx: 4.6, ry: 4.6, paint: { f: '#fff' } }
           ] }
         ] }
       ] },
@@ -1814,7 +1814,7 @@ export const dl =
         ] }
       ] },
       { k: 0, s: 11, m: [1, 0, -225.96, 0, 1, -204.32, 0, 0, 1], c: [
-        { k: 0, s: 12, m: [1, 0, .06, 0, 1, 0, 0, 0, 1], hd: 1, c: [
+        { k: 0, s: 12, m: [1, 0, 0.06, 0, 1, 0, 0, 0, 1], hd: 1, c: [
           { k: 0, m: [1, 0, 344.67, 0, 1, 261.88, 0, 0, 1], c: [
             { k: 1, s: 14, paint: { cap: 1, ml: 10, sc: '#fff', sw: 9.562 } }
           ] }
@@ -1912,7 +1912,7 @@ export const dl =
       { k: 0, s: 68, m: [1, 0, -93.67, 0, 1, -51.82, 0, 0, 1], c: [
         { k: 0, s: 69, hd: 1, c: [
           { k: 0, m: [1, 0, 196, 0, 1, 267, 0, 0, 1], c: [
-            { k: 3, cx: .8, cy: -.5, rx: 4.7, ry: 4.7, paint: { f: '#fff' } }
+            { k: 3, cx: 0.8, cy: -0.5, rx: 4.7, ry: 4.7, paint: { f: '#fff' } }
           ] }
         ] }
       ] },
@@ -1928,7 +1928,7 @@ export const dl =
       ] },
       { k: 0, s: 78, m: [1, 0, 96.06, 0, 1, -157.51, 0, 0, 1], c: [
         { k: 0, m: [1, 0, 196, 0, 1, 267, 0, 0, 1], c: [
-          { k: 3, cx: .8, cy: -.5, rx: 4.7, ry: 4.7, paint: { f: '#fff' } }
+          { k: 3, cx: 0.8, cy: -0.5, rx: 4.7, ry: 4.7, paint: { f: '#fff' } }
         ] }
       ] },
       { k: 0, s: 81, m: [1, 0, 25.04, 0, 1, 45.68, 0, 0, 1], hd: 1, c: [
@@ -1973,22 +1973,22 @@ export const dl =
       { k: 0, s: 107, m: [1, 0, 25.04, 0, 1, 45.68, 0, 0, 1], hd: 1, c: [
         { k: 1, s: 108, paint: { cap: 1, sc: '#fff', sw: 1.5 } }
       ] },
-      { k: 0, s: 109, m: [-.13744, -.99051, 58.21, .99051, -.13744, -39.39, 0, 0, 1], hd: 1, c: [
+      { k: 0, s: 109, m: [-0.13744, -0.99051, 58.21, 0.99051, -0.13744, -39.39, 0, 0, 1], hd: 1, c: [
         { k: 1, s: 110, paint: { cap: 1, sc: '#fff', sw: 2 } }
       ] },
-      { k: 0, s: 111, m: [-.13744, -.99051, 58.21, .99051, -.13744, -39.39, 0, 0, 1], hd: 1, c: [
+      { k: 0, s: 111, m: [-0.13744, -0.99051, 58.21, 0.99051, -0.13744, -39.39, 0, 0, 1], hd: 1, c: [
         { k: 1, s: 112, paint: { cap: 1, sc: '#fff', sw: 2 } }
       ] },
-      { k: 0, s: 113, m: [-.13744, -.99051, 58.21, .99051, -.13744, -39.39, 0, 0, 1], hd: 1, c: [
+      { k: 0, s: 113, m: [-0.13744, -0.99051, 58.21, 0.99051, -0.13744, -39.39, 0, 0, 1], hd: 1, c: [
         { k: 1, s: 114, paint: { cap: 1, sc: '#fff', sw: 2 } }
       ] },
-      { k: 0, s: 115, m: [.01571, .99988, 53.21, -.99988, .01571, 131.61, 0, 0, 1], hd: 1, c: [
+      { k: 0, s: 115, m: [0.01571, 0.99988, 53.21, -0.99988, 0.01571, 131.61, 0, 0, 1], hd: 1, c: [
         { k: 1, s: 116, paint: { cap: 1, sc: '#fff', sw: 2 } }
       ] },
-      { k: 0, s: 117, m: [.01571, .99988, 53.21, -.99988, .01571, 131.61, 0, 0, 1], hd: 1, c: [
+      { k: 0, s: 117, m: [0.01571, 0.99988, 53.21, -0.99988, 0.01571, 131.61, 0, 0, 1], hd: 1, c: [
         { k: 1, s: 118, paint: { cap: 1, sc: '#fff', sw: 2 } }
       ] },
-      { k: 0, s: 119, m: [.01571, .99988, 53.21, -.99988, .01571, 131.61, 0, 0, 1], hd: 1, c: [
+      { k: 0, s: 119, m: [0.01571, 0.99988, 53.21, -0.99988, 0.01571, 131.61, 0, 0, 1], hd: 1, c: [
         { k: 1, s: 120, paint: { cap: 1, sc: '#fff', sw: 2 } }
       ] }
     ] }

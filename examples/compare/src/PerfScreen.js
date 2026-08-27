@@ -5,7 +5,16 @@ import LottieView from 'lottie-react-native';
 import { FIXTURE_BY_NAME } from './registry';
 
 const FIXTURE = 'boucing_ball';
-const PLAYERS = ['ulottie', 'ulottie-skia', 'lottie', 'none'];
+const PLAYERS = [
+  'ulottie',
+  'ulottie-skia',
+  'rt-tinyskia',
+  'rt-thorvg',
+  'lottie',
+  'skottie-skia',
+  'dotlottie',
+  'none',
+];
 const COUNTS = [1, 4, 9, 16, 'mixed'];
 // Heterogeneous cell: the 16 heaviest distinct fixtures by baked-tree node
 // count (heaviest first). Fixtures without an svg module render as empty
@@ -193,6 +202,22 @@ export default function PerfScreen() {
               if (player === 'ulottie-skia') {
                 const UlottieSkia = f.UlottieSkia;
                 return <UlottieSkia key={i} style={cellStyle} />;
+              }
+              if (player === 'rt-tinyskia') {
+                const RtTinySkia = f.RtTinySkia;
+                return <RtTinySkia key={i} style={cellStyle} />;
+              }
+              if (player === 'rt-thorvg') {
+                const RtThorvg = f.RtThorvg;
+                return <RtThorvg key={i} style={cellStyle} />;
+              }
+              if (player === 'skottie-skia') {
+                const SkiaSkottie = f.SkiaSkottie;
+                return <SkiaSkottie key={i} style={cellStyle} />;
+              }
+              if (player === 'dotlottie') {
+                const DotLottie = f.DotLottie;
+                return <DotLottie key={i} style={cellStyle} />;
               }
               if (player === 'lottie')
                 return (
