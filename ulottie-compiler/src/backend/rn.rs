@@ -429,6 +429,22 @@ fn transform_array(v: &str) -> Result<String> {
     }
 }
 
+/// Whether react-native-svg's native side reads this prop as a raw `Double`.
+///
+/// The generated `RNSVG*ManagerDelegate.setProperty` casts these four with
+/// `((Double) value).floatValue()`, so a `String` there throws
+/// `ClassCastException: String cannot be cast to Double`. The static props
+/// here reach the native side through rn-svg's JS components, which coerce —
+/// but they share both the name set and the value with the per-frame writes
+/// (`rnNumeric` in `runtime/rn/set.js`), which do not, so the two agree on the
+/// emitted type rather than differing by accident.
+fn numeric_prop(prop: &str) -> bool {
+    matches!(
+        prop,
+        "opacity" | "fillOpacity" | "strokeOpacity" | "strokeDashoffset"
+    )
+}
+
 /// One node's static props as JS object entries. Everything the runtime may
 /// later overwrite is still emitted — these are the baked first-frame values,
 /// so the tree renders exactly frame `ip` before any `apply` runs.
@@ -465,7 +481,16 @@ fn static_props(node: &Node) -> Result<Vec<String>> {
                 // react-native-svg scopes ids per <Svg> root, so the marker is
                 // resolved away instead of carried.
                 let v = value.replace("--u", "");
-                parts.push(format!("{}: {}", camel(name), emit::js_string(&v)));
+                let prop = camel(name);
+                // A percentage (`opacity="50%"`) or any other non-plain
+                // spelling stays a string for the JS component to parse.
+                let num = numeric_prop(&prop)
+                    && v.parse::<f64>().is_ok_and(|x| x.is_finite() && format!("{x}") == v);
+                if num {
+                    parts.push(format!("{prop}: {v}"));
+                } else {
+                    parts.push(format!("{prop}: {}", emit::js_string(&v)));
+                }
             }
         }
     }

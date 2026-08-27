@@ -1590,7 +1590,7 @@ mod tests {
             });
         });
         assert!(
-            doc.contains("opacity=\".5\""),
+            doc.contains("opacity=\"0.5\""),
             "valueAtTime(0.5) should bake opacity 50:\n{doc}"
         );
     }

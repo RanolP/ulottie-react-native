@@ -3,7 +3,7 @@
 // before its own minifier runs; a minifier here could strip them.
 // caps: TRANSFORM | TRANSLATE | OPACITY | KEYFRAMES | EASING | SPATIAL | HOLD | TIMELINE
 
-// runtime symbols: fmt, r, r5, r2, dec, H_FR, H_IP, H_OP, H_EASINGS, H_TIMELINES, H_GATES, H_PROGRAM, H_REMAPS, INV, P10, put, mtx, open, EASE, SP_SEG, spBuild, spSample, spSeg, T_SCALAR, T_VECTOR, T_EXPR, F_EASE, F_HOLD, F_SPATIAL, pseg, pease, pv, pvv, pslice, xv, xvv, bTransform, oTransform, bTranslate, oTranslate, bOpacity, oOpacity, rnProp, rnMatrix, mountRn
+// runtime symbols: fmt, r, r5, r2, dec, H_FR, H_IP, H_OP, H_EASINGS, H_TIMELINES, H_GATES, H_PROGRAM, H_REMAPS, INV, P10, put, mtx, open, EASE, SP_SEG, spBuild, spSample, spSeg, T_SCALAR, T_VECTOR, T_EXPR, F_EASE, F_HOLD, F_SPATIAL, pseg, pease, pv, pvv, pslice, xv, xvv, bTransform, oTransform, bTranslate, oTranslate, bOpacity, oOpacity, rnNumeric, rnProp, rnMatrix, mountRn
 // Shared number → string formatting for attribute values.
 //
 // Precision is chosen per role, because the error budgets differ by orders of
@@ -25,15 +25,15 @@
 //
 // The profile says the time is in path-string assembly (`pathD` + `pdPair` +
 // `pdSep`, 15% together) and in `setAttribute` and `evalExpr` — not here.
+//
+// A fraction keeps its leading zero even though SVG parses ".5" fine. The
+// react-native-svg target shares this helper, and its JS prop parser rejects
+// ".47" ("not a valid number or percentage string"), leaves the prop a String,
+// and Fabric's generated RNSVGGroupManagerDelegate.setProperty then throws
+// ClassCastException: String cannot be cast to Double — an app-killing crash on
+// Android, observed on a Pixel 8 with the `mixed16` fixture.
 function fmt(x, scale) { 'worklet';
-  const s = '' + Math.round(x * scale) / scale;
-  // A bare leading zero is redundant in SVG: ".5" and "-.5" parse identically
-  // and are shorter.
-  if (s.charCodeAt(0) === 48 && s.charCodeAt(1) === 46) return s.slice(1);
-  if (s.charCodeAt(0) === 45 && s.charCodeAt(1) === 48 && s.charCodeAt(2) === 46) {
-    return '-' + s.slice(2);
-  }
-  return s;
+  return '' + Math.round(x * scale) / scale;
 }
 
 /** Coordinates and plain attribute values: 3 decimals. */
@@ -133,22 +133,38 @@ const P10 = [1, 10, 100, 1000];
 // RN half: the SVG attribute name maps to the camelCased react-native-svg
 // prop, a `transform` string becomes the ColumnMajorTransformMatrix array
 // (a transform *string* throws on Fabric iOS: "JSON value of type NSString
-// cannot be converted to a CATransform3D"), and a changed element lands in
-// the dirty queue once per flush so the consumer only touches what moved.
+// cannot be converted to a CATransform3D"), a prop the native side reads as a
+// `Double` is handed a number (see `rnNumeric`), and a changed element lands
+// in the dirty queue once per flush so the consumer only touches what moved.
 
 function put(el, name, v, w, i) { 'worklet';
   if (v !== w[i]) {
     w[i] = v;
-    el.p[rnProp(name)] = name === 'transform' ? rnMatrix(v) : v;
+    const p = rnProp(name);
+    el.p[p] = name === 'transform' ? rnMatrix(v) : rnNumeric(p) ? +v : v;
     if (!el.d) { el.d = 1; el.q.push(el); }
   }
 }
 
 /**
- * Direct prop write for the few loops that write outside `put`'s
- * one-attribute guard (the display gates, the rect radius pair). The caller
- * has already change-detected; this only records the prop and marks the
- * element dirty.
+ * Whether react-native-svg's native side reads this prop as a raw `Double`.
+ *
+ * These writes bypass rn-svg's JS prop extraction — the consumer pushes `el.p`
+ * straight into Fabric — so whatever the op produced is what the generated
+ * `RNSVG*ManagerDelegate.setProperty` casts. For these four the generated
+ * Java is `((Double) value).floatValue()`, and a `String` there throws
+ * `ClassCastException: String cannot be cast to Double`, which kills the app
+ * (observed on a Pixel 8 with the `mixed16` fixture; iOS tolerates it).
+ *
+ * Every other prop the ops write is either a `String` on the native side
+ * (`d`, `display`) or goes through `DynamicFromObject`, which parses a
+ * numeric string via `SVGLength` — `x`/`y`/`width`/`height`/`rx`/`ry`/
+ * `cx`/`cy`/`strokeWidth`/`strokeDasharray`/`fill`/`stroke`. Those keep the
+ * op's string, so the shared change detection above still compares the exact
+ * bytes the web runtime would have written.
+ *
+ * The number is `+v` on a value the op already rounded (`r`, `r2`), so this
+ * only drops the stringification — it does not change the value.
  */
 // The layer matrix.
 //
@@ -677,6 +693,17 @@ function oOpacity(x, s) { 'worklet';
     put(E[i], 'opacity', r(xv(x, X, O, i, T[L[i]], C) / 100), W, i);
   }
 }
+function rnNumeric(p) { 'worklet';
+  return p === 'opacity' || p === 'fillOpacity' || p === 'strokeOpacity'
+    || p === 'strokeDashoffset';
+}
+
+/**
+ * Direct prop write for the few loops that write outside `put`'s
+ * one-attribute guard (the display gates, the rect radius pair). The caller
+ * has already change-detected; this only records the prop and marks the
+ * element dirty.
+ */
 function rnProp(name) { 'worklet';
   if (name.indexOf('-') < 0) return name;
   let out = '';
@@ -834,7 +861,7 @@ export const tree =
     ] }
   ] },
   { type: 'G', staticProps: { clipPath: 'url(#vp0)' }, children: [
-    { type: 'G', staticProps: { transform: [.952, 0, 0, .952, 143.42, 152.23] }, children: [
+    { type: 'G', staticProps: { transform: [0.952, 0, 0, 0.952, 143.42, 152.23] }, children: [
       { type: 'G', slot: 2, staticProps: { transform: [1, 0, 0, 1, -246.54, -327.35] }, children: [
         { type: 'G', staticProps: { transform: [1, 0, 0, 1, -1.05, 0] }, children: [
           { type: 'G', staticProps: { transform: [1, 0, 0, 1, 305.75, 367.21] }, children: [
@@ -847,7 +874,7 @@ export const tree =
         { type: 'G', staticProps: { transform: [1, 0, 0, 1, -1.05, 0] }, children: [
           { type: 'G', staticProps: { transform: [1.05042, 0, 0, 1.05042, 96.94, 167.45] }, children: [
             { type: 'G', staticProps: { clipPath: 'url(#vp0)' }, children: [
-              { type: 'G', slot: 11, staticProps: { transform: [.952, 0, 0, .952, -91.29, -159.41] }, children: [
+              { type: 'G', slot: 11, staticProps: { transform: [0.952, 0, 0, 0.952, -91.29, -159.41] }, children: [
                 { type: 'G', staticProps: { transform: [1, 0, 0, 1, 305.75, 367.21] }, children: [
                   { type: 'Path', staticProps: { d: 'M66.199-32.931C60.138-32.931,55.223-27.94,55.223-21.783L55.223,21.783C55.223,27.94,60.138,32.931,66.199,32.931C72.262,32.931,77.176,27.94,77.176,21.783L77.176-21.783C77.176-27.94,72.262-32.931,66.199-32.931Z', fill: '#a4c639' } }
                 ] },
@@ -878,26 +905,26 @@ export const tree =
         { type: 'G', staticProps: { transform: [1, 0, 0, 1, 305.97, 378.69] }, children: [
           { type: 'Path', staticProps: { d: 'M-48.835-44.077L-48.835,27.183L48.835,27.183L48.835-44.077L-48.835-44.077Z', fill: '#f05c61' } }
         ] },
-        { type: 'G', staticProps: { transform: [.66333, 0, 0, .66333, 182.72, -90.57] }, children: [
+        { type: 'G', staticProps: { transform: [0.66333, 0, 0, 0.66333, 182.72, -90.57] }, children: [
           { type: 'G', staticProps: { transform: [1, 0, 0, 1, 195.06, 608.65] }, children: [
-            { type: 'Path', staticProps: { d: 'M-9,105.655C-12.137,101.969-15.799,96.859-16.931,91.894C-17.258,90.461-17.391,88.967-17.165,87.496C-16.982,86.307-16.57,85.186-15.885,84.187C-14.328,81.916-11.677,80.743-9.001,80.743C-6.325,80.743-3.672,81.915-2.115,84.187C-1.43,85.186-1.016,86.307-.834,87.497C-.608,88.969-.743,90.463-1.07,91.897C-2.202,96.861-5.863,101.97-9,105.655ZM-9,105.655C-6.667,108.396-3.822,111.312-.604,113.123C1.043,114.05,2.809,114.708,4.706,114.928C6.592,115.147,8.481,114.913,10.246,114.197C13.816,112.748,16.344,109.514,16.89,105.701C17.167,103.769,16.913,101.97,16.267,100.15C16.022,99.46,15.735,98.788,15.439,98.119C14.974,97.066,14.491,96.021,14.009,94.975L14.009,94.975C9.851,85.954,5.449,76.933,.801,67.913C.258,66.858-.282,65.802-.844,64.757C-1.408,63.709-1.984,62.69-2.766,61.774C-4.356,59.911-6.531,58.853-9,58.853C-11.47,58.853-13.644,59.911-15.235,61.775C-16.016,62.691-16.594,63.71-17.157,64.758C-17.718,65.802-18.258,66.859-18.801,67.913C-23.448,76.934-27.851,85.954-32.009,94.975C-32.491,96.021-32.974,97.066-33.439,98.119C-33.735,98.788-34.022,99.46-34.267,100.15C-34.913,101.97-35.167,103.769-34.89,105.701C-34.344,109.514-31.816,112.748-28.246,114.197C-26.481,114.913-24.592,115.147-22.706,114.928C-20.809,114.708-19.043,114.05-17.396,113.123C-14.179,111.312-11.333,108.396-9,105.655', fill: 'none', strokeLinecap: 'round', strokeLinejoin: 'round', stroke: '#fff', strokeWidth: '4' } }
+            { type: 'Path', staticProps: { d: 'M-9,105.655C-12.137,101.969-15.799,96.859-16.931,91.894C-17.258,90.461-17.391,88.967-17.165,87.496C-16.982,86.307-16.57,85.186-15.885,84.187C-14.328,81.916-11.677,80.743-9.001,80.743C-6.325,80.743-3.672,81.915-2.115,84.187C-1.43,85.186-1.016,86.307-0.834,87.497C-0.608,88.969-0.743,90.463-1.07,91.897C-2.202,96.861-5.863,101.97-9,105.655ZM-9,105.655C-6.667,108.396-3.822,111.312-0.604,113.123C1.043,114.05,2.809,114.708,4.706,114.928C6.592,115.147,8.481,114.913,10.246,114.197C13.816,112.748,16.344,109.514,16.89,105.701C17.167,103.769,16.913,101.97,16.267,100.15C16.022,99.46,15.735,98.788,15.439,98.119C14.974,97.066,14.491,96.021,14.009,94.975L14.009,94.975C9.851,85.954,5.449,76.933,0.801,67.913C0.258,66.858-0.282,65.802-0.844,64.757C-1.408,63.709-1.984,62.69-2.766,61.774C-4.356,59.911-6.531,58.853-9,58.853C-11.47,58.853-13.644,59.911-15.235,61.775C-16.016,62.691-16.594,63.71-17.157,64.758C-17.718,65.802-18.258,66.859-18.801,67.913C-23.448,76.934-27.851,85.954-32.009,94.975C-32.491,96.021-32.974,97.066-33.439,98.119C-33.735,98.788-34.022,99.46-34.267,100.15C-34.913,101.97-35.167,103.769-34.89,105.701C-34.344,109.514-31.816,112.748-28.246,114.197C-26.481,114.913-24.592,115.147-22.706,114.928C-20.809,114.708-19.043,114.05-17.396,113.123C-14.179,111.312-11.333,108.396-9,105.655', fill: 'none', strokeLinecap: 'round', strokeLinejoin: 'round', stroke: '#fff', strokeWidth: '4' } }
           ] }
         ] },
         { type: 'G', staticProps: { transform: [1, 0, 0, 1, 305.75, 302.52] }, children: [
-          { type: 'Path', staticProps: { d: 'M-20.603,11.496C-23.588,11.496-26.007,9.077-26.007,6.092C-26.007,3.108-23.588,.688-20.603,.688C-17.618,.688-15.2,3.108-15.2,6.092C-15.2,9.077-17.618,11.496-20.603,11.496ZM21.278,11.496C18.294,11.496,15.875,9.077,15.875,6.092C15.875,3.108,18.294,.688,21.278,.688C24.263,.688,26.682,3.108,26.682,6.092C26.682,9.077,24.263,11.496,21.278,11.496Z', fill: '#fff' } }
+          { type: 'Path', staticProps: { d: 'M-20.603,11.496C-23.588,11.496-26.007,9.077-26.007,6.092C-26.007,3.108-23.588,0.688-20.603,0.688C-17.618,0.688-15.2,3.108-15.2,6.092C-15.2,9.077-17.618,11.496-20.603,11.496ZM21.278,11.496C18.294,11.496,15.875,9.077,15.875,6.092C15.875,3.108,18.294,0.688,21.278,0.688C24.263,0.688,26.682,3.108,26.682,6.092C26.682,9.077,24.263,11.496,21.278,11.496Z', fill: '#fff' } }
         ] },
         { type: 'G', staticProps: { transform: [1.05042, 0, 0, 1.05042, 305.97, 304] }, children: [
-          { type: 'G', slot: 34, staticProps: { opacity: '0' }, children: [
+          { type: 'G', slot: 34, staticProps: { opacity: 0 }, children: [
             { type: 'G', staticProps: { transform: [1, 0, 0, 1, 1.29, 12.87] }, children: [
               { type: 'Rect', staticProps: { x: '-32.79', y: '-6.136', width: '65.58', height: '12.271', fill: '#a4c639' } }
             ] },
-            { type: 'G', staticProps: { transform: [1, 0, 0, 1, .63, 2.04] }, children: [
+            { type: 'G', staticProps: { transform: [1, 0, 0, 1, 0.63, 2.04] }, children: [
               { type: 'Rect', staticProps: { x: '-29.629', y: '-2.715', width: '59.258', height: '5.43', fill: '#a4c639' } }
             ] }
           ] }
         ] },
         { type: 'G', staticProps: { transform: [1, 0, 0, 1, 305.75, 302.52] }, children: [
-          { type: 'Path', staticProps: { d: 'M23.151-9.145L32.174-22.242C32.709-23.02,32.576-24.042,31.876-24.524C31.175-25.006,30.174-24.767,29.638-23.988L20.266-10.384C14.091-12.817,7.228-14.173,0-14.173C-7.229-14.173-14.091-12.817-20.266-10.384L-29.639-23.988C-30.174-24.767-31.176-25.006-31.876-24.524C-32.576-24.042-32.709-23.02-32.174-22.242L-23.151-9.145C-37.495-2.472-47.555,10.207-48.835,25.006L48.835,25.006C47.554,10.207,37.495-2.472,23.151-9.145ZM-20.603,11.496C-23.588,11.496-26.007,9.077-26.007,6.092C-26.007,3.108-23.588,.688-20.603,.688C-17.618,.688-15.2,3.108-15.2,6.092C-15.2,9.077-17.618,11.496-20.603,11.496ZM21.278,11.496C18.294,11.496,15.875,9.077,15.875,6.092C15.875,3.108,18.294,.688,21.278,.688C24.263,.688,26.682,3.108,26.682,6.092C26.682,9.077,24.263,11.496,21.278,11.496Z', fill: '#a4c639' } }
+          { type: 'Path', staticProps: { d: 'M23.151-9.145L32.174-22.242C32.709-23.02,32.576-24.042,31.876-24.524C31.175-25.006,30.174-24.767,29.638-23.988L20.266-10.384C14.091-12.817,7.228-14.173,0-14.173C-7.229-14.173-14.091-12.817-20.266-10.384L-29.639-23.988C-30.174-24.767-31.176-25.006-31.876-24.524C-32.576-24.042-32.709-23.02-32.174-22.242L-23.151-9.145C-37.495-2.472-47.555,10.207-48.835,25.006L48.835,25.006C47.554,10.207,37.495-2.472,23.151-9.145ZM-20.603,11.496C-23.588,11.496-26.007,9.077-26.007,6.092C-26.007,3.108-23.588,0.688-20.603,0.688C-17.618,0.688-15.2,3.108-15.2,6.092C-15.2,9.077-17.618,11.496-20.603,11.496ZM21.278,11.496C18.294,11.496,15.875,9.077,15.875,6.092C15.875,3.108,18.294,0.688,21.278,0.688C24.263,0.688,26.682,3.108,26.682,6.092C26.682,9.077,24.263,11.496,21.278,11.496Z', fill: '#a4c639' } }
         ] }
       ] }
     ] }

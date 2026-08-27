@@ -3,7 +3,7 @@
 // before its own minifier runs; a minifier here could strip them.
 // caps: TRANSFORM | SHAPE | FILL | KEYFRAMES | EASING | SPATIAL | PATH_KF | PATH_D | TIMELINE
 
-// runtime symbols: fmt, r, r5, r2, dec, H_FR, H_IP, H_OP, H_EASINGS, H_TIMELINES, H_GATES, H_PROGRAM, H_REMAPS, INV, P10, put, mtx, open, css, EASE, SP_SEG, spBuild, spSample, spSeg, lerpPath, T_SCALAR, T_VECTOR, T_PATH, T_EXPR, F_EASE, F_HOLD, F_SPATIAL, pseg, pease, pv, pvv, pslice, pvp, mkPath, xv, xvv, vscratch, pdim, pdPair, pdSep, pathD, bTransform, oTransform, hasTrim, bShape, oShape, bFill, oFill, rnProp, rnMatrix, mountRn
+// runtime symbols: fmt, r, r5, r2, dec, H_FR, H_IP, H_OP, H_EASINGS, H_TIMELINES, H_GATES, H_PROGRAM, H_REMAPS, INV, P10, put, mtx, open, css, EASE, SP_SEG, spBuild, spSample, spSeg, lerpPath, T_SCALAR, T_VECTOR, T_PATH, T_EXPR, F_EASE, F_HOLD, F_SPATIAL, pseg, pease, pv, pvv, pslice, pvp, mkPath, xv, xvv, vscratch, pdim, pdPair, pdSep, pathD, bTransform, oTransform, hasTrim, bShape, oShape, bFill, oFill, rnNumeric, rnProp, rnMatrix, mountRn
 // Shared number → string formatting for attribute values.
 //
 // Precision is chosen per role, because the error budgets differ by orders of
@@ -25,15 +25,15 @@
 //
 // The profile says the time is in path-string assembly (`pathD` + `pdPair` +
 // `pdSep`, 15% together) and in `setAttribute` and `evalExpr` — not here.
+//
+// A fraction keeps its leading zero even though SVG parses ".5" fine. The
+// react-native-svg target shares this helper, and its JS prop parser rejects
+// ".47" ("not a valid number or percentage string"), leaves the prop a String,
+// and Fabric's generated RNSVGGroupManagerDelegate.setProperty then throws
+// ClassCastException: String cannot be cast to Double — an app-killing crash on
+// Android, observed on a Pixel 8 with the `mixed16` fixture.
 function fmt(x, scale) { 'worklet';
-  const s = '' + Math.round(x * scale) / scale;
-  // A bare leading zero is redundant in SVG: ".5" and "-.5" parse identically
-  // and are shorter.
-  if (s.charCodeAt(0) === 48 && s.charCodeAt(1) === 46) return s.slice(1);
-  if (s.charCodeAt(0) === 45 && s.charCodeAt(1) === 48 && s.charCodeAt(2) === 46) {
-    return '-' + s.slice(2);
-  }
-  return s;
+  return '' + Math.round(x * scale) / scale;
 }
 
 /** Coordinates and plain attribute values: 3 decimals. */
@@ -133,22 +133,38 @@ const P10 = [1, 10, 100, 1000];
 // RN half: the SVG attribute name maps to the camelCased react-native-svg
 // prop, a `transform` string becomes the ColumnMajorTransformMatrix array
 // (a transform *string* throws on Fabric iOS: "JSON value of type NSString
-// cannot be converted to a CATransform3D"), and a changed element lands in
-// the dirty queue once per flush so the consumer only touches what moved.
+// cannot be converted to a CATransform3D"), a prop the native side reads as a
+// `Double` is handed a number (see `rnNumeric`), and a changed element lands
+// in the dirty queue once per flush so the consumer only touches what moved.
 
 function put(el, name, v, w, i) { 'worklet';
   if (v !== w[i]) {
     w[i] = v;
-    el.p[rnProp(name)] = name === 'transform' ? rnMatrix(v) : v;
+    const p = rnProp(name);
+    el.p[p] = name === 'transform' ? rnMatrix(v) : rnNumeric(p) ? +v : v;
     if (!el.d) { el.d = 1; el.q.push(el); }
   }
 }
 
 /**
- * Direct prop write for the few loops that write outside `put`'s
- * one-attribute guard (the display gates, the rect radius pair). The caller
- * has already change-detected; this only records the prop and marks the
- * element dirty.
+ * Whether react-native-svg's native side reads this prop as a raw `Double`.
+ *
+ * These writes bypass rn-svg's JS prop extraction — the consumer pushes `el.p`
+ * straight into Fabric — so whatever the op produced is what the generated
+ * `RNSVG*ManagerDelegate.setProperty` casts. For these four the generated
+ * Java is `((Double) value).floatValue()`, and a `String` there throws
+ * `ClassCastException: String cannot be cast to Double`, which kills the app
+ * (observed on a Pixel 8 with the `mixed16` fixture; iOS tolerates it).
+ *
+ * Every other prop the ops write is either a `String` on the native side
+ * (`d`, `display`) or goes through `DynamicFromObject`, which parses a
+ * numeric string via `SVGLength` — `x`/`y`/`width`/`height`/`rx`/`ry`/
+ * `cx`/`cy`/`strokeWidth`/`strokeDasharray`/`fill`/`stroke`. Those keep the
+ * op's string, so the shared change detection above still compares the exact
+ * bytes the web runtime would have written.
+ *
+ * The number is `+v` on a value the op already rounded (`r`, `r2`), so this
+ * only drops the stringification — it does not change the value.
  */
 // The layer matrix.
 //
@@ -873,6 +889,17 @@ function oFill(x, s) { 'worklet';
       K[i] ? css(xvv(x, XK, K, i, t, CK, V[i]), o) : r(o / 100), W, i);
   }
 }
+function rnNumeric(p) { 'worklet';
+  return p === 'opacity' || p === 'fillOpacity' || p === 'strokeOpacity'
+    || p === 'strokeDashoffset';
+}
+
+/**
+ * Direct prop write for the few loops that write outside `put`'s
+ * one-attribute guard (the display gates, the rect radius pair). The caller
+ * has already change-detected; this only records the prop and marks the
+ * element dirty.
+ */
 function rnProp(name) { 'worklet';
   if (name.indexOf('-') < 0) return name;
   let out = '';
@@ -1030,16 +1057,16 @@ export const tree =
     ] }
   ] },
   { type: 'G', staticProps: { clipPath: 'url(#vp0)' }, children: [
-    { type: 'G', slot: 1, staticProps: { transform: [.99255, -.12187, .12187, .99255, -9.93, 6.72] }, children: [
+    { type: 'G', slot: 1, staticProps: { transform: [0.99255, -0.12187, 0.12187, 0.99255, -9.93, 6.72] }, children: [
       { type: 'G', staticProps: { clipPath: 'url(#vp0)' }, children: [
         { type: 'G', staticProps: { transform: [1, 0, 0, 1, 302, 462] }, children: [
           { type: 'Path', staticProps: { d: 'M-252-444C-234.327-444-220-429.673-220-412C-220-394.327-234.327-380-252-380C-269.673-380-284-394.327-284-412C-284-429.673-269.673-444-252-444Z', fill: '#ffe096' } }
         ] }
       ] }
     ] },
-    { type: 'G', slot: 5, staticProps: { transform: [.99255, -.12187, .12187, .99255, -9.93, 6.72] }, children: [
-      { type: 'G', slot: 6, staticProps: { transform: [.98163, -.19081, .19081, .98163, -13.62, 10.46] }, children: [
-        { type: 'G', slot: 7, staticProps: { transform: [.98769, .15643, -.15643, .98769, 8.44, -7.21] }, children: [
+    { type: 'G', slot: 5, staticProps: { transform: [0.99255, -0.12187, 0.12187, 0.99255, -9.93, 6.72] }, children: [
+      { type: 'G', slot: 6, staticProps: { transform: [0.98163, -0.19081, 0.19081, 0.98163, -13.62, 10.46] }, children: [
+        { type: 'G', slot: 7, staticProps: { transform: [0.98769, 0.15643, -0.15643, 0.98769, 8.44, -7.21] }, children: [
           { type: 'G', staticProps: { clipPath: 'url(#vp0)' }, children: [
             { type: 'G', staticProps: { transform: [1, 0, 0, 1, -34, 462] }, children: [
               { type: 'Path', slot: 10, staticProps: { fill: '#f59e85', d: 'M84-398.906C88.971-398.906,91.5-399.5,91.5-397C91.5-394.406,88.971-395,84-395C79.029-395,76.75-394.781,76.75-397C76.75-399.344,79.029-398.906,84-398.906Z' } }
@@ -1057,13 +1084,13 @@ export const tree =
           ] }
         ] }
       ] },
-      { type: 'G', slot: 17, staticProps: { transform: [.98163, -.19081, .19081, .98163, -13.62, 10.46] }, children: [
+      { type: 'G', slot: 17, staticProps: { transform: [0.98163, -0.19081, 0.19081, 0.98163, -13.62, 10.46] }, children: [
         { type: 'G', staticProps: { clipPath: 'url(#vp0)' }, children: [
           { type: 'G', staticProps: { transform: [1, 0, 0, 1, -34, 462] }, children: [
-            { type: 'G', slot: 20, staticProps: { transform: [.8, 0, 0, .8, 14.06, -83.27] }, children: [
+            { type: 'G', slot: 20, staticProps: { transform: [0.8, 0, 0, 0.8, 14.06, -83.27] }, children: [
               { type: 'Path', staticProps: { d: 'M70.5-423C74.09-423,77-420.09,77-416.5C77-412.91,74.09-410,70.5-410C66.91-410,64-412.91,64-416.5C64-420.09,66.91-423,70.5-423Z', fill: '#faf2f0' } }
             ] },
-            { type: 'G', slot: 22, staticProps: { transform: [.8, 0, 0, .8, 19.48, -83.3] }, children: [
+            { type: 'G', slot: 22, staticProps: { transform: [0.8, 0, 0, 0.8, 19.48, -83.3] }, children: [
               { type: 'Path', staticProps: { d: 'M97.5-423C101.09-423,104-420.09,104-416.5C104-412.91,101.09-410,97.5-410C93.91-410,91-412.91,91-416.5C91-420.09,93.91-423,97.5-423Z', fill: '#faf2f0' } }
             ] }
           ] },

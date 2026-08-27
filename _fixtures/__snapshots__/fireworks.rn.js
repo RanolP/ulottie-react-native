@@ -3,7 +3,7 @@
 // before its own minifier runs; a minifier here could strip them.
 // caps: DISPLAY | SHAPE | KEYFRAMES | EASING | PATH_D | TRIM
 
-// runtime symbols: fmt, r, dec, H_FR, H_IP, H_OP, H_EASINGS, H_TIMELINES, H_GATES, H_PROGRAM, H_REMAPS, INV, P10, put, open, EASE, T_SCALAR, T_VECTOR, T_PATH, T_EXPR, F_EASE, F_HOLD, pseg, pease, pv, pvp, mkPath, xv, pdPair, pdSep, pathD, SAMPLES, trimTable, trimApply, tmConcat, tmCut, tmLocate, tmBetween, tmSplit, bDisplay, oDisplay, hasTrim, trimCols, trim, bShape, oShape, rput, rnProp, rnMatrix, mountRn
+// runtime symbols: fmt, r, dec, H_FR, H_IP, H_OP, H_EASINGS, H_TIMELINES, H_GATES, H_PROGRAM, H_REMAPS, INV, P10, put, open, EASE, T_SCALAR, T_VECTOR, T_PATH, T_EXPR, F_EASE, F_HOLD, pseg, pease, pv, pvp, mkPath, xv, pdPair, pdSep, pathD, SAMPLES, trimTable, trimApply, tmConcat, tmCut, tmLocate, tmBetween, tmSplit, bDisplay, oDisplay, hasTrim, trimCols, trim, bShape, oShape, rnNumeric, rput, rnProp, rnMatrix, mountRn
 // Shared number → string formatting for attribute values.
 //
 // Precision is chosen per role, because the error budgets differ by orders of
@@ -25,15 +25,15 @@
 //
 // The profile says the time is in path-string assembly (`pathD` + `pdPair` +
 // `pdSep`, 15% together) and in `setAttribute` and `evalExpr` — not here.
+//
+// A fraction keeps its leading zero even though SVG parses ".5" fine. The
+// react-native-svg target shares this helper, and its JS prop parser rejects
+// ".47" ("not a valid number or percentage string"), leaves the prop a String,
+// and Fabric's generated RNSVGGroupManagerDelegate.setProperty then throws
+// ClassCastException: String cannot be cast to Double — an app-killing crash on
+// Android, observed on a Pixel 8 with the `mixed16` fixture.
 function fmt(x, scale) { 'worklet';
-  const s = '' + Math.round(x * scale) / scale;
-  // A bare leading zero is redundant in SVG: ".5" and "-.5" parse identically
-  // and are shorter.
-  if (s.charCodeAt(0) === 48 && s.charCodeAt(1) === 46) return s.slice(1);
-  if (s.charCodeAt(0) === 45 && s.charCodeAt(1) === 48 && s.charCodeAt(2) === 46) {
-    return '-' + s.slice(2);
-  }
-  return s;
+  return '' + Math.round(x * scale) / scale;
 }
 
 /** Coordinates and plain attribute values: 3 decimals. */
@@ -125,22 +125,38 @@ const P10 = [1, 10, 100, 1000];
 // RN half: the SVG attribute name maps to the camelCased react-native-svg
 // prop, a `transform` string becomes the ColumnMajorTransformMatrix array
 // (a transform *string* throws on Fabric iOS: "JSON value of type NSString
-// cannot be converted to a CATransform3D"), and a changed element lands in
-// the dirty queue once per flush so the consumer only touches what moved.
+// cannot be converted to a CATransform3D"), a prop the native side reads as a
+// `Double` is handed a number (see `rnNumeric`), and a changed element lands
+// in the dirty queue once per flush so the consumer only touches what moved.
 
 function put(el, name, v, w, i) { 'worklet';
   if (v !== w[i]) {
     w[i] = v;
-    el.p[rnProp(name)] = name === 'transform' ? rnMatrix(v) : v;
+    const p = rnProp(name);
+    el.p[p] = name === 'transform' ? rnMatrix(v) : rnNumeric(p) ? +v : v;
     if (!el.d) { el.d = 1; el.q.push(el); }
   }
 }
 
 /**
- * Direct prop write for the few loops that write outside `put`'s
- * one-attribute guard (the display gates, the rect radius pair). The caller
- * has already change-detected; this only records the prop and marks the
- * element dirty.
+ * Whether react-native-svg's native side reads this prop as a raw `Double`.
+ *
+ * These writes bypass rn-svg's JS prop extraction — the consumer pushes `el.p`
+ * straight into Fabric — so whatever the op produced is what the generated
+ * `RNSVG*ManagerDelegate.setProperty` casts. For these four the generated
+ * Java is `((Double) value).floatValue()`, and a `String` there throws
+ * `ClassCastException: String cannot be cast to Double`, which kills the app
+ * (observed on a Pixel 8 with the `mixed16` fixture; iOS tolerates it).
+ *
+ * Every other prop the ops write is either a `String` on the native side
+ * (`d`, `display`) or goes through `DynamicFromObject`, which parses a
+ * numeric string via `SVGLength` — `x`/`y`/`width`/`height`/`rx`/`ry`/
+ * `cx`/`cy`/`strokeWidth`/`strokeDasharray`/`fill`/`stroke`. Those keep the
+ * op's string, so the shared change detection above still compares the exact
+ * bytes the web runtime would have written.
+ *
+ * The number is `+v` on a value the op already rounded (`r`, `r2`), so this
+ * only drops the stringification — it does not change the value.
  */
 // Opening one op's batch.
 //
@@ -753,6 +769,17 @@ function oShape(x, s) { 'worklet';
 // outlines per frame. The property list is the one argument, a section
 // `[count, prop offset…]` referenced by offset.
 
+function rnNumeric(p) { 'worklet';
+  return p === 'opacity' || p === 'fillOpacity' || p === 'strokeOpacity'
+    || p === 'strokeDashoffset';
+}
+
+/**
+ * Direct prop write for the few loops that write outside `put`'s
+ * one-attribute guard (the display gates, the rect radius pair). The caller
+ * has already change-detected; this only records the prop and marks the
+ * element dirty.
+ */
 function rput(el, prop, v) { 'worklet';
   el.p[prop] = v;
   if (!el.d) { el.d = 1; el.q.push(el); }
@@ -916,234 +943,234 @@ export const tree =
     ] }
   ] },
   { type: 'G', staticProps: { clipPath: 'url(#vp0)' }, children: [
-    { type: 'G', staticProps: { transform: [.7, 0, 0, .7, 47.11, 52.19] }, children: [
-      { type: 'G', staticProps: { transform: [-.97815, -.20791, .20791, -.97815, 0, 0] }, children: [
+    { type: 'G', staticProps: { transform: [0.7, 0, 0, 0.7, 47.11, 52.19] }, children: [
+      { type: 'G', staticProps: { transform: [-0.97815, -0.20791, 0.20791, -0.97815, 0, 0] }, children: [
         { type: 'Path', slot: 3, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.80902, .58779, -.58779, -.80902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.80902, 0.58779, -0.58779, -0.80902, 0, 0] }, children: [
         { type: 'Path', slot: 5, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.10453, .99452, -.99452, -.10453, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.10453, 0.99452, -0.99452, -0.10453, 0, 0] }, children: [
         { type: 'Path', slot: 7, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } }
       ] },
-      { type: 'G', staticProps: { transform: [.66913, .74314, -.74314, .66913, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.66913, 0.74314, -0.74314, 0.66913, 0, 0] }, children: [
         { type: 'Path', slot: 9, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } }
       ] },
       { type: 'Path', slot: 10, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } },
-      { type: 'G', staticProps: { transform: [.66913, -.74314, .74314, .66913, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.66913, -0.74314, 0.74314, 0.66913, 0, 0] }, children: [
         { type: 'Path', slot: 12, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.10453, -.99452, .99452, -.10453, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.10453, -0.99452, 0.99452, -0.10453, 0, 0] }, children: [
         { type: 'Path', slot: 14, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.80902, -.58779, .58779, -.80902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.80902, -0.58779, 0.58779, -0.80902, 0, 0] }, children: [
         { type: 'Path', slot: 16, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.97815, .20791, -.20791, -.97815, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.97815, 0.20791, -0.20791, -0.97815, 0, 0] }, children: [
         { type: 'Path', slot: 18, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.5, .86603, -.86603, -.5, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.5, 0.86603, -0.86603, -0.5, 0, 0] }, children: [
         { type: 'Path', slot: 20, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } }
       ] },
-      { type: 'G', staticProps: { transform: [.30902, .95106, -.95106, .30902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.30902, 0.95106, -0.95106, 0.30902, 0, 0] }, children: [
         { type: 'Path', slot: 22, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } }
       ] },
-      { type: 'G', staticProps: { transform: [.91355, .40674, -.40674, .91355, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.91355, 0.40674, -0.40674, 0.91355, 0, 0] }, children: [
         { type: 'Path', slot: 24, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } }
       ] },
-      { type: 'G', staticProps: { transform: [.91355, -.40674, .40674, .91355, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.91355, -0.40674, 0.40674, 0.91355, 0, 0] }, children: [
         { type: 'Path', slot: 26, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } }
       ] },
-      { type: 'G', staticProps: { transform: [.30902, -.95106, .95106, .30902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.30902, -0.95106, 0.95106, 0.30902, 0, 0] }, children: [
         { type: 'Path', slot: 28, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.5, -.86603, .86603, -.5, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.5, -0.86603, 0.86603, -0.5, 0, 0] }, children: [
         { type: 'Path', slot: 30, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.97815, -.20791, .20791, -.97815, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.97815, -0.20791, 0.20791, -0.97815, 0, 0] }, children: [
         { type: 'Path', slot: 32, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.80902, .58779, -.58779, -.80902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.80902, 0.58779, -0.58779, -0.80902, 0, 0] }, children: [
         { type: 'Path', slot: 34, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.10453, .99452, -.99452, -.10453, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.10453, 0.99452, -0.99452, -0.10453, 0, 0] }, children: [
         { type: 'Path', slot: 36, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } }
       ] },
-      { type: 'G', staticProps: { transform: [.66913, .74314, -.74314, .66913, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.66913, 0.74314, -0.74314, 0.66913, 0, 0] }, children: [
         { type: 'Path', slot: 38, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } }
       ] },
       { type: 'Path', slot: 39, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#9661ba', strokeWidth: '5', display: 'none' } }
     ] },
-    { type: 'G', slot: 40, staticProps: { transform: [.7, 0, 0, .7, 106.11, 166.19], display: 'none' }, children: [
-      { type: 'G', staticProps: { transform: [-.97815, -.20791, .20791, -.97815, 0, 0] }, children: [
+    { type: 'G', slot: 40, staticProps: { transform: [0.7, 0, 0, 0.7, 106.11, 166.19], display: 'none' }, children: [
+      { type: 'G', staticProps: { transform: [-0.97815, -0.20791, 0.20791, -0.97815, 0, 0] }, children: [
         { type: 'Path', slot: 42, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.80902, .58779, -.58779, -.80902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.80902, 0.58779, -0.58779, -0.80902, 0, 0] }, children: [
         { type: 'Path', slot: 44, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.10453, .99452, -.99452, -.10453, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.10453, 0.99452, -0.99452, -0.10453, 0, 0] }, children: [
         { type: 'Path', slot: 46, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [.66913, .74314, -.74314, .66913, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.66913, 0.74314, -0.74314, 0.66913, 0, 0] }, children: [
         { type: 'Path', slot: 48, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } }
       ] },
       { type: 'Path', slot: 49, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } },
-      { type: 'G', staticProps: { transform: [.66913, -.74314, .74314, .66913, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.66913, -0.74314, 0.74314, 0.66913, 0, 0] }, children: [
         { type: 'Path', slot: 51, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.10453, -.99452, .99452, -.10453, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.10453, -0.99452, 0.99452, -0.10453, 0, 0] }, children: [
         { type: 'Path', slot: 53, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.80902, -.58779, .58779, -.80902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.80902, -0.58779, 0.58779, -0.80902, 0, 0] }, children: [
         { type: 'Path', slot: 55, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.97815, .20791, -.20791, -.97815, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.97815, 0.20791, -0.20791, -0.97815, 0, 0] }, children: [
         { type: 'Path', slot: 57, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.5, .86603, -.86603, -.5, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.5, 0.86603, -0.86603, -0.5, 0, 0] }, children: [
         { type: 'Path', slot: 59, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [.30902, .95106, -.95106, .30902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.30902, 0.95106, -0.95106, 0.30902, 0, 0] }, children: [
         { type: 'Path', slot: 61, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [.91355, .40674, -.40674, .91355, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.91355, 0.40674, -0.40674, 0.91355, 0, 0] }, children: [
         { type: 'Path', slot: 63, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [.91355, -.40674, .40674, .91355, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.91355, -0.40674, 0.40674, 0.91355, 0, 0] }, children: [
         { type: 'Path', slot: 65, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [.30902, -.95106, .95106, .30902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.30902, -0.95106, 0.95106, 0.30902, 0, 0] }, children: [
         { type: 'Path', slot: 67, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.5, -.86603, .86603, -.5, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.5, -0.86603, 0.86603, -0.5, 0, 0] }, children: [
         { type: 'Path', slot: 69, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.97815, -.20791, .20791, -.97815, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.97815, -0.20791, 0.20791, -0.97815, 0, 0] }, children: [
         { type: 'Path', slot: 71, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.80902, .58779, -.58779, -.80902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.80902, 0.58779, -0.58779, -0.80902, 0, 0] }, children: [
         { type: 'Path', slot: 73, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.10453, .99452, -.99452, -.10453, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.10453, 0.99452, -0.99452, -0.10453, 0, 0] }, children: [
         { type: 'Path', slot: 75, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [.66913, .74314, -.74314, .66913, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.66913, 0.74314, -0.74314, 0.66913, 0, 0] }, children: [
         { type: 'Path', slot: 77, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } }
       ] },
       { type: 'Path', slot: 78, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#40c9ff', strokeWidth: '5' } }
     ] },
-    { type: 'G', slot: 79, staticProps: { transform: [.7, 0, 0, .7, 45.11, 111.19], display: 'none' }, children: [
-      { type: 'G', staticProps: { transform: [-.97815, -.20791, .20791, -.97815, 0, 0] }, children: [
+    { type: 'G', slot: 79, staticProps: { transform: [0.7, 0, 0, 0.7, 45.11, 111.19], display: 'none' }, children: [
+      { type: 'G', staticProps: { transform: [-0.97815, -0.20791, 0.20791, -0.97815, 0, 0] }, children: [
         { type: 'Path', slot: 81, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.80902, .58779, -.58779, -.80902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.80902, 0.58779, -0.58779, -0.80902, 0, 0] }, children: [
         { type: 'Path', slot: 83, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.10453, .99452, -.99452, -.10453, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.10453, 0.99452, -0.99452, -0.10453, 0, 0] }, children: [
         { type: 'Path', slot: 85, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [.66913, .74314, -.74314, .66913, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.66913, 0.74314, -0.74314, 0.66913, 0, 0] }, children: [
         { type: 'Path', slot: 87, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } }
       ] },
       { type: 'Path', slot: 88, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } },
-      { type: 'G', staticProps: { transform: [.66913, -.74314, .74314, .66913, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.66913, -0.74314, 0.74314, 0.66913, 0, 0] }, children: [
         { type: 'Path', slot: 90, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.10453, -.99452, .99452, -.10453, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.10453, -0.99452, 0.99452, -0.10453, 0, 0] }, children: [
         { type: 'Path', slot: 92, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.80902, -.58779, .58779, -.80902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.80902, -0.58779, 0.58779, -0.80902, 0, 0] }, children: [
         { type: 'Path', slot: 94, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.97815, .20791, -.20791, -.97815, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.97815, 0.20791, -0.20791, -0.97815, 0, 0] }, children: [
         { type: 'Path', slot: 96, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.5, .86603, -.86603, -.5, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.5, 0.86603, -0.86603, -0.5, 0, 0] }, children: [
         { type: 'Path', slot: 98, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [.30902, .95106, -.95106, .30902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.30902, 0.95106, -0.95106, 0.30902, 0, 0] }, children: [
         { type: 'Path', slot: 100, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [.91355, .40674, -.40674, .91355, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.91355, 0.40674, -0.40674, 0.91355, 0, 0] }, children: [
         { type: 'Path', slot: 102, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [.91355, -.40674, .40674, .91355, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.91355, -0.40674, 0.40674, 0.91355, 0, 0] }, children: [
         { type: 'Path', slot: 104, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [.30902, -.95106, .95106, .30902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.30902, -0.95106, 0.95106, 0.30902, 0, 0] }, children: [
         { type: 'Path', slot: 106, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.5, -.86603, .86603, -.5, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.5, -0.86603, 0.86603, -0.5, 0, 0] }, children: [
         { type: 'Path', slot: 108, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.97815, -.20791, .20791, -.97815, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.97815, -0.20791, 0.20791, -0.97815, 0, 0] }, children: [
         { type: 'Path', slot: 110, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.80902, .58779, -.58779, -.80902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.80902, 0.58779, -0.58779, -0.80902, 0, 0] }, children: [
         { type: 'Path', slot: 112, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.10453, .99452, -.99452, -.10453, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.10453, 0.99452, -0.99452, -0.10453, 0, 0] }, children: [
         { type: 'Path', slot: 114, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [.66913, .74314, -.74314, .66913, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.66913, 0.74314, -0.74314, 0.66913, 0, 0] }, children: [
         { type: 'Path', slot: 116, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } }
       ] },
       { type: 'Path', slot: 117, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#ed6680', strokeWidth: '5' } }
     ] },
-    { type: 'G', slot: 118, staticProps: { transform: [.7, 0, 0, .7, 143.11, 56.19], display: 'none' }, children: [
-      { type: 'G', staticProps: { transform: [-.97815, -.20791, .20791, -.97815, 0, 0] }, children: [
+    { type: 'G', slot: 118, staticProps: { transform: [0.7, 0, 0, 0.7, 143.11, 56.19], display: 'none' }, children: [
+      { type: 'G', staticProps: { transform: [-0.97815, -0.20791, 0.20791, -0.97815, 0, 0] }, children: [
         { type: 'Path', slot: 120, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.80902, .58779, -.58779, -.80902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.80902, 0.58779, -0.58779, -0.80902, 0, 0] }, children: [
         { type: 'Path', slot: 122, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.10453, .99452, -.99452, -.10453, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.10453, 0.99452, -0.99452, -0.10453, 0, 0] }, children: [
         { type: 'Path', slot: 124, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [.66913, .74314, -.74314, .66913, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.66913, 0.74314, -0.74314, 0.66913, 0, 0] }, children: [
         { type: 'Path', slot: 126, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } }
       ] },
       { type: 'Path', slot: 127, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } },
-      { type: 'G', staticProps: { transform: [.66913, -.74314, .74314, .66913, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.66913, -0.74314, 0.74314, 0.66913, 0, 0] }, children: [
         { type: 'Path', slot: 129, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.10453, -.99452, .99452, -.10453, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.10453, -0.99452, 0.99452, -0.10453, 0, 0] }, children: [
         { type: 'Path', slot: 131, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.80902, -.58779, .58779, -.80902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.80902, -0.58779, 0.58779, -0.80902, 0, 0] }, children: [
         { type: 'Path', slot: 133, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.97815, .20791, -.20791, -.97815, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.97815, 0.20791, -0.20791, -0.97815, 0, 0] }, children: [
         { type: 'Path', slot: 135, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.5, .86603, -.86603, -.5, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.5, 0.86603, -0.86603, -0.5, 0, 0] }, children: [
         { type: 'Path', slot: 137, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [.30902, .95106, -.95106, .30902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.30902, 0.95106, -0.95106, 0.30902, 0, 0] }, children: [
         { type: 'Path', slot: 139, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [.91355, .40674, -.40674, .91355, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.91355, 0.40674, -0.40674, 0.91355, 0, 0] }, children: [
         { type: 'Path', slot: 141, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [.91355, -.40674, .40674, .91355, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.91355, -0.40674, 0.40674, 0.91355, 0, 0] }, children: [
         { type: 'Path', slot: 143, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [.30902, -.95106, .95106, .30902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.30902, -0.95106, 0.95106, 0.30902, 0, 0] }, children: [
         { type: 'Path', slot: 145, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.5, -.86603, .86603, -.5, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.5, -0.86603, 0.86603, -0.5, 0, 0] }, children: [
         { type: 'Path', slot: 147, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.97815, -.20791, .20791, -.97815, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.97815, -0.20791, 0.20791, -0.97815, 0, 0] }, children: [
         { type: 'Path', slot: 149, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.80902, .58779, -.58779, -.80902, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.80902, 0.58779, -0.58779, -0.80902, 0, 0] }, children: [
         { type: 'Path', slot: 151, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [-.10453, .99452, -.99452, -.10453, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [-0.10453, 0.99452, -0.99452, -0.10453, 0, 0] }, children: [
         { type: 'Path', slot: 153, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } }
       ] },
-      { type: 'G', staticProps: { transform: [.66913, .74314, -.74314, .66913, 0, 0] }, children: [
+      { type: 'G', staticProps: { transform: [0.66913, 0.74314, -0.74314, 0.66913, 0, 0] }, children: [
         { type: 'Path', slot: 155, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } }
       ] },
       { type: 'Path', slot: 156, staticProps: { fill: '#f00', strokeLinecap: 'round', stroke: '#f3a54d', strokeWidth: '5' } }

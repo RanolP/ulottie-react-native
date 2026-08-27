@@ -7,15 +7,42 @@
 // RN half: the SVG attribute name maps to the camelCased react-native-svg
 // prop, a `transform` string becomes the ColumnMajorTransformMatrix array
 // (a transform *string* throws on Fabric iOS: "JSON value of type NSString
-// cannot be converted to a CATransform3D"), and a changed element lands in
-// the dirty queue once per flush so the consumer only touches what moved.
+// cannot be converted to a CATransform3D"), a prop the native side reads as a
+// `Double` is handed a number (see `rnNumeric`), and a changed element lands
+// in the dirty queue once per flush so the consumer only touches what moved.
 
 export function put(el, name, v, w, i) {
   if (v !== w[i]) {
     w[i] = v;
-    el.p[rnProp(name)] = name === 'transform' ? rnMatrix(v) : v;
+    const p = rnProp(name);
+    el.p[p] = name === 'transform' ? rnMatrix(v) : rnNumeric(p) ? +v : v;
     if (!el.d) { el.d = 1; el.q.push(el); }
   }
+}
+
+/**
+ * Whether react-native-svg's native side reads this prop as a raw `Double`.
+ *
+ * These writes bypass rn-svg's JS prop extraction — the consumer pushes `el.p`
+ * straight into Fabric — so whatever the op produced is what the generated
+ * `RNSVG*ManagerDelegate.setProperty` casts. For these four the generated
+ * Java is `((Double) value).floatValue()`, and a `String` there throws
+ * `ClassCastException: String cannot be cast to Double`, which kills the app
+ * (observed on a Pixel 8 with the `mixed16` fixture; iOS tolerates it).
+ *
+ * Every other prop the ops write is either a `String` on the native side
+ * (`d`, `display`) or goes through `DynamicFromObject`, which parses a
+ * numeric string via `SVGLength` — `x`/`y`/`width`/`height`/`rx`/`ry`/
+ * `cx`/`cy`/`strokeWidth`/`strokeDasharray`/`fill`/`stroke`. Those keep the
+ * op's string, so the shared change detection above still compares the exact
+ * bytes the web runtime would have written.
+ *
+ * The number is `+v` on a value the op already rounded (`r`, `r2`), so this
+ * only drops the stringification — it does not change the value.
+ */
+function rnNumeric(p) {
+  return p === 'opacity' || p === 'fillOpacity' || p === 'strokeOpacity'
+    || p === 'strokeDashoffset';
 }
 
 /**

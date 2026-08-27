@@ -48,26 +48,28 @@ impl serde::Serialize for Num {
     }
 }
 
-/// Format a number as compactly as SVG/JS will accept: quantized, no trailing
-/// zeroes, leading zero of a fraction dropped (`0.5` → `.5`).
+/// Format a number as compactly as every consumer will accept: quantized, no
+/// trailing zeroes, but the leading zero of a fraction kept (`0.5`, never `.5`).
+///
+/// The leading zero costs a byte and is not optional. react-native-svg's JS
+/// prop parser rejects `".47"` ("not a valid number or percentage string"),
+/// leaves the prop a `String`, and Fabric's generated
+/// `RNSVGGroupManagerDelegate.setProperty` then throws
+/// `ClassCastException: String cannot be cast to Double` — an app-killing crash
+/// on Android, observed on a Pixel 8 with the `mixed16` fixture.
 pub fn n(x: f64) -> String {
     nd(x, 1000.0)
 }
 
-/// Same, at an explicit scale (`10^decimals`).
+/// Same, at an explicit scale (`10^decimals`). See [`n`] for why a fraction
+/// keeps its leading zero.
 pub fn nd(x: f64, scale: f64) -> String {
     let v = (x * scale).round() / scale;
     let v = if v == 0.0 { 0.0 } else { v };
     if !v.is_finite() {
         return "0".into();
     }
-    let mut s = format!("{v}");
-    if let Some(rest) = s.strip_prefix("0.") {
-        s = format!(".{rest}");
-    } else if let Some(rest) = s.strip_prefix("-0.") {
-        s = format!("-.{rest}");
-    }
-    s
+    format!("{v}")
 }
 
 /// A transform's linear part scales every coordinate under it, so its error
@@ -234,11 +236,24 @@ mod tests {
     #[test]
     fn numbers_are_compact() {
         assert_eq!(n(256.0), "256");
-        assert_eq!(n(0.5), ".5");
-        assert_eq!(n(-0.25), "-.25");
         assert_eq!(n(256.00000000000003), "256");
         assert_eq!(n(-0.0), "0");
         assert_eq!(n(1.23456), "1.235");
+    }
+
+    /// react-native-svg's prop parser rejects a bare `".47"`, so every fraction
+    /// this module emits has to carry its leading zero — see [`n`].
+    #[test]
+    fn fractions_keep_their_leading_zero() {
+        assert_eq!(n(0.47), "0.47");
+        assert_eq!(n(-0.5), "-0.5");
+        assert_eq!(n(0.25), "0.25");
+        assert_eq!(nd(0.47, 100.0), "0.47");
+        assert_eq!(nd(-0.5, 1e5), "-0.5");
+        assert_eq!(
+            transform_str(&[1.0, 0.0, 0.0, 1.0, 0.5, -0.5]),
+            "translate(0.5,-0.5)"
+        );
     }
 
     #[test]

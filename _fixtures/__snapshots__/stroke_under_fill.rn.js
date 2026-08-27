@@ -3,7 +3,7 @@
 // before its own minifier runs; a minifier here could strip them.
 // caps: TRANSLATE | SHAPE | FILL | KEYFRAMES | EASING | SPATIAL | PATH_KF | PATH_D
 
-// runtime symbols: fmt, r, r2, dec, H_FR, H_IP, H_OP, H_EASINGS, H_TIMELINES, H_GATES, H_PROGRAM, H_REMAPS, INV, P10, put, open, css, EASE, SP_SEG, spBuild, spSample, spSeg, lerpPath, T_SCALAR, T_VECTOR, T_PATH, T_EXPR, F_EASE, F_HOLD, F_SPATIAL, pseg, pease, pv, pvv, pslice, pvp, mkPath, xv, xvv, vscratch, pdim, pdPair, pdSep, pathD, bTranslate, oTranslate, hasTrim, bShape, oShape, bFill, oFill, rnProp, rnMatrix, mountRn
+// runtime symbols: fmt, r, r2, dec, H_FR, H_IP, H_OP, H_EASINGS, H_TIMELINES, H_GATES, H_PROGRAM, H_REMAPS, INV, P10, put, open, css, EASE, SP_SEG, spBuild, spSample, spSeg, lerpPath, T_SCALAR, T_VECTOR, T_PATH, T_EXPR, F_EASE, F_HOLD, F_SPATIAL, pseg, pease, pv, pvv, pslice, pvp, mkPath, xv, xvv, vscratch, pdim, pdPair, pdSep, pathD, bTranslate, oTranslate, hasTrim, bShape, oShape, bFill, oFill, rnNumeric, rnProp, rnMatrix, mountRn
 // Shared number → string formatting for attribute values.
 //
 // Precision is chosen per role, because the error budgets differ by orders of
@@ -25,15 +25,15 @@
 //
 // The profile says the time is in path-string assembly (`pathD` + `pdPair` +
 // `pdSep`, 15% together) and in `setAttribute` and `evalExpr` — not here.
+//
+// A fraction keeps its leading zero even though SVG parses ".5" fine. The
+// react-native-svg target shares this helper, and its JS prop parser rejects
+// ".47" ("not a valid number or percentage string"), leaves the prop a String,
+// and Fabric's generated RNSVGGroupManagerDelegate.setProperty then throws
+// ClassCastException: String cannot be cast to Double — an app-killing crash on
+// Android, observed on a Pixel 8 with the `mixed16` fixture.
 function fmt(x, scale) { 'worklet';
-  const s = '' + Math.round(x * scale) / scale;
-  // A bare leading zero is redundant in SVG: ".5" and "-.5" parse identically
-  // and are shorter.
-  if (s.charCodeAt(0) === 48 && s.charCodeAt(1) === 46) return s.slice(1);
-  if (s.charCodeAt(0) === 45 && s.charCodeAt(1) === 48 && s.charCodeAt(2) === 46) {
-    return '-' + s.slice(2);
-  }
-  return s;
+  return '' + Math.round(x * scale) / scale;
 }
 
 /** Coordinates and plain attribute values: 3 decimals. */
@@ -128,22 +128,38 @@ const P10 = [1, 10, 100, 1000];
 // RN half: the SVG attribute name maps to the camelCased react-native-svg
 // prop, a `transform` string becomes the ColumnMajorTransformMatrix array
 // (a transform *string* throws on Fabric iOS: "JSON value of type NSString
-// cannot be converted to a CATransform3D"), and a changed element lands in
-// the dirty queue once per flush so the consumer only touches what moved.
+// cannot be converted to a CATransform3D"), a prop the native side reads as a
+// `Double` is handed a number (see `rnNumeric`), and a changed element lands
+// in the dirty queue once per flush so the consumer only touches what moved.
 
 function put(el, name, v, w, i) { 'worklet';
   if (v !== w[i]) {
     w[i] = v;
-    el.p[rnProp(name)] = name === 'transform' ? rnMatrix(v) : v;
+    const p = rnProp(name);
+    el.p[p] = name === 'transform' ? rnMatrix(v) : rnNumeric(p) ? +v : v;
     if (!el.d) { el.d = 1; el.q.push(el); }
   }
 }
 
 /**
- * Direct prop write for the few loops that write outside `put`'s
- * one-attribute guard (the display gates, the rect radius pair). The caller
- * has already change-detected; this only records the prop and marks the
- * element dirty.
+ * Whether react-native-svg's native side reads this prop as a raw `Double`.
+ *
+ * These writes bypass rn-svg's JS prop extraction — the consumer pushes `el.p`
+ * straight into Fabric — so whatever the op produced is what the generated
+ * `RNSVG*ManagerDelegate.setProperty` casts. For these four the generated
+ * Java is `((Double) value).floatValue()`, and a `String` there throws
+ * `ClassCastException: String cannot be cast to Double`, which kills the app
+ * (observed on a Pixel 8 with the `mixed16` fixture; iOS tolerates it).
+ *
+ * Every other prop the ops write is either a `String` on the native side
+ * (`d`, `display`) or goes through `DynamicFromObject`, which parses a
+ * numeric string via `SVGLength` — `x`/`y`/`width`/`height`/`rx`/`ry`/
+ * `cx`/`cy`/`strokeWidth`/`strokeDasharray`/`fill`/`stroke`. Those keep the
+ * op's string, so the shared change detection above still compares the exact
+ * bytes the web runtime would have written.
+ *
+ * The number is `+v` on a value the op already rounded (`r`, `r2`), so this
+ * only drops the stringification — it does not change the value.
  */
 // Opening one op's batch.
 //
@@ -829,6 +845,17 @@ function oFill(x, s) { 'worklet';
       K[i] ? css(xvv(x, XK, K, i, t, CK, V[i]), o) : r(o / 100), W, i);
   }
 }
+function rnNumeric(p) { 'worklet';
+  return p === 'opacity' || p === 'fillOpacity' || p === 'strokeOpacity'
+    || p === 'strokeDashoffset';
+}
+
+/**
+ * Direct prop write for the few loops that write outside `put`'s
+ * one-attribute guard (the display gates, the rect radius pair). The caller
+ * has already change-detected; this only records the prop and marks the
+ * element dirty.
+ */
 function rnProp(name) { 'worklet';
   if (name.indexOf('-') < 0) return name;
   let out = '';
@@ -977,7 +1004,7 @@ function P0(x, B, e, l, q, a) { 'worklet'; return [bTranslate(x, B[0], e, l, q, 
 function A0(x, S) { 'worklet'; oTranslate(x, S[0]); oShape(x, S[1]); oFill(x, S[2]); }
 
 const D = "0kiqe0gtmm50q100oh30000600gt7gt7qp200gt7id00gt7msl54saienmmj2huig1nmmj2hu820qqp20pqp2msl54iaienmmj2rn5nmmj2gmqf20kqq20jqq2msl54k8ubvlnm1gjifvlnm1rqng120vkk50glk5msl580o4og1gj1omjjj1gsrk2gjtj5ivsn1gjtj5ivsn1gvmkj1ktqha222rvrj4qqsg2nhfvn800qmnn2onjm100008046680024vhu4vhu40pllo2lom9lom90rqsr1k3u4o6i8kfcumpq1mmo4rmpq1mmo4jthv10rmpq1lmo4umpq1lmo4kthv10svn20000svn2rvn20000rvn200rvn200rvn200svn200svn2kfcipgi2kgp4rmpq1mmo4jthv10rmpq1lmo4ipgi2nsn4ovom2u9svn20000svn2rvn20000rvn200rvn200rvn200svn200svn2mgh64ug1oi1oekj14kfcgivt1mmo4vhvt1mmo4loni20vhvt1lmo4givt1lmo4moni20qvn20000svn2rvn20000rvn200rvn200rvn200qvn200svn2kfcohj9mnp4vhvt1mmo4loni20vhvt1lmo4ohj9lln4unrdgh1qvn20000svn2rvn20000rvn200rvn200rvn200qvn200svn2mgg64ug1oi1uo1qt1kfcmksj1mmo4lksj1mmo4rqko10lksj1lmo4mksj1lmo4sqko10qvn20000svn2rvn20000rvn200rvn200rvn200qvn200svn2kfcukgi2ojn4lksj1mmo4rqko10lksj1lmo4ukgi2jpp4krom2ti1qvn20000svn2rvn20000rvn200rvn200rvn200qvn200svn2mgh64ug1oi1ij2un2460868go1mi2qs2000i38sh300gt768o5q5geme0i4i4020m1uu2qv26sbot2ug3";
-const SP = ['matrix(.2,0,0,.255,', 'matrix(5,0,0,3.92157,'];
+const SP = ['matrix(0.2,0,0,0.255,', 'matrix(5,0,0,3.92157,'];
 
 export const tree =
 { type: 'Svg', staticProps: { viewBox: '0 0 174 149', width: '100%', height: '100%', preserveAspectRatio: 'xMidYMid meet' }, children: [
@@ -998,7 +1025,7 @@ export const tree =
           { type: 'Path', slot: 7, staticProps: { fill: 'none', strokeMiterlimit: '10', stroke: '#9b2236', strokeWidth: '4', d: 'M61.328,9.267L-61.328,9.267C-66.446,9.267-70.595,5.118-70.595,0C-70.595-5.118-66.446-9.267-61.328-9.267L61.328-9.267C66.445-9.267,70.595-5.118,70.595,0C70.595,5.118,66.445,9.267,61.328,9.267Z' } }
         ] }
       ] },
-      { type: 'G', slot: 8, staticProps: { transform: [.2, 0, 0, .255, -46, 31] }, children: [
+      { type: 'G', slot: 8, staticProps: { transform: [0.2, 0, 0, 0.255, -46, 31] }, children: [
         { type: 'G', staticProps: { transform: [5, 0, 0, 3.92157, -182.5, -72.68] }, children: [
           { type: 'G', staticProps: { transform: [1, 0, 0, 1, 59.75, 19.27] }, children: [
             { type: 'Path', slot: 11, staticProps: { paintOrder: 'stroke', strokeMiterlimit: '10', stroke: '#9b2236', strokeWidth: '4', d: 'M40.483,9.267L-40.483,9.267C-45.601,9.267-49.75,5.118-49.75,0C-49.75-5.118-45.601-9.267-40.483-9.267L40.483-9.267C45.6-9.267,49.75-5.118,49.75,0C49.75,5.118,45.6,9.267,40.483,9.267Z', fill: 'rgba(101,0,0,0)' } }
@@ -1006,7 +1033,7 @@ export const tree =
         ] },
         { type: 'G', slot: 12, staticProps: { transform: [5, 0, 0, 3.92157, 546.57, 18.31] }, children: [
           { type: 'G', staticProps: { transform: [1, 0, 0, 1, 16.52, 14.51] }, children: [
-            { type: 'Path', staticProps: { d: 'M13.832-10.021L-13.436-14.031C-15.026-14.264-16.271-12.685-15.672-11.194L-6.19,12.438C-5.458,14.264-2.834,14.157-2.268,12.272C-.882,7.662,1.525,1.647,5.237-1.438C7.628-3.425,10.966-4.911,14.194-5.99C16.271-6.685,16-9.702,13.832-10.021Z', fill: '#ca3149' } }
+            { type: 'Path', staticProps: { d: 'M13.832-10.021L-13.436-14.031C-15.026-14.264-16.271-12.685-15.672-11.194L-6.19,12.438C-5.458,14.264-2.834,14.157-2.268,12.272C-0.882,7.662,1.525,1.647,5.237-1.438C7.628-3.425,10.966-4.911,14.194-5.99C16.271-6.685,16-9.702,13.832-10.021Z', fill: '#ca3149' } }
           ] }
         ] }
       ] }

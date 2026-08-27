@@ -3,7 +3,7 @@
 // before its own minifier runs; a minifier here could strip them.
 // caps: TRANSLATE | DISPLAY | SHAPE | ELLIPSE | KEYFRAMES | EASING | SPATIAL | GEOM_ELLIPSE | PATH_D | TRIM
 
-// runtime symbols: fmt, r, r2, dec, H_FR, H_IP, H_OP, H_EASINGS, H_TIMELINES, H_GATES, H_PROGRAM, H_REMAPS, INV, P10, put, open, EASE, SP_SEG, spBuild, spSample, spSeg, T_SCALAR, T_VECTOR, T_PATH, T_EXPR, F_EASE, F_HOLD, F_SPATIAL, pseg, pease, pv, pvv, pslice, pvp, mkPath, xv, xvv, pdPair, pdSep, pathD, ROUND, geoSize, geoRev2, geoRev, ellipsePath, SAMPLES, trimTable, trimApply, tmConcat, tmCut, tmLocate, tmBetween, tmSplit, bTranslate, oTranslate, bDisplay, oDisplay, hasTrim, trimCols, trim, outlines, bShape, oShape, bShapeEllipse, oShapeEllipse, bEllipse, oEllipse, rput, rnProp, rnMatrix, mountRn
+// runtime symbols: fmt, r, r2, dec, H_FR, H_IP, H_OP, H_EASINGS, H_TIMELINES, H_GATES, H_PROGRAM, H_REMAPS, INV, P10, put, open, EASE, SP_SEG, spBuild, spSample, spSeg, T_SCALAR, T_VECTOR, T_PATH, T_EXPR, F_EASE, F_HOLD, F_SPATIAL, pseg, pease, pv, pvv, pslice, pvp, mkPath, xv, xvv, pdPair, pdSep, pathD, ROUND, geoSize, geoRev2, geoRev, ellipsePath, SAMPLES, trimTable, trimApply, tmConcat, tmCut, tmLocate, tmBetween, tmSplit, bTranslate, oTranslate, bDisplay, oDisplay, hasTrim, trimCols, trim, outlines, bShape, oShape, bShapeEllipse, oShapeEllipse, bEllipse, oEllipse, rnNumeric, rput, rnProp, rnMatrix, mountRn
 // Shared number → string formatting for attribute values.
 //
 // Precision is chosen per role, because the error budgets differ by orders of
@@ -25,15 +25,15 @@
 //
 // The profile says the time is in path-string assembly (`pathD` + `pdPair` +
 // `pdSep`, 15% together) and in `setAttribute` and `evalExpr` — not here.
+//
+// A fraction keeps its leading zero even though SVG parses ".5" fine. The
+// react-native-svg target shares this helper, and its JS prop parser rejects
+// ".47" ("not a valid number or percentage string"), leaves the prop a String,
+// and Fabric's generated RNSVGGroupManagerDelegate.setProperty then throws
+// ClassCastException: String cannot be cast to Double — an app-killing crash on
+// Android, observed on a Pixel 8 with the `mixed16` fixture.
 function fmt(x, scale) { 'worklet';
-  const s = '' + Math.round(x * scale) / scale;
-  // A bare leading zero is redundant in SVG: ".5" and "-.5" parse identically
-  // and are shorter.
-  if (s.charCodeAt(0) === 48 && s.charCodeAt(1) === 46) return s.slice(1);
-  if (s.charCodeAt(0) === 45 && s.charCodeAt(1) === 48 && s.charCodeAt(2) === 46) {
-    return '-' + s.slice(2);
-  }
-  return s;
+  return '' + Math.round(x * scale) / scale;
 }
 
 /** Coordinates and plain attribute values: 3 decimals. */
@@ -128,22 +128,38 @@ const P10 = [1, 10, 100, 1000];
 // RN half: the SVG attribute name maps to the camelCased react-native-svg
 // prop, a `transform` string becomes the ColumnMajorTransformMatrix array
 // (a transform *string* throws on Fabric iOS: "JSON value of type NSString
-// cannot be converted to a CATransform3D"), and a changed element lands in
-// the dirty queue once per flush so the consumer only touches what moved.
+// cannot be converted to a CATransform3D"), a prop the native side reads as a
+// `Double` is handed a number (see `rnNumeric`), and a changed element lands
+// in the dirty queue once per flush so the consumer only touches what moved.
 
 function put(el, name, v, w, i) { 'worklet';
   if (v !== w[i]) {
     w[i] = v;
-    el.p[rnProp(name)] = name === 'transform' ? rnMatrix(v) : v;
+    const p = rnProp(name);
+    el.p[p] = name === 'transform' ? rnMatrix(v) : rnNumeric(p) ? +v : v;
     if (!el.d) { el.d = 1; el.q.push(el); }
   }
 }
 
 /**
- * Direct prop write for the few loops that write outside `put`'s
- * one-attribute guard (the display gates, the rect radius pair). The caller
- * has already change-detected; this only records the prop and marks the
- * element dirty.
+ * Whether react-native-svg's native side reads this prop as a raw `Double`.
+ *
+ * These writes bypass rn-svg's JS prop extraction — the consumer pushes `el.p`
+ * straight into Fabric — so whatever the op produced is what the generated
+ * `RNSVG*ManagerDelegate.setProperty` casts. For these four the generated
+ * Java is `((Double) value).floatValue()`, and a `String` there throws
+ * `ClassCastException: String cannot be cast to Double`, which kills the app
+ * (observed on a Pixel 8 with the `mixed16` fixture; iOS tolerates it).
+ *
+ * Every other prop the ops write is either a `String` on the native side
+ * (`d`, `display`) or goes through `DynamicFromObject`, which parses a
+ * numeric string via `SVGLength` — `x`/`y`/`width`/`height`/`rx`/`ry`/
+ * `cx`/`cy`/`strokeWidth`/`strokeDasharray`/`fill`/`stroke`. Those keep the
+ * op's string, so the shared change detection above still compares the exact
+ * bytes the web runtime would have written.
+ *
+ * The number is `+v` on a value the op already rounded (`r`, `r2`), so this
+ * only drops the stringification — it does not change the value.
  */
 // Opening one op's batch.
 //
@@ -1116,6 +1132,17 @@ function oEllipse(x, s) { 'worklet';
     put(el, 'ry', r(z[1] / 2), W4, i);
   }
 }
+function rnNumeric(p) { 'worklet';
+  return p === 'opacity' || p === 'fillOpacity' || p === 'strokeOpacity'
+    || p === 'strokeDashoffset';
+}
+
+/**
+ * Direct prop write for the few loops that write outside `put`'s
+ * one-attribute guard (the display gates, the rect radius pair). The caller
+ * has already change-detected; this only records the prop and marks the
+ * element dirty.
+ */
 function rput(el, prop, v) { 'worklet';
   el.p[prop] = v;
   if (!el.d) { el.d = 1; el.q.push(el); }
@@ -1286,7 +1313,7 @@ export const tree =
       { type: 'G', slot: 4, staticProps: { transform: [1, 0, 0, 1, 104.78, -2.53] }, children: [
         { type: 'G', slot: 5, staticProps: { display: 'none' }, children: [
           { type: 'G', staticProps: { transform: [1, 0, 0, 1, 196, 267] }, children: [
-            { type: 'Ellipse', staticProps: { cx: '.8', cy: '-.5', rx: '4.6', ry: '4.6', fill: '#fff' } }
+            { type: 'Ellipse', staticProps: { cx: '0.8', cy: '-0.5', rx: '4.6', ry: '4.6', fill: '#fff' } }
           ] }
         ] }
       ] },
@@ -1296,7 +1323,7 @@ export const tree =
         ] }
       ] },
       { type: 'G', slot: 11, staticProps: { transform: [1, 0, 0, 1, -225.96, -204.32] }, children: [
-        { type: 'G', slot: 12, staticProps: { transform: [1, 0, 0, 1, .06, 0], display: 'none' }, children: [
+        { type: 'G', slot: 12, staticProps: { transform: [1, 0, 0, 1, 0.06, 0], display: 'none' }, children: [
           { type: 'G', staticProps: { transform: [1, 0, 0, 1, 344.67, 261.88] }, children: [
             { type: 'Path', slot: 14, staticProps: { fill: 'none', strokeLinecap: 'round', strokeMiterlimit: '10', stroke: '#fff', strokeWidth: '9.562' } }
           ] }
@@ -1394,7 +1421,7 @@ export const tree =
       { type: 'G', slot: 68, staticProps: { transform: [1, 0, 0, 1, -93.67, -51.82] }, children: [
         { type: 'G', slot: 69, staticProps: { display: 'none' }, children: [
           { type: 'G', staticProps: { transform: [1, 0, 0, 1, 196, 267] }, children: [
-            { type: 'Ellipse', staticProps: { cx: '.8', cy: '-.5', rx: '4.7', ry: '4.7', fill: '#fff' } }
+            { type: 'Ellipse', staticProps: { cx: '0.8', cy: '-0.5', rx: '4.7', ry: '4.7', fill: '#fff' } }
           ] }
         ] }
       ] },
@@ -1410,7 +1437,7 @@ export const tree =
       ] },
       { type: 'G', slot: 78, staticProps: { transform: [1, 0, 0, 1, 96.06, -157.51] }, children: [
         { type: 'G', staticProps: { transform: [1, 0, 0, 1, 196, 267] }, children: [
-          { type: 'Ellipse', staticProps: { cx: '.8', cy: '-.5', rx: '4.7', ry: '4.7', fill: '#fff' } }
+          { type: 'Ellipse', staticProps: { cx: '0.8', cy: '-0.5', rx: '4.7', ry: '4.7', fill: '#fff' } }
         ] }
       ] },
       { type: 'G', slot: 81, staticProps: { transform: [1, 0, 0, 1, 25.04, 45.68], display: 'none' }, children: [
@@ -1455,22 +1482,22 @@ export const tree =
       { type: 'G', slot: 107, staticProps: { transform: [1, 0, 0, 1, 25.04, 45.68], display: 'none' }, children: [
         { type: 'Path', slot: 108, staticProps: { fill: 'none', strokeLinecap: 'round', stroke: '#fff', strokeWidth: '1.5' } }
       ] },
-      { type: 'G', slot: 109, staticProps: { transform: [-.13744, .99051, -.99051, -.13744, 58.21, -39.39], display: 'none' }, children: [
+      { type: 'G', slot: 109, staticProps: { transform: [-0.13744, 0.99051, -0.99051, -0.13744, 58.21, -39.39], display: 'none' }, children: [
         { type: 'Path', slot: 110, staticProps: { fill: 'none', strokeLinecap: 'round', stroke: '#fff', strokeWidth: '2' } }
       ] },
-      { type: 'G', slot: 111, staticProps: { transform: [-.13744, .99051, -.99051, -.13744, 58.21, -39.39], display: 'none' }, children: [
+      { type: 'G', slot: 111, staticProps: { transform: [-0.13744, 0.99051, -0.99051, -0.13744, 58.21, -39.39], display: 'none' }, children: [
         { type: 'Path', slot: 112, staticProps: { fill: 'none', strokeLinecap: 'round', stroke: '#fff', strokeWidth: '2' } }
       ] },
-      { type: 'G', slot: 113, staticProps: { transform: [-.13744, .99051, -.99051, -.13744, 58.21, -39.39], display: 'none' }, children: [
+      { type: 'G', slot: 113, staticProps: { transform: [-0.13744, 0.99051, -0.99051, -0.13744, 58.21, -39.39], display: 'none' }, children: [
         { type: 'Path', slot: 114, staticProps: { fill: 'none', strokeLinecap: 'round', stroke: '#fff', strokeWidth: '2' } }
       ] },
-      { type: 'G', slot: 115, staticProps: { transform: [.01571, -.99988, .99988, .01571, 53.21, 131.61], display: 'none' }, children: [
+      { type: 'G', slot: 115, staticProps: { transform: [0.01571, -0.99988, 0.99988, 0.01571, 53.21, 131.61], display: 'none' }, children: [
         { type: 'Path', slot: 116, staticProps: { fill: 'none', strokeLinecap: 'round', stroke: '#fff', strokeWidth: '2' } }
       ] },
-      { type: 'G', slot: 117, staticProps: { transform: [.01571, -.99988, .99988, .01571, 53.21, 131.61], display: 'none' }, children: [
+      { type: 'G', slot: 117, staticProps: { transform: [0.01571, -0.99988, 0.99988, 0.01571, 53.21, 131.61], display: 'none' }, children: [
         { type: 'Path', slot: 118, staticProps: { fill: 'none', strokeLinecap: 'round', stroke: '#fff', strokeWidth: '2' } }
       ] },
-      { type: 'G', slot: 119, staticProps: { transform: [.01571, -.99988, .99988, .01571, 53.21, 131.61], display: 'none' }, children: [
+      { type: 'G', slot: 119, staticProps: { transform: [0.01571, -0.99988, 0.99988, 0.01571, 53.21, 131.61], display: 'none' }, children: [
         { type: 'Path', slot: 120, staticProps: { fill: 'none', strokeLinecap: 'round', stroke: '#fff', strokeWidth: '2' } }
       ] }
     ] }
