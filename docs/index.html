@@ -19,9 +19,13 @@
   --series-1:        #2a78d6;
   --series-2:        #eb6834;
   --series-3:        #1baf7a;
+  --series-4:        #d9a406;
   --neutral-mark:    #c3c2b7;
   --critical:        #d03b3b;
   --code-bg:         #f0efec;
+  --hatch:           rgba(0,0,0,0.30);
+  --vsync:           rgba(11,11,11,0.22);
+  --overrun:         rgba(138,8,32,0.85);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -37,9 +41,13 @@
     --series-1:        #3987e5;
     --series-2:        #d95926;
     --series-3:        #199e70;
+    --series-4:        #cfa22e;
     --neutral-mark:    #383835;
     --critical:        #d03b3b;
     --code-bg:         #262625;
+    --hatch:           rgba(255,255,255,0.32);
+    --vsync:           rgba(255,255,255,0.26);
+    --overrun:         rgba(158,12,42,0.95);
   }
 }
 
@@ -76,41 +84,30 @@ code, .mono {
 
 /* ---------- hero ---------- */
 header.hero { padding: 64px 0 32px; }
-.eyebrow {
-  font-size: 12px; text-transform: uppercase; letter-spacing: 0.12em;
-  color: var(--text-muted); margin: 0 0 14px;
-}
 .lede { font-size: clamp(17px, 2.1vw, 20px); color: var(--text-secondary); max-width: 68ch; }
-.cta {
-  display: inline-block; margin-top: 8px; padding: 9px 16px;
-  border: 1px solid var(--border); border-radius: 8px;
-  background: var(--surface-1); color: var(--text-primary);
-  text-decoration: none; font-size: 15px; font-weight: 550;
-}
-.cta:hover { border-color: var(--series-1); color: var(--series-1); }
 
 /* ---------- sections ---------- */
 section { margin-top: 64px; scroll-margin-top: 20px; }
 .rule { height: 1px; background: var(--border); border: 0; margin: 0; }
 
-/* ---------- nav ---------- */
-nav.toc {
-  display: flex; flex-wrap: wrap; gap: 8px 16px;
-  padding: 14px 0 0; border-top: 1px solid var(--border); margin-top: 28px;
-  font-size: 13.5px;
-}
-nav.toc a { color: var(--text-secondary); text-decoration: none; }
-nav.toc a:hover { color: var(--series-1); text-decoration: underline; }
-
 /* ---------- roster ---------- */
-.roster { list-style: none; padding: 0; margin: 20px 0 0; max-width: none; }
-.roster li {
-  display: grid; grid-template-columns: 26px 1fr; gap: 12px;
-  padding: 11px 0; border-bottom: 1px solid var(--border); margin: 0;
+.roster { margin: 20px 0 0; max-width: none; }
+.roster .grp { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.roster .g {
+  margin: 0 0 8px; color: var(--text-muted); font-size: 13px; font-weight: 600;
+  letter-spacing: 0.04em;
 }
-.roster .n { color: var(--text-muted); font-variant-numeric: tabular-nums; font-size: 14px; }
+.roster ul {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+.roster li {
+  padding: 6px 12px; margin: 0;
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+  font-size: 14px;
+}
 .roster b { font-weight: 600; }
-.roster .d { color: var(--text-secondary); font-size: 14px; display: block; }
+.roster .d { color: var(--text-secondary); }
 
 /* ---------- charts ---------- */
 figure.chart {
@@ -118,7 +115,6 @@ figure.chart {
   background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
 }
 figure.chart > figcaption { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
-figure.chart > .sub { margin: 0 0 16px; font-size: 13px; color: var(--text-secondary); max-width: 74ch; }
 figure.chart > .note { margin: 14px 0 0; font-size: 12.5px; color: var(--text-muted); max-width: 74ch; }
 
 .bars { display: grid; gap: 10px; }
@@ -143,7 +139,7 @@ figure.chart > .note { margin: 14px 0 0; font-size: 12.5px; color: var(--text-mu
 .bar.s3 { background: var(--series-3); }
 .bar.gray { background: var(--neutral-mark); }
 .row:hover .bar { filter: brightness(1.12) saturate(1.08); }
-.row .rval {
+.row .rval, .pgrp .rval {
   font-size: 13px; font-variant-numeric: tabular-nums;
   color: var(--text-primary); text-align: right; white-space: nowrap;
 }
@@ -174,8 +170,153 @@ figure.chart > .note { margin: 14px 0 0; font-size: 12.5px; color: var(--text-mu
   border-top: 1px solid var(--grid); padding-top: 4px;
 }
 
+/* ---------- paired platform groups: one library = iOS bar over Android bar ---------- */
+.pbars { display: grid; gap: 13px; }
+.pgrp {
+  display: grid;
+  grid-template-columns: var(--lab, 168px) minmax(56px, 72px) 1fr 84px;
+  align-items: center; gap: 5px 12px;
+}
+.pgrp > .glabel {
+  grid-column: 1; grid-row: 1 / span 2;
+  font-size: 13px; color: var(--text-secondary); line-height: 1.3;
+}
+.pgrp > .glabel b { color: var(--text-primary); font-weight: 550; }
+/* display:contents keeps each platform line a grid item row while carrying its own tooltip */
+.prow { display: contents; }
+.ptag { font-size: 11.5px; color: var(--text-muted); line-height: 1.25; }
+.ptag b { color: var(--text-secondary); font-weight: 600; }
+.prow:hover .bar { filter: brightness(1.12) saturate(1.08); }
+/* a family prefix is one merged cell beside its groups; 58 + 10 gap + 100 = the 168px label column */
+.fam { display: flex; gap: 10px; }
+.fampre {
+  flex: 0 0 58px; display: flex; align-items: center;
+  padding-right: 8px; border-right: 1px solid var(--grid);
+  font-size: 13px; font-weight: 550; color: var(--text-primary); line-height: 1.3;
+}
+.famgrps { flex: 1; min-width: 0; display: grid; gap: 13px; }
+.famgrps .pgrp { --lab: 100px; }
+.bar.and::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit;
+  background: repeating-linear-gradient(135deg, transparent 0 3px, var(--hatch) 3px 6px);
+}
+.axisrow.p { grid-template-columns: 168px minmax(56px, 72px) 1fr 84px; }
+.axisrow.p .ticks { grid-column: 3; }
+.swatch.plat { background: var(--text-secondary); }
+.swatch.plat.hatch { background-image: repeating-linear-gradient(135deg, transparent 0 2px, var(--hatch) 2px 4px); }
+.swatch.s4 { background: var(--series-4); }
+/* size chart: Android is color-coded (green native + yellow JS), no hatch needed */
+#size .bar.js.and { background: var(--series-4); }
+#size .bar.and::after { content: none; }
+#size .bar.nat.and { background: var(--series-3); }
+
+/* ---------- butterfly: mount cost grows left of the spine, per-frame cost right ---------- */
+.bfly { display: grid; gap: 13px; }
+.bfly .pgrp { grid-template-columns: var(--lab, 152px) minmax(52px, 64px) 76px 1fr 76px; }
+.bfly .famgrps .pgrp { --lab: 84px; }
+.halves { display: flex; align-items: center; min-width: 0; }
+.half { position: relative; flex: 1 1 0; min-width: 0; }
+/* a gutter each side of the spine keeps a mount bar and a steady bar from reading as one bar */
+.half > .track { border-left: 0; }
+.half.l > .track { margin-right: 5px; }
+.half.r > .track { margin-left: 5px; }
+.axisrow.b .tickpair > .ticks:first-child { margin-right: 5px; }
+.axisrow.b .tickpair > .ticks:last-child { margin-left: 5px; }
+/* the spine is one hairline shared by both halves; it overshoots each row to bridge the row gaps */
+.half.l::after {
+  content: ""; position: absolute; right: 0; top: -9px; bottom: -9px;
+  width: 1px; background: var(--axis);
+}
+.half.l .bar { left: auto; right: 0; border-radius: 4px 0 0 4px; }
+/* right half: the 250 ms window ruled into 60 Hz vsync slots, 16.67 ms = 6.668% of it.
+   The rules sit ON TOP of the bars, so a tile that overran shows the slots it crossed. */
+.half.r > .track::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background-image: repeating-linear-gradient(90deg, var(--vsync) 0 1px, transparent 1px 6.668%);
+}
+/* one frame per tile, laid back to back from the spine: the mask's period is the row's mean
+   frame time, so a blown budget stays one long tile spanning the slots it overran */
+.bar.tiled {
+  width: 100%; border-radius: 0;
+  -webkit-mask-image: repeating-linear-gradient(90deg, #000 0 calc(var(--w) - 1px), transparent calc(var(--w) - 1px) var(--w));
+  mask-image: repeating-linear-gradient(90deg, #000 0 calc(var(--w) - 1px), transparent calc(var(--w) - 1px) var(--w));
+}
+/* the overrun: within each tile the first 16.67 ms is on budget, so the red stripes start at
+   6.668% of the window and run to the tile's end, repeating on the same period as the tiles.
+   The parent's tile mask clips this layer too, so the gaps between tiles survive. */
+.bar.tiled::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background-image: repeating-linear-gradient(45deg, var(--overrun) 0 3px, transparent 3px 6px);
+  -webkit-mask-image: repeating-linear-gradient(90deg, transparent 0 6.668%, #000 6.668% calc(var(--w) - 1px), transparent calc(var(--w) - 1px) var(--w));
+  mask-image: repeating-linear-gradient(90deg, transparent 0 6.668%, #000 6.668% calc(var(--w) - 1px), transparent calc(var(--w) - 1px) var(--w));
+}
+/* butterfly: color carries the platform the way the size chart does — iOS blue, Android green */
+.bfly .bar { background: var(--series-1); }
+.bfly .bar.and { background: var(--series-3); }
+.bfly .bar.and::after { content: none; }
+.swatch.over {
+  background: var(--series-3);
+  background-image: repeating-linear-gradient(45deg, var(--overrun) 0 2px, transparent 2px 4px);
+}
+.bfly .prow:hover .bar { filter: none; }
+.bfly .half:hover .bar { filter: brightness(1.12) saturate(1.08); }
+/* a bar longer than its scale runs the whole track and is cut at the clipped end by an axis break:
+   two slanted gaps in the chart's own background, so the length reads as "continues past here" */
+.brk {
+  position: absolute; top: -2px; bottom: -2px; width: 15px; pointer-events: none;
+  background-image: linear-gradient(66deg,
+    transparent 0 4px, var(--surface-1) 4px 7px,
+    transparent 7px 10px, var(--surface-1) 10px 13px, transparent 13px 100%);
+}
+.half.l .brk { left: -1px; }
+.half.r .brk { right: -1px; }
+.rval.mv { text-align: left; }
+.axisrow.b {
+  display: grid; gap: 12px; margin-top: 8px;
+  grid-template-columns: 152px minmax(52px, 64px) 76px 1fr 76px;
+}
+.axisrow.b .tickpair { grid-column: 4; display: flex; }
+.axisrow.b .ticks { grid-column: auto; flex: 1 1 0; min-width: 0; }
+.axisrow.b.head { margin: 0 0 8px; }
+.axisrow.b.head .tickpair { font-size: 12px; color: var(--text-muted); }
+.hside { flex: 1 1 0; min-width: 0; }
+.hside.l { text-align: right; padding-right: 7px; }
+.hside.r { text-align: left; padding-left: 7px; }
+.axisrow.b.spr { margin-top: 2px; }
+.tickpair.sp { position: relative; height: 15px; }
+.spinelab {
+  position: absolute; left: 50%; top: 0; transform: translateX(-50%);
+  font-size: 11.5px; color: var(--text-muted); white-space: nowrap;
+}
+
 @media (max-width: 660px) {
   .bars { gap: 18px; }
+  .pbars { gap: 22px; }
+  .pgrp, .famgrps .pgrp { grid-template-columns: 1fr 84px; row-gap: 5px; }
+  .fam { display: block; }
+  .fampre {
+    display: block; padding: 0 0 4px; border-right: 0; border-bottom: 1px solid var(--grid);
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);
+  }
+  .famgrps { display: grid; gap: 22px; margin-top: 10px; }
+  .pgrp > .glabel { grid-column: 1 / -1; grid-row: auto; }
+  .pgrp .ptag { grid-column: 1 / -1; }
+  .pgrp .track { grid-column: 1; }
+  .pgrp .rval { grid-column: 2; }
+  .axisrow.p { grid-template-columns: 1fr 84px; }
+  .axisrow.p .ticks { grid-column: 1; }
+  /* butterfly keeps both halves side by side; label and platform tag move above the row */
+  .bfly .pgrp, .bfly .famgrps .pgrp { grid-template-columns: 58px 1fr 58px; column-gap: 6px; }
+  .bfly .pgrp .rval.mv { grid-column: 1; }
+  .bfly .pgrp .halves { grid-column: 2; }
+  .bfly .pgrp .rval.sv { grid-column: 3; }
+  .bfly .pgrp .rval { font-size: 11.5px; }
+  .axisrow.b { grid-template-columns: 58px 1fr 58px; column-gap: 6px; }
+  .axisrow.b .tickpair { grid-column: 2; }
+  /* only the two outer ends of each scale fit at this width */
+  .axisrow.b .ticks { font-size: 10.5px; }
+  .axisrow.b .ticks span:not(:first-child):not(:last-child) { display: none; }
+  .axisrow.b.head .tickpair { font-size: 11px; }
   .row {
     grid-template-columns: 1fr 92px;
     grid-template-areas: "lab lab" "trk val";
@@ -249,28 +390,53 @@ footer {
   font-size: 13px; color: var(--text-muted);
 }
 footer p { max-width: 74ch; }
+
+/* ---------- floating tooltip ---------- */
+#tip {
+  position: absolute; top: 0; left: 0; z-index: 9999;
+  display: none; width: max-content; max-width: 340px;
+  padding: 8px 10px; border-radius: 8px;
+  background: var(--text-primary); color: var(--page);
+  font-size: 12.5px; line-height: 1.45;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.22);
+  pointer-events: none;
+}
+#tip[data-open] { display: block; }
+#tip > i {
+  position: absolute; width: 8px; height: 8px;
+  background: var(--text-primary); transform: rotate(45deg);
+}
+/* WizTree-style treemap inside the tooltip: one tile per binary component, area ∝ bytes.
+   Tiles carry no minimum size, so a 761 B JS delta draws as the sliver it really is —
+   the list underneath is what makes those slivers identifiable. */
+#tip .tm {
+  position: relative; margin-top: 7px; background: var(--page);
+  border-radius: 3px; overflow: hidden;
+}
+#tip .tm > b {
+  position: absolute; overflow: hidden; box-sizing: border-box;
+  padding: 2px 3px; font-size: 10px; line-height: 1.15; font-weight: 500;
+  color: #0b0b0b; white-space: nowrap; text-overflow: ellipsis;
+}
+#tip .tm > b em { display: block; font-style: normal; opacity: 0.72; }
+#tip .tml {
+  margin-top: 6px; display: grid; gap: 2px;
+  font-size: 11px; line-height: 1.35; font-variant-numeric: tabular-nums;
+}
+#tip .tml span { display: flex; align-items: center; gap: 6px; }
+#tip .tml i { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+#tip .tml u { margin-left: auto; padding-left: 10px; text-decoration: none; opacity: 0.8; }
 </style>
 </head>
 <body>
 <div class="wrap">
 
 <header class="hero">
-  <p class="eyebrow">Benchmark report · 2026-08-26</p>
   <h1>Experiment: μLottie on React&nbsp;Native</h1>
   <p class="lede">
     μLottie is an AoT compiler from Lottie JSON into a small JS bundle. We experimented with four drawing
     backends for it, and this is how we measured.
   </p>
-  <p><a class="cta" href="https://github.com/RanolP/ulottie-react-native">github.com/RanolP/ulottie-react-native →</a></p>
-
-  <nav class="toc">
-    <a href="#roster">The comparison set</a>
-    <a href="#size">Net installation size</a>
-    <a href="#perf">Performance</a>
-    <a href="#parity">Pixel parity</a>
-    <a href="#compat">Compatibility &amp; refusals</a>
-    <a href="#how">How we measured</a>
-  </nav>
 </header>
 
 <hr class="rule">
@@ -278,205 +444,229 @@ footer p { max-width: 74ch; }
 <!-- ==================== ROSTER ==================== -->
 <section id="roster">
   <h2>Comparison Set</h2>
-  <ol class="roster">
-    <li><span class="n">1</span><span><b>dotlottie</b> — baseline</span></li>
-    <li><span class="n">2</span><span><b>lottie-react-native</b> — older one</span></li>
-    <li><span class="n">3</span><span><b>Skottie via rn-skia</b></span></li>
-    <li><span class="n">4</span><span><b>Skottie by margelo</b> — legacy app, RN 0.74 old arch</span></li>
-    <li><span class="n">5</span><span><b>μLottie rn-svg</b></span></li>
-    <li><span class="n">6</span><span><b>μLottie rn-skia</b></span></li>
-    <li><span class="n">7</span><span><b>μLottie rn-thorvg</b></span></li>
-    <li><span class="n">8</span><span><b>μLottie rn-tiny-skia</b></span></li>
-  </ol>
+  <div class="roster">
+    <div class="grp">
+      <ul>
+        <li><b>dotlottie</b> <span class="d">— baseline</span></li>
+        <li><b>lottie-react-native</b> <span class="d">— older one</span></li>
+      </ul>
+    </div>
+    <div class="grp">
+      <p class="g">Skia-based</p>
+      <ul>
+        <li><b>Skottie via rn-skia</b></li>
+        <li><b>Skottie by margelo</b> <span class="d">— legacy app, RN 0.74 old arch</span></li>
+      </ul>
+    </div>
+    <div class="grp">
+      <p class="g">μLottie series</p>
+      <ul>
+        <li><b>μLottie rn-svg</b></li>
+        <li><b>μLottie rn-skia</b></li>
+        <li><b>μLottie rn-thorvg</b></li>
+        <li><b>μLottie rn-tiny-skia</b></li>
+      </ul>
+    </div>
+  </div>
 </section>
 
 <!-- ==================== NET INSTALLATION SIZE ==================== -->
 <section id="size">
   <h2>Net installation size</h2>
   <p class="sec">
-    What a player really costs an app: its native binary plus the gzipped JS it adds. Native size is per-platform,
-    so iOS and Android are charted separately; the JS segment is identical on both.
-    Skottie by margelo was measured in a separate RN 0.74 old-arch app — cross-app comparison is indicative only.
+    Native binary plus JavaScript code size. Note that sizes differ per platform.
   </p>
 
   <figure class="chart">
-    <figcaption>iOS — native binary + gzipped JS, arm64 device slice</figcaption>
-    <p class="sub">Lower is better. Scale 0–24 MB — sized by the rn-skia rows. The JS segment is drawn at a 2px minimum so it stays visible; at this scale 761 B is ~0.003% of a bar.</p>
+    <figcaption>Net installation size — native binary + gzipped JS, iOS and Android</figcaption>
     <div class="legend">
-      <span><i class="swatch"></i>Native binary</span>
-      <span><i class="swatch s2"></i>JS bundle delta, gzipped</span>
+      <span><i class="swatch"></i>iOS native binary</span>
+      <span><i class="swatch s2"></i>iOS JS delta, gzipped</span>
+      <span><i class="swatch s3"></i>Android native binary</span>
+      <span><i class="swatch s4"></i>Android JS delta, gzipped</span>
     </div>
-    <div class="bars">
-      <div class="row" title="dotlottie: DotLottiePlayer.framework 1,583,400 B + WgpuNative.framework 6,913,816 B = 8,497,216 B native, plus 761 B gzip JS = 8,497,977 B">
-        <span class="rlabel"><b>dotlottie</b><br>baseline · 8.50 MB native + 761 B JS</span>
-        <div class="track stk">
-          <div class="bar nat" style="--w:35.405%"></div>
-          <div class="bar js" style="--l:35.405%;--w:0.003%"></div>
-        </div>
-        <span class="rval">8.50 MB</span>
-      </div>
-      <div class="row" title="lottie-react-native: release arm64 linked objects — liblottie-ios.a 2,140,147 B + wrapper liblottie-react-native.a 69,242 B + Fabric codegen 101,070 B = 2,310,459 B native (pre-dead-strip), plus 2,046 B gzip JS = 2,312,505 B">
-        <span class="rlabel"><b>lottie-react-native</b><br>2.31 MB native† + 2,046 B JS</span>
-        <div class="track stk">
-          <div class="bar nat" style="--w:9.627%"></div>
-          <div class="bar js" style="--l:9.627%;--w:0.009%"></div>
-        </div>
-        <span class="rval">2.31 MB</span>
-      </div>
-      <div class="row" title="Skottie via rn-skia: release arm64 linked objects — prebuilt Skia .a set 19,851,006 B + libreact-native-skia.a 2,425,060 B + Fabric codegen 26,701 B = 22,302,767 B native (pre-dead-strip), plus 94,286 B gzip JS = 22,397,053 B">
-        <span class="rlabel"><b>Skottie via rn-skia</b><br>22.30 MB native† + 94,286 B JS</span>
-        <div class="track stk">
-          <div class="bar nat" style="--w:92.928%"></div>
-          <div class="bar js" style="--l:92.928%;--w:0.393%"></div>
-        </div>
-        <span class="rval">22.40 MB</span>
-      </div>
-      <div class="row" title="Skottie by margelo (legacy app): pre-dead-strip arm64+arm64e fat archives — libskottie.a 1,485,944 B + libsksg.a 300,096 B + libskia.a 28,564,848 B = 30,350,888 B, plus 173,470 B gzip JS in that app. Not comparable to the shipped arm64 device-slice rows; see the note.">
-        <span class="rlabel"><b>Skottie by margelo</b><br>(legacy app) · 30.35 MB fat archives†</span>
-        <div class="track stk"></div>
-        <span class="rval na">not comparable</span>
-      </div>
-      <div class="row" title="μLottie rn-svg: release arm64 linked objects — libRNSVG.a 1,021,670 B + Fabric codegen 310,079 B = 1,331,749 B native (pre-dead-strip), plus 34,116 B gzip JS = 1,365,865 B">
-        <span class="rlabel"><b>μLottie rn-svg</b><br>1.33 MB native† + 34,116 B JS</span>
-        <div class="track stk">
-          <div class="bar nat" style="--w:5.549%"></div>
-          <div class="bar js" style="--l:5.549%;--w:0.142%"></div>
-        </div>
-        <span class="rval">1.37 MB</span>
-      </div>
-      <div class="row" title="μLottie rn-skia: same rn-skia native as the Skottie row — 22,302,767 B (pre-dead-strip), plus 109,388 B gzip JS = 22,412,155 B">
-        <span class="rlabel"><b>μLottie rn-skia</b><br>22.30 MB native† + 109,388 B JS</span>
-        <div class="track stk">
-          <div class="bar nat" style="--w:92.928%"></div>
-          <div class="bar js" style="--l:92.928%;--w:0.456%"></div>
-        </div>
-        <span class="rval">22.41 MB</span>
-      </div>
-      <div class="row" title="μLottie rn-thorvg: libulottie_rt thorvg dylib 1,158,032 B native, plus 2,757 B gzip JS = 1,160,789 B">
-        <span class="rlabel"><b>μLottie rn-thorvg</b><br>1.16 MB native + 2,757 B JS</span>
-        <div class="track stk">
-          <div class="bar nat" style="--w:4.825%"></div>
-          <div class="bar js" style="--l:4.825%;--w:0.011%"></div>
-        </div>
-        <span class="rval">1.16 MB</span>
-      </div>
-      <div class="row" title="μLottie rn-tiny-skia: libulottie_rt tiny-skia dylib 1,223,600 B native, plus 2,746 B gzip JS = 1,226,346 B">
-        <span class="rlabel"><b>μLottie rn-tiny-skia</b><br>1.22 MB native + 2,746 B JS</span>
-        <div class="track stk">
-          <div class="bar nat" style="--w:5.098%"></div>
-          <div class="bar js" style="--l:5.098%;--w:0.011%"></div>
-        </div>
-        <span class="rval">1.22 MB</span>
-      </div>
-    </div>
-    <div class="axisrow"><div class="ticks"><span>0</span><span>8 MB</span><span>16 MB</span><span>24 MB</span></div></div>
-    <p class="note">
-      † marks statically linked pods with no shipped binary of their own: the figure is the release-built
-      (<code>-O</code>) arm64 static-library objects summed as <code>__TEXT</code>+<code>__DATA</code> with
-      <code>size</code> — an upper bound of the linked contribution, before linker dead-strip, unlike the
-      framework/dylib rows which are shipped file sizes. Breakdowns are in each row's tooltip.
-      iOS rt figures are arm64 dead-stripped dylibs exporting 5 C-ABI functions (<code>strip -x</code>).
-      dotlottie also ships its animation as a <code>.lottie</code> asset outside the JS bundle
-      (<code>boucing_ball</code>: 1,411 B).
-      Skottie by margelo gets no bar here: its only iOS figures are arm64+arm64e fat archives before dead-strip
-      (30,350,888 B), two steps removed from the arm64 device-slice rows above, so its Android APK row is the
-      shipped-artifact measurement to read.
-    </p>
-  </figure>
+    <div class="pbars">
 
-  <figure class="chart">
-    <figcaption>Android — native .so in the APK (arm64-v8a) + gzipped JS</figcaption>
-    <p class="sub">Lower is better. Scale 0–36 MB — sized by the two Skia-engine rows; see the callout.</p>
-    <div class="legend">
-      <span><i class="swatch"></i>Native binary</span>
-      <span><i class="swatch s2"></i>JS bundle delta, gzipped</span>
+      <div class="pgrp">
+        <span class="glabel"><b>dotlottie</b><br>baseline</span>
+        <div class="prow" data-tip="8.50 MB native + 761 B JS" data-treemap='[["DotLottiePlayer.framework",1583400],["WgpuNative.framework",6913816],["gzipped JS delta",761]]'>
+          <span class="ptag"><b>iOS</b></span>
+          <div class="track stk">
+            <div class="bar nat" style="--w:23.6034%"></div>
+            <div class="bar js" style="--l:23.6034%;--w:0.0021%"></div>
+          </div>
+          <span class="rval">8.50 MB</span>
+        </div>
+        <div class="prow" data-tip="2.49 MB native + 761 B JS" data-treemap='[["libdotlottie_player.so",2414136],["libdlplayer.so",72328],["gzipped JS delta",761]]'>
+          <span class="ptag"><b>Android</b></span>
+          <div class="track stk">
+            <div class="bar nat and" style="--w:6.9068%"></div>
+            <div class="bar js and" style="--l:6.9068%;--w:0.0021%"></div>
+          </div>
+          <span class="rval">2.49 MB</span>
+        </div>
+      </div>
+
+      <div class="pgrp">
+        <span class="glabel"><b>lottie-react-native</b></span>
+        <div class="prow" data-tip="2.31 MB native&dagger; + 2,046 B JS" data-treemap='[["liblottie-ios.a",2140147],["liblottie-react-native.a (wrapper)",69242],["Fabric codegen",101070],["gzipped JS delta",2046]]'>
+          <span class="ptag"><b>iOS</b></span>
+          <div class="track stk">
+            <div class="bar nat" style="--w:6.4179%"></div>
+            <div class="bar js" style="--l:6.4179%;--w:0.0057%"></div>
+          </div>
+          <span class="rval">2.31 MB</span>
+        </div>
+        <div class="prow" data-tip="0.55 MB code+res&Dagger; + 2,046 B JS" data-treemap='[["lottie-android 6.7.1 classes.jar",468760],["wrapper classes.jar",79047],["res",2101],["gzipped JS delta",2046]]'>
+          <span class="ptag"><b>Android</b></span>
+          <div class="track stk">
+            <div class="bar nat and" style="--w:1.5275%"></div>
+            <div class="bar js and" style="--l:1.5275%;--w:0.0057%"></div>
+          </div>
+          <span class="rval">0.55 MB</span>
+        </div>
+      </div>
+
+      <div class="fam">
+        <span class="fampre">Skottie</span>
+        <div class="famgrps">
+        <div class="pgrp">
+          <span class="glabel"><b>via rn-skia</b></span>
+          <div class="prow" data-tip="22.30 MB native&dagger; + 94,286 B JS" data-treemap='[["prebuilt Skia .a set",19851006],["libreact-native-skia.a",2425060],["Fabric codegen",26701],["gzipped JS delta",94286]]'>
+            <span class="ptag"><b>iOS</b></span>
+            <div class="track stk">
+              <div class="bar nat" style="--w:61.9521%"></div>
+              <div class="bar js" style="--l:61.9521%;--w:0.2619%"></div>
+            </div>
+            <span class="rval">22.40 MB</span>
+          </div>
+          <div class="prow" data-tip="34.67 MB native + 94,286 B JS" data-treemap='[["librnskia.so",34665064],["gzipped JS delta",94286]]'>
+            <span class="ptag"><b>Android</b></span>
+            <div class="track stk">
+              <div class="bar nat and" style="--w:96.2918%"></div>
+              <div class="bar js and" style="--l:96.2918%;--w:0.2619%"></div>
+            </div>
+            <span class="rval">34.76 MB</span>
+          </div>
+        </div>
+
+        <div class="pgrp">
+          <span class="glabel"><b>by margelo</b><br>legacy app</span>
+          <div class="prow" data-tip="21.43 MB native&dagger; + 173,470 B JS" data-treemap='[["libskia.a",14184072],["libskshaper.a",3356488],["libskunicode.a",760560],["libskparagraph.a",432136],["libsvg.a",427976],["libskottie.a",738120],["libsksg.a",149536],["libreact-native-skia.a",1216756],["libreact-native-skia-skottie.a",96997],["libSSZipArchive.a",72235],["gzipped JS delta",173470]]'>
+            <span class="ptag"><b>iOS</b></span>
+            <div class="track stk">
+              <div class="bar nat" style="--w:59.5413%"></div>
+              <div class="bar js" style="--l:59.5413%;--w:0.4819%"></div>
+            </div>
+            <span class="rval">21.61 MB</span>
+          </div>
+          <div class="prow" data-tip="12.77 MB native + 173,470 B JS" data-treemap='[["libreact-native-skottie.so",3123488],["librnskia.so (rn-skia 1.2.3)",9643304],["gzipped JS delta",173470]]'>
+            <span class="ptag"><b>Android</b></span>
+            <div class="track stk">
+              <div class="bar nat and" style="--w:35.4633%"></div>
+              <div class="bar js and" style="--l:35.4633%;--w:0.4819%"></div>
+            </div>
+            <span class="rval">12.94 MB</span>
+          </div>
+        </div>
+        </div>
+      </div>
+
+      <div class="fam">
+        <span class="fampre">&mu;Lottie</span>
+        <div class="famgrps">
+        <div class="pgrp">
+          <span class="glabel"><b>rn-svg</b></span>
+          <div class="prow" data-tip="1.33 MB native&dagger; + 34,116 B JS" data-treemap='[["libRNSVG.a",1021670],["Fabric codegen",310079],["gzipped JS delta",34116]]'>
+            <span class="ptag"><b>iOS</b></span>
+            <div class="track stk">
+              <div class="bar nat" style="--w:3.6993%"></div>
+              <div class="bar js" style="--l:3.6993%;--w:0.0948%"></div>
+            </div>
+            <span class="rval">1.37 MB</span>
+          </div>
+          <div class="prow" data-tip="1.70 MB native&Dagger; + 34,116 B JS" data-treemap='[["libreact_codegen_rnsvg.so",789216],["classes.jar",910271],["gzipped JS delta",34116]]'>
+            <span class="ptag"><b>Android</b></span>
+            <div class="track stk">
+              <div class="bar nat and" style="--w:4.7208%"></div>
+              <div class="bar js and" style="--l:4.7208%;--w:0.0948%"></div>
+            </div>
+            <span class="rval">1.73 MB</span>
+          </div>
+        </div>
+
+        <div class="pgrp">
+          <span class="glabel"><b>rn-skia</b></span>
+          <div class="prow" data-tip="22.30 MB native&dagger; + 109,388 B JS" data-treemap='[["prebuilt Skia .a set",19851006],["libreact-native-skia.a",2425060],["Fabric codegen",26701],["gzipped JS delta",109388]]'>
+            <span class="ptag"><b>iOS</b></span>
+            <div class="track stk">
+              <div class="bar nat" style="--w:61.9521%"></div>
+              <div class="bar js" style="--l:61.9521%;--w:0.3039%"></div>
+            </div>
+            <span class="rval">22.41 MB</span>
+          </div>
+          <div class="prow" data-tip="34.67 MB native + 109,388 B JS" data-treemap='[["librnskia.so",34665064],["gzipped JS delta",109388]]'>
+            <span class="ptag"><b>Android</b></span>
+            <div class="track stk">
+              <div class="bar nat and" style="--w:96.2918%"></div>
+              <div class="bar js and" style="--l:96.2918%;--w:0.3039%"></div>
+            </div>
+            <span class="rval">34.77 MB</span>
+          </div>
+        </div>
+
+        <div class="pgrp">
+          <span class="glabel"><b>rn-thorvg</b></span>
+          <div class="prow" data-tip="1.16 MB native + 2,757 B JS" data-treemap='[["libulottie_rt thorvg dylib",1158032],["gzipped JS delta",2757]]'>
+            <span class="ptag"><b>iOS</b></span>
+            <div class="track stk">
+              <div class="bar nat" style="--w:3.2168%"></div>
+              <div class="bar js" style="--l:3.2168%;--w:0.0077%"></div>
+            </div>
+            <span class="rval">1.16 MB</span>
+          </div>
+          <div class="prow" data-tip="1.37 MB native + 2,757 B JS" data-treemap='[["libulottiertthorvg.so",1215448],["libulottiertshared.so",150776],["gzipped JS delta",2757]]'>
+            <span class="ptag"><b>Android</b></span>
+            <div class="track stk">
+              <div class="bar nat and" style="--w:3.7951%"></div>
+              <div class="bar js and" style="--l:3.7951%;--w:0.0077%"></div>
+            </div>
+            <span class="rval">1.37 MB</span>
+          </div>
+        </div>
+
+        <div class="pgrp">
+          <span class="glabel"><b>rn-tiny-skia</b></span>
+          <div class="prow" data-tip="1.22 MB native + 2,746 B JS" data-treemap='[["libulottie_rt tiny-skia dylib",1223600],["gzipped JS delta",2746]]'>
+            <span class="ptag"><b>iOS</b></span>
+            <div class="track stk">
+              <div class="bar nat" style="--w:3.3989%"></div>
+              <div class="bar js" style="--l:3.3989%;--w:0.0076%"></div>
+            </div>
+            <span class="rval">1.22 MB</span>
+          </div>
+          <div class="prow" data-tip="1.46 MB native + 2,746 B JS" data-treemap='[["libulottierttinyskia.so",1306560],["libulottiertshared.so",150776],["gzipped JS delta",2746]]'>
+            <span class="ptag"><b>Android</b></span>
+            <div class="track stk">
+              <div class="bar nat and" style="--w:4.0482%"></div>
+              <div class="bar js and" style="--l:4.0482%;--w:0.0076%"></div>
+            </div>
+            <span class="rval">1.46 MB</span>
+          </div>
+        </div>
+        </div>
+      </div>
+
     </div>
-    <div class="bars">
-      <div class="row" title="dotlottie: libdotlottie_player.so 2,414,136 B + libdlplayer.so 72,328 B = 2,486,464 B native, plus 761 B gzip JS = 2,487,225 B">
-        <span class="rlabel"><b>dotlottie</b><br>baseline · 2.49 MB native + 761 B JS</span>
-        <div class="track stk">
-          <div class="bar nat" style="--w:6.907%"></div>
-          <div class="bar js" style="--l:6.907%;--w:0.002%"></div>
-        </div>
-        <span class="rval">2.49 MB</span>
-      </div>
-      <div class="row" title="lottie-react-native: JVM code + resources, no .so — lottie-android 6.7.1 classes.jar 468,760 B + wrapper classes.jar 79,047 B + res 2,101 B = 549,908 B, plus 2,046 B gzip JS = 551,954 B">
-        <span class="rlabel"><b>lottie-react-native</b><br>0.55 MB code+res‡ + 2,046 B JS</span>
-        <div class="track stk">
-          <div class="bar nat" style="--w:1.528%"></div>
-          <div class="bar js" style="--l:1.528%;--w:0.006%"></div>
-        </div>
-        <span class="rval">0.55 MB</span>
-      </div>
-      <div class="row" title="Skottie via rn-skia: librnskia.so 34,665,064 B native + 94,286 B gzip JS = 34,759,350 B">
-        <span class="rlabel"><b>Skottie via rn-skia</b><br>34.67 MB native + 94,286 B JS</span>
-        <div class="track stk">
-          <div class="bar nat" style="--w:96.292%"></div>
-          <div class="bar js" style="--l:96.292%;--w:0.262%"></div>
-        </div>
-        <span class="rval">34.76 MB</span>
-      </div>
-      <div class="row" title="Skottie by margelo (legacy app): libreact-native-skottie.so 3,123,488 B + librnskia.so (rn-skia 1.2.3) 9,643,304 B = 12,766,792 B native in a release arm64-v8a APK, stripped, plus 173,470 B gzip JS in that app = 12,940,262 B">
-        <span class="rlabel"><b>Skottie by margelo</b><br>(legacy app) · 12.77 MB native + 173,470 B JS</span>
-        <div class="track stk">
-          <div class="bar nat" style="--w:35.463%"></div>
-          <div class="bar js" style="--l:35.463%;--w:0.482%"></div>
-        </div>
-        <span class="rval">12.94 MB</span>
-      </div>
-      <div class="row" title="μLottie rn-svg: libreact_codegen_rnsvg.so 789,216 B (release, stripped) + classes.jar 910,271 B = 1,699,487 B native, plus 34,116 B gzip JS = 1,733,603 B">
-        <span class="rlabel"><b>μLottie rn-svg</b><br>1.70 MB native‡ + 34,116 B JS</span>
-        <div class="track stk">
-          <div class="bar nat" style="--w:4.721%"></div>
-          <div class="bar js" style="--l:4.721%;--w:0.095%"></div>
-        </div>
-        <span class="rval">1.73 MB</span>
-      </div>
-      <div class="row" title="μLottie rn-skia: librnskia.so 34,665,064 B native + 109,388 B gzip JS = 34,774,452 B">
-        <span class="rlabel"><b>μLottie rn-skia</b><br>34.67 MB native + 109,388 B JS</span>
-        <div class="track stk">
-          <div class="bar nat" style="--w:96.292%"></div>
-          <div class="bar js" style="--l:96.292%;--w:0.304%"></div>
-        </div>
-        <span class="rval">34.77 MB</span>
-      </div>
-      <div class="row" title="μLottie rn-thorvg: libulottiertthorvg.so 1,215,448 B + libulottiertshared.so 150,776 B = 1,366,224 B native, plus 2,757 B gzip JS = 1,368,981 B">
-        <span class="rlabel"><b>μLottie rn-thorvg</b><br>1.37 MB native + 2,757 B JS</span>
-        <div class="track stk">
-          <div class="bar nat" style="--w:3.795%"></div>
-          <div class="bar js" style="--l:3.795%;--w:0.008%"></div>
-        </div>
-        <span class="rval">1.37 MB</span>
-      </div>
-      <div class="row" title="μLottie rn-tiny-skia: libulottierttinyskia.so 1,306,560 B + libulottiertshared.so 150,776 B = 1,457,336 B native, plus 2,746 B gzip JS = 1,460,082 B">
-        <span class="rlabel"><b>μLottie rn-tiny-skia</b><br>1.46 MB native + 2,746 B JS</span>
-        <div class="track stk">
-          <div class="bar nat" style="--w:4.048%"></div>
-          <div class="bar js" style="--l:4.048%;--w:0.008%"></div>
-        </div>
-        <span class="rval">1.46 MB</span>
-      </div>
-    </div>
-    <div class="axisrow"><div class="ticks"><span>0</span><span>12 MB</span><span>24 MB</span><span>36 MB</span></div></div>
+    <div class="axisrow p"><div class="ticks"><span>0</span><span>12 MB</span><span>24 MB</span><span>36 MB</span></div></div>
     <p class="note">
-      ‡ marks libraries whose Android weight is mostly JVM code, measured as compiled <code>classes.jar</code>
-      bytes plus packaged resources (ABI-independent), not a <code>.so</code>; μLottie rn-svg additionally ships
-      <code>libreact_codegen_rnsvg.so</code>, release-built and stripped with <code>llvm-strip --strip-unneeded</code>
-      as APK packaging does (x86_64: 882,840 B). Breakdowns are in each row's tooltip.
-      Both rt rows include the shared <code>libulottiertshared.so</code> (150,776 B) once — one registry and one
-      <code>UlottieRtApi</code> host object serve both backends
-      (x86_64: shared 143,680 B, thorvg 1,268,792 B, tiny-skia 1,437,368 B; librnskia.so 35,037,704 B).
-      dotlottie also ships <code>libc++_shared.so</code> if the app lacks it, and its <code>.lottie</code> asset
-      (<code>boucing_ball</code>: 1,411 B) sits outside the JS bundle.
-      Skottie by margelo carries rn-skia 1.2.3, whose <code>librnskia.so</code> is 9,643,304 B — a quarter of the
-      2.10.x engine the two Skia rows above ship. Its JS delta is measured against the legacy app's own empty entry
-      (220,683 B gz), not the <code>e0</code> baseline the other rows use: reanimated 3.10.1 accounts for
-      96,904 B gz of it, and skottie plus rn-skia add the remaining 76,566 B gz.
+      † statically linked iOS pods — measured before dead-strip, an upper bound.<br>
+      ‡ marks libraries whose Android weight is mostly JVM code — measured as <code>classes.jar</code> plus
+      packaged resources, not a <code>.so</code>.<br>
+      The JS segment is identical on both platforms and is drawn at a 2px minimum, so its width is a marker, not a
+      measurement.<br>
+      Breakdowns are in each bar's tooltip; method details in <a href="#how">How we measured</a>.
     </p>
-    <div class="callout">
-      <b>The Skia engine is 34.67 MB per ABI.</b> Skottie via rn-skia lands at 34,759,350 B net and μLottie rn-skia
-      at 34,774,452 B — the two rows that set this chart's 36 MB scale. That is ~14× the dotlottie baseline.
-    </div>
   </figure>
 </section>
 
@@ -484,277 +674,307 @@ footer p { max-width: 74ch; }
 <section id="perf">
   <h2>Performance</h2>
   <p class="sec">
-    The load is <b>mixed16</b>: 16 distinct heavy fixtures mounted at once (node sum 2281), 10 s probe, median of 3.
+    The load is <b>mixed16</b>: 16 distinct heavy fixtures mounted at once (node sum 2281), 10 s probe.
     The rn-svg player mounts only the 12 it can compile (node sum 2185).
-    iOS is an iPhone 17 simulator; Android is an arm64 AVD (android-35, 60 Hz).
-    All timings come from dev-mode Metro bundles.
+    iOS is an iPhone 17 simulator on a dev-mode Metro bundle, median of 3 runs.
+    Android is a <b>Google Pixel 8</b> (Android 14, 60 Hz) on BrowserStack running the release APK, mean of 3 runs —
+    one session, every player, so the Android bars race each other like for like.
     <b>Read them as relative, not as production absolutes.</b>
   </p>
   <p class="sec">
-    Each metric below gets one iOS chart and one Android chart, both listing all eight players.
+    Both metrics share the one chart below. Every library is a pair of rows — iOS above, Android below — and all
+    eight libraries appear on both sides of the spine.
   </p>
 
-  <h3>Mount → first frame</h3>
+  <h3>Mount → first frame, then every frame after</h3>
 
   <figure class="chart">
-    <figcaption>Mount → first frame, iOS mixed16 (ms, median of 3)</figcaption>
-    <p class="sub">Lower is better. The μLottie rn-svg player is off this scale and is called out below.</p>
+    <figcaption>Mount → first frame and steady-state mean frame time, mixed16 (ms)</figcaption>
     <div class="legend">
-      <span><i class="swatch"></i>Existing player</span>
-      <span><i class="swatch s2"></i>μLottie target</span>
+      <span><i class="swatch"></i>iOS — upper bar</span>
+      <span><i class="swatch s3"></i>Android — lower bar</span>
+      <span><i class="swatch over"></i>past the 16.67 ms frame budget</span>
     </div>
-    <div class="bars">
-      <div class="row" title="dotlottie: 183.2 ms median mount">
-        <span class="rlabel"><b>dotlottie</b> · baseline</span>
-        <div class="track"><div class="bar" style="--w:73.28%"></div></div>
-        <span class="rval">183.2 ms</span>
-      </div>
-      <div class="row" title="lottie-react-native: 99.9 ms median mount">
-        <span class="rlabel"><b>lottie-react-native</b></span>
-        <div class="track"><div class="bar" style="--w:39.96%"></div></div>
-        <span class="rval">99.9 ms</span>
-      </div>
-      <div class="row" title="Skottie via rn-skia: 236.5 ms median mount">
-        <span class="rlabel"><b>Skottie via rn-skia</b></span>
-        <div class="track"><div class="bar" style="--w:94.60%"></div></div>
-        <span class="rval">236.5 ms</span>
-      </div>
-      <div class="row" title="Skottie by margelo (legacy app): 147.5 ms median mount, measured in examples/compare-legacy on RN 0.74.1 old architecture, iPhone 17 Pro simulator">
-        <span class="rlabel"><b>Skottie by margelo</b><br>(legacy app)</span>
-        <div class="track"><div class="bar" style="--w:59.00%"></div></div>
-        <span class="rval">147.5 ms</span>
-      </div>
-      <div class="row" title="μLottie rn-svg: 2169.6 ms — off scale, see callout">
-        <span class="rlabel"><b>μLottie rn-svg</b></span>
-        <div class="track"></div>
-        <span class="rval na">off scale</span>
-      </div>
-      <div class="row" title="μLottie rn-skia: 122.6 ms median mount">
-        <span class="rlabel"><b>μLottie rn-skia</b></span>
-        <div class="track"><div class="bar s2" style="--w:49.04%"></div></div>
-        <span class="rval">122.6 ms</span>
-      </div>
-      <div class="row" title="μLottie rn-thorvg: 19.5 ms median mount">
-        <span class="rlabel"><b>μLottie rn-thorvg</b></span>
-        <div class="track"><div class="bar s2" style="--w:7.80%"></div></div>
-        <span class="rval">19.5 ms</span>
-      </div>
-      <div class="row" title="μLottie rn-tiny-skia: 18.7 ms median mount">
-        <span class="rlabel"><b>μLottie rn-tiny-skia</b></span>
-        <div class="track"><div class="bar s2" style="--w:7.48%"></div></div>
-        <span class="rval">18.7 ms</span>
+    <div class="axisrow b head">
+      <div class="tickpair">
+        <span class="hside l">cost to reach first frame ◀</span>
+        <span class="hside r">▶ cost per frame after</span>
       </div>
     </div>
-    <div class="axisrow"><div class="ticks"><span>0</span><span>50</span><span>100</span><span>150</span><span>200</span><span>250 ms</span></div></div>
+    <div class="pbars bfly">
+
+      <div class="pgrp">
+        <span class="glabel"><b>dotlottie</b><br>baseline</span>
+        <div class="prow">
+          <span class="ptag"><b>iOS</b></span>
+          <span class="rval mv">183.2 ms</span>
+          <div class="halves">
+            <div class="half l" data-tip="dotlottie iOS: 183.2 ms median mount">
+              <div class="track"><div class="bar" style="--w:18.32%"></div></div>
+            </div>
+            <div class="half r" data-tip="dotlottie iOS: 16.75 ms steady mean, 3 dropped frames per 10 s">
+              <div class="track"><div class="bar tiled" style="--w:6.70%"></div></div>
+            </div>
+          </div>
+          <span class="rval sv">16.75 ms</span>
+        </div>
+        <div class="prow">
+          <span class="ptag"><b>Android</b></span>
+          <span class="rval mv">127.2 ms</span>
+          <div class="halves">
+            <div class="half l" data-tip="dotlottie Android — Google Pixel 8 (Android 14, BrowserStack), release APK, mean of 3: 127.2 ms mount, 17.06 ms steady mean, p50 16.60 ms, 2.3 dropped / 10 s.">
+              <div class="track"><div class="bar and" style="--w:12.72%"></div></div>
+            </div>
+            <div class="half r" data-tip="dotlottie Android — Google Pixel 8 (Android 14, BrowserStack), release APK, mean of 3: 17.06 ms steady mean, p50 16.60 ms, 2.3 dropped / 10 s, 127.2 ms mount.">
+              <div class="track"><div class="bar tiled and" style="--w:6.82%"></div></div>
+            </div>
+          </div>
+          <span class="rval sv">17.06 ms</span>
+        </div>
+      </div>
+
+      <div class="pgrp">
+        <span class="glabel"><b>lottie-react-native</b></span>
+        <div class="prow">
+          <span class="ptag"><b>iOS</b></span>
+          <span class="rval mv">99.9 ms</span>
+          <div class="halves">
+            <div class="half l" data-tip="lottie-react-native iOS: 99.9 ms median mount">
+              <div class="track"><div class="bar" style="--w:9.99%"></div></div>
+            </div>
+            <div class="half r" data-tip="lottie-react-native iOS: 17.6 ms steady mean, 2 dropped frames per 10 s">
+              <div class="track"><div class="bar tiled" style="--w:7.04%"></div></div>
+            </div>
+          </div>
+          <span class="rval sv">17.6 ms</span>
+        </div>
+        <div class="prow">
+          <span class="ptag"><b>Android</b></span>
+          <span class="rval mv">218.3 ms</span>
+          <div class="halves">
+            <div class="half l" data-tip="lottie-react-native Android — Google Pixel 8 (Android 14, BrowserStack), release APK, mean of 3: 218.3 ms mount, 16.77 ms steady mean, p50 16.61 ms, 1.7 dropped / 10 s.">
+              <div class="track"><div class="bar and" style="--w:21.83%"></div></div>
+            </div>
+            <div class="half r" data-tip="lottie-react-native Android — Google Pixel 8 (Android 14, BrowserStack), release APK, mean of 3: 16.77 ms steady mean, p50 16.61 ms, 1.7 dropped / 10 s, 218.3 ms mount.">
+              <div class="track"><div class="bar tiled and" style="--w:6.71%"></div></div>
+            </div>
+          </div>
+          <span class="rval sv">16.77 ms</span>
+        </div>
+      </div>
+
+      <div class="fam">
+        <span class="fampre">Skottie</span>
+        <div class="famgrps">
+        <div class="pgrp">
+          <span class="glabel"><b>via rn-skia</b></span>
+          <div class="prow">
+            <span class="ptag"><b>iOS</b></span>
+            <span class="rval mv">236.5 ms</span>
+            <div class="halves">
+              <div class="half l" data-tip="Skottie via rn-skia iOS: 236.5 ms median mount">
+                <div class="track"><div class="bar" style="--w:23.65%"></div></div>
+              </div>
+              <div class="half r" data-tip="Skottie via rn-skia iOS: 17.0 ms steady mean, 5 dropped frames per 10 s">
+                <div class="track"><div class="bar tiled" style="--w:6.80%"></div></div>
+              </div>
+            </div>
+            <span class="rval sv">17.0 ms</span>
+          </div>
+          <div class="prow">
+            <span class="ptag"><b>Android</b></span>
+            <span class="rval mv">165.0 ms</span>
+            <div class="halves">
+              <div class="half l" data-tip="Skottie via rn-skia Android — Google Pixel 8 (Android 14, BrowserStack), release APK, mean of 3: 165.0 ms mount, 17.03 ms steady mean, p50 16.60 ms, 13.3 dropped / 10 s.">
+                <div class="track"><div class="bar and" style="--w:16.50%"></div></div>
+              </div>
+              <div class="half r" data-tip="Skottie via rn-skia Android — Google Pixel 8 (Android 14, BrowserStack), release APK, mean of 3: 17.03 ms steady mean, p50 16.60 ms, 13.3 dropped / 10 s, 165.0 ms mount.">
+                <div class="track"><div class="bar tiled and" style="--w:6.81%"></div></div>
+              </div>
+            </div>
+            <span class="rval sv">17.03 ms</span>
+          </div>
+        </div>
+
+        <div class="pgrp">
+          <span class="glabel"><b>by margelo</b><br>legacy app</span>
+          <div class="prow">
+            <span class="ptag"><b>iOS</b></span>
+            <span class="rval mv">147.5 ms</span>
+            <div class="halves">
+              <div class="half l" data-tip="Skottie by margelo iOS (legacy app): 147.5 ms median mount, measured in examples/compare-legacy on RN 0.74.1 old architecture, iPhone 17 Pro simulator">
+                <div class="track"><div class="bar" style="--w:14.75%"></div></div>
+              </div>
+              <div class="half r" data-tip="Skottie by margelo iOS (legacy app): 16.68 ms steady mean, p50 16.67 ms, 1 dropped frame per 10 s; measured in examples/compare-legacy on RN 0.74.1 old architecture">
+                <div class="track"><div class="bar tiled" style="--w:6.67%"></div></div>
+              </div>
+            </div>
+            <span class="rval sv">16.68 ms</span>
+          </div>
+          <div class="prow">
+            <span class="ptag"><b>Android</b></span>
+            <span class="rval mv">413 ms</span>
+            <div class="halves">
+              <div class="half l" data-tip="Skottie by margelo Android — bar from the legacy app (examples/compare-legacy, RN 0.74.1 old architecture, contended arm64 API 35 emulator): 413 ms median mount, cold first mount 2,048 ms, 52.3 ms steady mean ≈19 fps, p50 50 ms, 191 dropped / 10 s. One complete session — 2 of 3 crashed. Not in the Pixel 8 sweep: incompatible with RN 0.86 new-arch, so this row is the only Android bar still measured on an emulator.">
+                <div class="track"><div class="bar and" style="--w:41.30%"></div></div>
+              </div>
+              <div class="half r" data-tip="Skottie by margelo Android — bar from the legacy app (examples/compare-legacy, RN 0.74.1 old architecture, contended arm64 API 35 emulator): 52.3 ms steady mean ≈19 fps, p50 50 ms, 191 dropped / 10 s, 413 ms median mount, cold first mount 2,048 ms. One complete session — 2 of 3 crashed. Not in the Pixel 8 sweep: incompatible with RN 0.86 new-arch, so this row is the only Android bar still measured on an emulator.">
+                <div class="track"><div class="bar tiled and" style="--w:20.92%"></div></div>
+              </div>
+            </div>
+            <span class="rval sv">52.3 ms</span>
+          </div>
+        </div>
+        </div>
+      </div>
+
+      <div class="fam">
+        <span class="fampre">μLottie</span>
+        <div class="famgrps">
+        <div class="pgrp">
+          <span class="glabel"><b>rn-svg</b></span>
+          <div class="prow">
+            <span class="ptag"><b>iOS</b></span>
+            <span class="rval mv">2169.6 ms</span>
+            <div class="halves">
+              <div class="half l" data-tip="μLottie rn-svg iOS: 2169.6 ms median mount, over 12 fixtures (node sum 2185); at ~2200 nodes every frame re-commits the whole native SVG tree.">
+                <div class="track"><div class="bar" style="--w:100%"><i class="brk"></i></div></div>
+              </div>
+              <div class="half r" data-tip="μLottie rn-svg iOS: 206.2 ms steady mean, steady p50 218.0 ms, 42 dropped / 10 s, over 12 fixtures (node sum 2185)">
+                <div class="track"><div class="bar tiled s2" style="--w:82.48%"></div></div>
+              </div>
+            </div>
+            <span class="rval sv">206.2 ms</span>
+          </div>
+          <div class="prow">
+            <span class="ptag"><b>Android</b></span>
+            <span class="rval mv">1161 ms</span>
+            <div class="halves">
+              <div class="half l" data-tip="μLottie rn-svg Android — Google Pixel 8 (Android 14, BrowserStack), release APK, 4 runs, no crashes: 1161 ms mount. Earlier attempts crashed — see Compatibility. Mean of the two runs unperturbed by screenshot capture (1146.0 and 1175.8 ms).">
+                <div class="track"><div class="bar and" style="--w:100%"><i class="brk"></i></div></div>
+              </div>
+              <div class="half r" data-tip="μLottie rn-svg Android — Google Pixel 8 (Android 14, BrowserStack), release APK: 898 ms steady mean. Every frame is dropped, ≈1 fps. Mean of the two clean runs (926.9 and 869.4 ms); the run-to-run spread was 730–930 ms.">
+                <div class="track"><div class="bar tiled and" style="--w:100%"><i class="brk"></i></div></div>
+              </div>
+            </div>
+            <span class="rval sv">898 ms</span>
+          </div>
+        </div>
+
+        <div class="pgrp">
+          <span class="glabel"><b>rn-skia</b></span>
+          <div class="prow">
+            <span class="ptag"><b>iOS</b></span>
+            <span class="rval mv">122.6 ms</span>
+            <div class="halves">
+              <div class="half l" data-tip="μLottie rn-skia iOS: 122.6 ms median mount">
+                <div class="track"><div class="bar s2" style="--w:12.26%"></div></div>
+              </div>
+              <div class="half r" data-tip="μLottie rn-skia iOS: 17.0 ms steady mean, 10 dropped frames per 10 s">
+                <div class="track"><div class="bar tiled s2" style="--w:6.80%"></div></div>
+              </div>
+            </div>
+            <span class="rval sv">17.0 ms</span>
+          </div>
+          <div class="prow">
+            <span class="ptag"><b>Android</b></span>
+            <span class="rval mv">219.5 ms</span>
+            <div class="halves">
+              <div class="half l" data-tip="μLottie rn-skia Android — Google Pixel 8 (Android 14, BrowserStack), release APK, mean of 3: 219.5 ms mount, 30.60 ms steady mean, p50 33.22 ms, 244.7 dropped / 10 s.">
+                <div class="track"><div class="bar s2 and" style="--w:21.95%"></div></div>
+              </div>
+              <div class="half r" data-tip="μLottie rn-skia Android — Google Pixel 8 (Android 14, BrowserStack), release APK, mean of 3: 30.60 ms steady mean, p50 33.22 ms, 244.7 dropped / 10 s, 219.5 ms mount.">
+                <div class="track"><div class="bar tiled s2 and" style="--w:12.24%"></div></div>
+              </div>
+            </div>
+            <span class="rval sv">30.60 ms</span>
+          </div>
+        </div>
+
+        <div class="pgrp">
+          <span class="glabel"><b>rn-thorvg</b></span>
+          <div class="prow">
+            <span class="ptag"><b>iOS</b></span>
+            <span class="rval mv">19.5 ms</span>
+            <div class="halves">
+              <div class="half l" data-tip="μLottie rn-thorvg iOS: 19.5 ms median mount">
+                <div class="track"><div class="bar s2" style="--w:1.95%"></div></div>
+              </div>
+              <div class="half r" data-tip="μLottie rn-thorvg iOS: 16.8 ms steady mean, 4 dropped frames per 10 s">
+                <div class="track"><div class="bar tiled s2" style="--w:6.72%"></div></div>
+              </div>
+            </div>
+            <span class="rval sv">16.8 ms</span>
+          </div>
+          <div class="prow">
+            <span class="ptag"><b>Android</b></span>
+            <span class="rval mv">44.7 ms</span>
+            <div class="halves">
+              <div class="half l" data-tip="μLottie rn-thorvg Android — Google Pixel 8 (Android 14, BrowserStack), release APK, mean of 3: 44.7 ms mount, 16.61 ms steady mean, p50 16.60 ms, 0.3 dropped / 10 s.">
+                <div class="track"><div class="bar s2 and" style="--w:4.47%"></div></div>
+              </div>
+              <div class="half r" data-tip="μLottie rn-thorvg Android — Google Pixel 8 (Android 14, BrowserStack), release APK, mean of 3: 16.61 ms steady mean, p50 16.60 ms, 0.3 dropped / 10 s, 44.7 ms mount.">
+                <div class="track"><div class="bar tiled s2 and" style="--w:6.64%"></div></div>
+              </div>
+            </div>
+            <span class="rval sv">16.61 ms</span>
+          </div>
+        </div>
+
+        <div class="pgrp">
+          <span class="glabel"><b>rn-tiny-skia</b></span>
+          <div class="prow">
+            <span class="ptag"><b>iOS</b></span>
+            <span class="rval mv">18.7 ms</span>
+            <div class="halves">
+              <div class="half l" data-tip="μLottie rn-tiny-skia iOS: 18.7 ms median mount">
+                <div class="track"><div class="bar s2" style="--w:1.87%"></div></div>
+              </div>
+              <div class="half r" data-tip="μLottie rn-tiny-skia iOS: 32.5 ms steady mean, 270 dropped frames per 10 s">
+                <div class="track"><div class="bar tiled s2" style="--w:13.00%"></div></div>
+              </div>
+            </div>
+            <span class="rval sv">32.5 ms</span>
+          </div>
+          <div class="prow">
+            <span class="ptag"><b>Android</b></span>
+            <span class="rval mv">50.0 ms</span>
+            <div class="halves">
+              <div class="half l" data-tip="μLottie rn-tiny-skia Android — Google Pixel 8 (Android 14, BrowserStack), release APK, mean of 3: 50.0 ms mount, 45.91 ms steady mean, p50 49.82 ms, 218.7 dropped / 10 s.">
+                <div class="track"><div class="bar s2 and" style="--w:5.00%"></div></div>
+              </div>
+              <div class="half r" data-tip="μLottie rn-tiny-skia Android — Google Pixel 8 (Android 14, BrowserStack), release APK, mean of 3: 45.91 ms steady mean, p50 49.82 ms, 218.7 dropped / 10 s, 50.0 ms mount.">
+                <div class="track"><div class="bar tiled s2 and" style="--w:18.36%"></div></div>
+              </div>
+            </div>
+            <span class="rval sv">45.91 ms</span>
+          </div>
+        </div>
+        </div>
+      </div>
+
+    </div>
+    <div class="axisrow b">
+      <div class="tickpair">
+        <div class="ticks"><span>1000 ms</span><span>750</span><span>500</span><span>250</span><span>0</span></div>
+        <div class="ticks"><span></span><span>50</span><span>100</span><span>150</span><span>200</span><span>250 ms</span></div>
+      </div>
+    </div>
+    <div class="axisrow b spr">
+      <div class="tickpair sp"><span class="spinelab">first frame</span></div>
+    </div>
+    <span class="reflabel">Gridlines on the right side: one 60 Hz vsync frame, 16.67 ms apart. Count the lines a tile crosses to read how many frame budgets it spent.</span>
     <p class="note">
-      dotlottie's 183.2 ms is inflated in dev mode: each of the 16 cells fetches its <code>.lottie</code> archive
-      over HTTP from Metro first. A production build reads bundled assets.
-      lottie-react-native's 99.9 ms median hides a 1316.7 ms cold first run, and part of its init runs off the
-      probed thread. rn-skia's worst run (147 ms mount, 87 dropped) is cold module require of 16 fixtures.
+      The iOS bars are dev-mode Metro builds; dotlottie's mount also includes fetching each of its 16
+      <code>.lottie</code> archives over HTTP, which a production build does not do.
+      <b>The Android bars are one back-to-back session on the same Pixel 8</b>, so they race each other — except
+      Skottie by margelo, carried over from an RN 0.74 old-arch emulator session and indicative only.
     </p>
-    <div class="callout">
-      <b>μLottie rn-svg mounts in 2169.6 ms</b> — off the chart, so it would flatten every other bar. Its full
-      row: 12 fixtures (node sum 2185), steady mean 206.2 ms, steady p50 218.0 ms, 42 dropped per 10 s.
-    </div>
-  </figure>
-
-  <figure class="chart">
-    <figcaption>Mount → first frame, Android mixed16 (ms, median of 3)</figcaption>
-    <p class="sub">Lower is better. Scale 0–1000 ms. Each bar is that player's best-available measured Android run; the tooltip names the sweep it came from and carries every other sweep that player appears in.</p>
-    <div class="legend">
-      <span><i class="swatch"></i>Existing player</span>
-      <span><i class="swatch s2"></i>μLottie target</span>
-      <span><i class="swatch gray"></i>Probe only, no player</span>
-    </div>
-    <div class="bars">
-      <div class="row" title="dotlottie — bar from sweep C (fresh ulottie_perf AVD, contended host): 136.4 ms median mount, 25.4 ms steady mean, p50 16.67 ms, 102 dropped / 10 s. Not run in sweep A (cut short) or sweep B.">
-        <span class="rlabel"><b>dotlottie</b> · baseline<br>sweep C</span>
-        <div class="track"><div class="bar" style="--w:13.64%"></div></div>
-        <span class="rval">136.4 ms</span>
-      </div>
-      <div class="row" title="lottie-react-native — bar from sweep B (contended host): 549.0 ms median mount, 126.8 ms steady mean, p50 116.7 ms, 78 dropped / 10 s. Not run in sweep A (cut short) or sweep C.">
-        <span class="rlabel"><b>lottie-react-native</b><br>sweep B</span>
-        <div class="track"><div class="bar" style="--w:54.90%"></div></div>
-        <span class="rval">549.0 ms</span>
-      </div>
-      <div class="row" title="Skottie via rn-skia — bar from sweep A (sole emulator on the host): 443.9 ms median mount, 29.8 ms steady mean, p50 16.67 ms, 129 dropped / 10 s. Sweep B (contended host): 1137.3 ms median mount, 181.1 ms steady mean, p50 183.3 ms, 53 dropped / 10 s.">
-        <span class="rlabel"><b>Skottie via rn-skia</b><br>sweep A</span>
-        <div class="track"><div class="bar" style="--w:44.39%"></div></div>
-        <span class="rval">443.9 ms</span>
-      </div>
-      <div class="row" title="Skottie by margelo — bar from the legacy app (examples/compare-legacy, RN 0.74.1 old architecture, contended arm64 API 35 emulator): 413 ms median mount, cold first mount 2,048 ms, 52.3 ms steady mean ≈19 fps, p50 50 ms, 191 dropped / 10 s. One complete session — 2 of 3 crashed. Never in sweeps A–C: incompatible with RN 0.86 new-arch.">
-        <span class="rlabel"><b>Skottie by margelo</b><br>legacy app</span>
-        <div class="track"><div class="bar" style="--w:41.30%"></div></div>
-        <span class="rval">413 ms</span>
-      </div>
-      <div class="row" title="μLottie rn-svg — did not finish on Android. Two attempts in sweep B, two upstream crashes; detail under Compatibility.">
-        <span class="rlabel"><b>μLottie rn-svg</b><br>sweep B</span>
-        <div class="track"></div>
-        <span class="rval"><span class="flag bad">DNF</span></span>
-      </div>
-      <div class="row" title="μLottie rn-skia — bar from sweep B (contended host): 989.5 ms median mount, 239.8 ms steady mean, p50 200.0 ms, 41 dropped / 10 s. Not run in sweep A (cut short) or sweep C.">
-        <span class="rlabel"><b>μLottie rn-skia</b><br>sweep B</span>
-        <div class="track"><div class="bar s2" style="--w:98.95%"></div></div>
-        <span class="rval">989.5 ms</span>
-      </div>
-      <div class="row" title="μLottie rn-thorvg — bar from sweep C (fresh ulottie_perf AVD, contended host, same session as the dotlottie row): 124.4 ms median mount, 19.5 ms steady mean, p50 16.67 ms, 42 dropped / 10 s. Sweep A (sole emulator on the host): 135.4 ms median mount, 18.5 ms steady mean, p50 16.67 ms, 37 dropped / 10 s. Sweep B (contended host): 328.4 ms median mount, 111.2 ms steady mean, p50 100.0 ms, 89 dropped / 10 s.">
-        <span class="rlabel"><b>μLottie rn-thorvg</b><br>sweep C</span>
-        <div class="track"><div class="bar s2" style="--w:12.44%"></div></div>
-        <span class="rval">124.4 ms</span>
-      </div>
-      <div class="row" title="μLottie rn-tiny-skia — bar from sweep A (sole emulator on the host): 132.7 ms median mount, 36.3 ms steady mean, p50 33.33 ms, 157 dropped / 10 s. Sweep B (contended host): 361.3 ms median mount, 140.5 ms steady mean, p50 133.3 ms, 72 dropped / 10 s.">
-        <span class="rlabel"><b>μLottie rn-tiny-skia</b><br>sweep A</span>
-        <div class="track"><div class="bar s2" style="--w:13.27%"></div></div>
-        <span class="rval">132.7 ms</span>
-      </div>
-      <div class="row" title="none (probe only) — bar from sweep C (1 run): 50.4 ms median mount, 16.8 ms steady mean, p50 16.67 ms, 3 dropped / 10 s. Sweep B (contended host): 102.5 ms median mount, 17.1 ms steady mean, p50 16.67 ms, 5 dropped / 10 s. Legacy app, same probe: 16.8 ms steady mean, 3 dropped / 10 s.">
-        <span class="rlabel"><b>none</b> (probe only)<br>sweep C</span>
-        <div class="track"><div class="bar gray" style="--w:5.04%"></div></div>
-        <span class="rval">50.4 ms</span>
-      </div>
-    </div>
-    <div class="axisrow"><div class="ticks"><span>0</span><span>250</span><span>500</span><span>750</span><span>1000 ms</span></div></div>
     <p class="note">
-      <b>Indicative only.</b> The three sweeps ran in separate sessions under different host contention, and Skottie
-      by margelo ran in a separate RN 0.74 old-arch app, so bars from different sessions are not a like-for-like
-      race. Sweep A had the emulator to itself; sweeps B and C shared the host, which inflates them.
-      Sweep C is the one session that anchors dotlottie and rt-thorvg against each other.
-      <b>μLottie rn-svg did not finish on Android</b> — two attempts, two crashes; detail under Compatibility.
-    </p>
-  </figure>
-
-  <h3>Steady-state mean frame time</h3>
-
-  <figure class="chart">
-    <figcaption>Steady-state mean frame time, iOS mixed16 (ms)</figcaption>
-    <p class="sub">16.67 ms is one vsync frame at 60 Hz — the hairline marks it. Lower is better.</p>
-    <div class="legend">
-      <span><i class="swatch"></i>Existing player</span>
-      <span><i class="swatch s2"></i>μLottie target</span>
-    </div>
-    <div class="bars">
-      <div class="row" title="dotlottie: 16.75 ms steady mean, 3 dropped frames per 10 s">
-        <span class="rlabel"><b>dotlottie</b> · baseline</span>
-        <div class="track"><div class="bar" style="--w:47.86%"></div><span class="refline" style="left:47.63%"></span></div>
-        <span class="rval">16.75 ms</span>
-      </div>
-      <div class="row" title="lottie-react-native: 17.6 ms steady mean, 2 dropped frames per 10 s">
-        <span class="rlabel"><b>lottie-react-native</b></span>
-        <div class="track"><div class="bar" style="--w:50.29%"></div><span class="refline" style="left:47.63%"></span></div>
-        <span class="rval">17.6 ms</span>
-      </div>
-      <div class="row" title="Skottie via rn-skia: 17.0 ms steady mean, 5 dropped frames per 10 s">
-        <span class="rlabel"><b>Skottie via rn-skia</b></span>
-        <div class="track"><div class="bar" style="--w:48.57%"></div><span class="refline" style="left:47.63%"></span></div>
-        <span class="rval">17.0 ms</span>
-      </div>
-      <div class="row" title="Skottie by margelo (legacy app): 16.68 ms steady mean, p50 16.67 ms, 1 dropped frame per 10 s; measured in examples/compare-legacy on RN 0.74.1 old architecture">
-        <span class="rlabel"><b>Skottie by margelo</b><br>(legacy app)</span>
-        <div class="track"><div class="bar" style="--w:47.66%"></div><span class="refline" style="left:47.63%"></span></div>
-        <span class="rval">16.68 ms</span>
-      </div>
-      <div class="row" title="μLottie rn-svg: 206.2 ms — off scale, see callout">
-        <span class="rlabel"><b>μLottie rn-svg</b></span>
-        <div class="track"><span class="refline" style="left:47.63%"></span></div>
-        <span class="rval na">off scale</span>
-      </div>
-      <div class="row" title="μLottie rn-skia: 17.0 ms steady mean, 10 dropped frames per 10 s">
-        <span class="rlabel"><b>μLottie rn-skia</b></span>
-        <div class="track"><div class="bar s2" style="--w:48.57%"></div><span class="refline" style="left:47.63%"></span></div>
-        <span class="rval">17.0 ms</span>
-      </div>
-      <div class="row" title="μLottie rn-thorvg: 16.8 ms steady mean, 4 dropped frames per 10 s">
-        <span class="rlabel"><b>μLottie rn-thorvg</b></span>
-        <div class="track"><div class="bar s2" style="--w:48.00%"></div><span class="refline" style="left:47.63%"></span></div>
-        <span class="rval">16.8 ms</span>
-      </div>
-      <div class="row" title="μLottie rn-tiny-skia: 32.5 ms steady mean, 270 dropped frames per 10 s">
-        <span class="rlabel"><b>μLottie rn-tiny-skia</b></span>
-        <div class="track"><div class="bar s2" style="--w:92.86%"></div><span class="refline" style="left:47.63%"></span></div>
-        <span class="rval">32.5 ms</span>
-      </div>
-    </div>
-    <div class="axisrow"><div class="ticks"><span>0</span><span>7</span><span>14</span><span>21</span><span>28</span><span>35 ms</span></div></div>
-    <span class="reflabel">Hairline: 16.67 ms = one 60 Hz vsync frame.</span>
-    <p class="note">
-      Steady p50 is 16.67 ms — one vsync — for every charted row except rn-tiny-skia at 33.7 ms.
-      <b>dotlottie holds 60 fps</b>: it renders off the probed thread, so the probe sees mostly the React commit.
-      <b>rt-thorvg also holds 60 fps</b> — nothing to parse, the scene arrives as a binary display list.
-      <b>rt-tinyskia saturates at ~30 fps</b>: sixteen 512² CPU rasterizations per frame tops out its scalar
-      pipeline, and <code>bodymoovin</code> alone is 1381 nodes.
-    </p>
-    <div class="callout">
-      <b>μLottie rn-svg stays at ~5 fps</b> (206.2 ms mean), off this chart too. At ~2200 nodes, every frame
-      writes thousands of <code>react-native-svg</code> props and re-commits the whole native tree.
-    </div>
-  </figure>
-
-  <figure class="chart">
-    <figcaption>Steady-state mean frame time, Android mixed16 (ms)</figcaption>
-    <p class="sub">Lower is better. Scale 0–250 ms. The hairline marks 16.67 ms, one 60 Hz vsync. Each bar is that player's best-available measured Android run; the tooltip names the sweep it came from and carries every other sweep that player appears in.</p>
-    <div class="legend">
-      <span><i class="swatch"></i>Existing player</span>
-      <span><i class="swatch s2"></i>μLottie target</span>
-      <span><i class="swatch gray"></i>Probe only, no player</span>
-    </div>
-    <div class="bars">
-      <div class="row" title="dotlottie — bar from sweep C (fresh ulottie_perf AVD, contended host): 25.4 ms steady mean, p50 16.67 ms, 102 dropped / 10 s, 136.4 ms median mount. Not run in sweep A (cut short) or sweep B.">
-        <span class="rlabel"><b>dotlottie</b> · baseline<br>sweep C</span>
-        <div class="track"><div class="bar" style="--w:10.16%"></div><span class="refline" style="left:6.67%"></span></div>
-        <span class="rval">25.4 ms</span>
-      </div>
-      <div class="row" title="lottie-react-native — bar from sweep B (contended host): 126.8 ms steady mean, p50 116.7 ms, 78 dropped / 10 s, 549.0 ms median mount. Not run in sweep A (cut short) or sweep C.">
-        <span class="rlabel"><b>lottie-react-native</b><br>sweep B</span>
-        <div class="track"><div class="bar" style="--w:50.72%"></div><span class="refline" style="left:6.67%"></span></div>
-        <span class="rval">126.8 ms</span>
-      </div>
-      <div class="row" title="Skottie via rn-skia — bar from sweep A (sole emulator on the host): 29.8 ms steady mean, p50 16.67 ms, 129 dropped / 10 s, 443.9 ms median mount. Sweep B (contended host): 181.1 ms steady mean, p50 183.3 ms, 53 dropped / 10 s, 1137.3 ms median mount.">
-        <span class="rlabel"><b>Skottie via rn-skia</b><br>sweep A</span>
-        <div class="track"><div class="bar" style="--w:11.92%"></div><span class="refline" style="left:6.67%"></span></div>
-        <span class="rval">29.8 ms</span>
-      </div>
-      <div class="row" title="Skottie by margelo — bar from the legacy app (examples/compare-legacy, RN 0.74.1 old architecture, contended arm64 API 35 emulator): 52.3 ms steady mean ≈19 fps, p50 50 ms, 191 dropped / 10 s, 413 ms median mount, cold first mount 2,048 ms. One complete session — 2 of 3 crashed. Never in sweeps A–C: incompatible with RN 0.86 new-arch.">
-        <span class="rlabel"><b>Skottie by margelo</b><br>legacy app</span>
-        <div class="track"><div class="bar" style="--w:20.92%"></div><span class="refline" style="left:6.67%"></span></div>
-        <span class="rval">52.3 ms</span>
-      </div>
-      <div class="row" title="μLottie rn-svg — did not finish on Android. Two attempts in sweep B, two upstream crashes; detail under Compatibility.">
-        <span class="rlabel"><b>μLottie rn-svg</b><br>sweep B</span>
-        <div class="track"><span class="refline" style="left:6.67%"></span></div>
-        <span class="rval"><span class="flag bad">DNF</span></span>
-      </div>
-      <div class="row" title="μLottie rn-skia — bar from sweep B (contended host): 239.8 ms steady mean, p50 200.0 ms, 41 dropped / 10 s, 989.5 ms median mount. Not run in sweep A (cut short) or sweep C.">
-        <span class="rlabel"><b>μLottie rn-skia</b><br>sweep B</span>
-        <div class="track"><div class="bar s2" style="--w:95.92%"></div><span class="refline" style="left:6.67%"></span></div>
-        <span class="rval">239.8 ms</span>
-      </div>
-      <div class="row" title="μLottie rn-thorvg — bar from sweep C (fresh ulottie_perf AVD, contended host, same session as the dotlottie row): 19.5 ms steady mean, p50 16.67 ms, 42 dropped / 10 s, 124.4 ms median mount. Sweep A (sole emulator on the host): 18.5 ms steady mean, p50 16.67 ms, 37 dropped / 10 s, 135.4 ms median mount. Sweep B (contended host): 111.2 ms steady mean, p50 100.0 ms, 89 dropped / 10 s, 328.4 ms median mount.">
-        <span class="rlabel"><b>μLottie rn-thorvg</b><br>sweep C</span>
-        <div class="track"><div class="bar s2" style="--w:7.80%"></div><span class="refline" style="left:6.67%"></span></div>
-        <span class="rval">19.5 ms</span>
-      </div>
-      <div class="row" title="μLottie rn-tiny-skia — bar from sweep A (sole emulator on the host): 36.3 ms steady mean, p50 33.33 ms, 157 dropped / 10 s, 132.7 ms median mount. Sweep B (contended host): 140.5 ms steady mean, p50 133.3 ms, 72 dropped / 10 s, 361.3 ms median mount.">
-        <span class="rlabel"><b>μLottie rn-tiny-skia</b><br>sweep A</span>
-        <div class="track"><div class="bar s2" style="--w:14.52%"></div><span class="refline" style="left:6.67%"></span></div>
-        <span class="rval">36.3 ms</span>
-      </div>
-      <div class="row" title="none (probe only) — bar from sweep C (1 run): 16.8 ms steady mean, p50 16.67 ms, 3 dropped / 10 s, 50.4 ms median mount. Sweep B (contended host): 17.1 ms steady mean, p50 16.67 ms, 5 dropped / 10 s, 102.5 ms median mount. Legacy app, same probe: 16.8 ms steady mean, 3 dropped / 10 s.">
-        <span class="rlabel"><b>none</b> (probe only)<br>sweep C</span>
-        <div class="track"><div class="bar gray" style="--w:6.72%"></div><span class="refline" style="left:6.67%"></span></div>
-        <span class="rval">16.8 ms</span>
-      </div>
-    </div>
-    <div class="axisrow"><div class="ticks"><span>0</span><span>50</span><span>100</span><span>150</span><span>200</span><span>250 ms</span></div></div>
-    <span class="reflabel">Hairline: 16.67 ms = one 60 Hz vsync frame.</span>
-    <p class="note">
-      <b>Indicative only</b>, for the same reason as the mount chart: separate sessions, different host contention,
-      and a separate RN 0.74 old-arch app for Skottie by margelo. The no-player probe row is the floor each session
-      was read against; in the legacy app it held one vsync in the same session, so margelo's ~19 fps is the player,
-      not the harness.
-      The ordering reproduces iOS. rt-tiny-skia sits a full vsync behind at p50 33.33 ms, the same ~30 fps ceiling
-      iOS showed. dotlottie animates on its own render thread (Android default: the Compose view's software
-      rasterizer), so the probe measures induced UI-thread load — 102 dropped frames against rt-thorvg's 42 in the
-      same sweep C session.
+      <b>dotlottie holds 60 fps</b> because it renders off the probed thread, and <b>rt-thorvg</b> because nothing is
+      parsed per frame — the scene arrives as a binary display list. <b>rt-tiny-skia saturates at ~30 fps</b>: sixteen
+      512² CPU rasterizations per frame top out its scalar pipeline.
+      The Pixel 8 reproduces the iOS ordering, and what it separates is μLottie's two per-frame-rasterizing targets.
     </p>
   </figure>
 
@@ -767,7 +987,6 @@ footer p { max-width: 74ch; }
 
   <figure class="chart">
     <figcaption>Mount → first frame against instance count (ms, best of 3)</figcaption>
-    <p class="sub">Both μLottie targets grow roughly one vsync per ~5 instances. lottie-react-native stays flat, partly because its lottie-ios view initializes off the probed thread.</p>
     <div class="legend">
       <span><i class="swatch"></i>lottie-react-native</span>
       <span><i class="swatch s2"></i>μLottie rn-svg</span>
@@ -795,37 +1014,36 @@ footer p { max-width: 74ch; }
 
       <!-- lottie-react-native: 16.7 / 16.7 / 16.7 / 16.8 -->
       <polyline class="ln" stroke="var(--series-1)" points="48,201.99 212,201.99 376,201.99 540,201.70"></polyline>
-      <circle class="dot" fill="var(--series-1)" cx="48" cy="201.99"><title>lottie-react-native, 1 instance: 16.7 ms</title></circle>
-      <circle class="dot" fill="var(--series-1)" cx="212" cy="201.99"><title>lottie-react-native, 4 instances: 16.7 ms</title></circle>
-      <circle class="dot" fill="var(--series-1)" cx="376" cy="201.99"><title>lottie-react-native, 9 instances: 16.7 ms</title></circle>
-      <circle class="dot" fill="var(--series-1)" cx="540" cy="201.70"><title>lottie-react-native, 16 instances: 16.8 ms</title></circle>
+      <circle class="dot" fill="var(--series-1)" cx="48" cy="201.99" data-tip="lottie-react-native, 1 instance: 16.7 ms"></circle>
+      <circle class="dot" fill="var(--series-1)" cx="212" cy="201.99" data-tip="lottie-react-native, 4 instances: 16.7 ms"></circle>
+      <circle class="dot" fill="var(--series-1)" cx="376" cy="201.99" data-tip="lottie-react-native, 9 instances: 16.7 ms"></circle>
+      <circle class="dot" fill="var(--series-1)" cx="540" cy="201.70" data-tip="lottie-react-native, 16 instances: 16.8 ms"></circle>
       <text class="endlab" x="550" y="205.7" fill="var(--series-1)">16.8</text>
 
       <!-- ulottie rn-svg: 16.1 / 32.9 / 50.0 / 66.8 -->
       <polyline class="ln" stroke="var(--series-2)" points="48,203.71 212,155.41 376,106.25 540,57.95"></polyline>
-      <circle class="dot" fill="var(--series-2)" cx="48" cy="203.71"><title>μLottie rn-svg, 1 instance: 16.1 ms</title></circle>
-      <circle class="dot" fill="var(--series-2)" cx="212" cy="155.41"><title>μLottie rn-svg, 4 instances: 32.9 ms</title></circle>
-      <circle class="dot" fill="var(--series-2)" cx="376" cy="106.25"><title>μLottie rn-svg, 9 instances: 50.0 ms</title></circle>
-      <circle class="dot" fill="var(--series-2)" cx="540" cy="57.95"><title>μLottie rn-svg, 16 instances: 66.8 ms</title></circle>
+      <circle class="dot" fill="var(--series-2)" cx="48" cy="203.71" data-tip="μLottie rn-svg, 1 instance: 16.1 ms"></circle>
+      <circle class="dot" fill="var(--series-2)" cx="212" cy="155.41" data-tip="μLottie rn-svg, 4 instances: 32.9 ms"></circle>
+      <circle class="dot" fill="var(--series-2)" cx="376" cy="106.25" data-tip="μLottie rn-svg, 9 instances: 50.0 ms"></circle>
+      <circle class="dot" fill="var(--series-2)" cx="540" cy="57.95" data-tip="μLottie rn-svg, 16 instances: 66.8 ms"></circle>
       <text class="endlab" x="550" y="61.95" fill="var(--series-2)">66.8</text>
 
       <!-- ulottie rn-skia: 16.7 / 32.3 / 51.3 / 71.7 -->
       <polyline class="ln" stroke="var(--series-3)" points="48,201.99 212,157.14 376,102.51 540,43.86"></polyline>
-      <circle class="dot" fill="var(--series-3)" cx="48" cy="201.99"><title>μLottie rn-skia, 1 instance: 16.7 ms</title></circle>
-      <circle class="dot" fill="var(--series-3)" cx="212" cy="157.14"><title>μLottie rn-skia, 4 instances: 32.3 ms</title></circle>
-      <circle class="dot" fill="var(--series-3)" cx="376" cy="102.51"><title>μLottie rn-skia, 9 instances: 51.3 ms</title></circle>
-      <circle class="dot" fill="var(--series-3)" cx="540" cy="43.86"><title>μLottie rn-skia, 16 instances: 71.7 ms</title></circle>
+      <circle class="dot" fill="var(--series-3)" cx="48" cy="201.99" data-tip="μLottie rn-skia, 1 instance: 16.7 ms"></circle>
+      <circle class="dot" fill="var(--series-3)" cx="212" cy="157.14" data-tip="μLottie rn-skia, 4 instances: 32.3 ms"></circle>
+      <circle class="dot" fill="var(--series-3)" cx="376" cy="102.51" data-tip="μLottie rn-skia, 9 instances: 51.3 ms"></circle>
+      <circle class="dot" fill="var(--series-3)" cx="540" cy="43.86" data-tip="μLottie rn-skia, 16 instances: 71.7 ms"></circle>
       <text class="endlab" x="550" y="47.86" fill="var(--series-3)">71.7</text>
     </svg>
     <p class="note">
       The bare probe measured 16.4 ms at 1 instance and 16.1 ms at 16, so its line would sit on top of the
-      lottie-react-native line.
+      lottie-react-native line — which stays flat partly because its lottie-ios view initializes off the probed thread.
     </p>
   </figure>
 
   <figure class="chart">
     <figcaption>Worst single frame (max ms) against instance count</figcaption>
-    <p class="sub">Lower is better. The hairline marks 16.67 ms, one 60 Hz vsync. Mean, p50, p95, p99 and dropped-frame counts ride in each row's tooltip.</p>
     <div class="legend">
       <span><i class="swatch"></i>lottie-react-native</span>
       <span><i class="swatch s2"></i>μLottie rn-svg</span>
@@ -833,77 +1051,77 @@ footer p { max-width: 74ch; }
       <span><i class="swatch gray"></i>baseline, no player</span>
     </div>
     <div class="bars">
-      <div class="row" title="dotlottie: not in this sweep — the sweep predates that player">
+      <div class="row" data-tip="dotlottie: not in this sweep — the sweep predates that player">
         <span class="rlabel"><b>dotlottie</b> · baseline</span>
         <div class="track"><span class="refline" style="left:34.73%"></span></div>
         <span class="rval na">not in sweep</span>
       </div>
-      <div class="row" title="baseline (no player), 1 instance: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
+      <div class="row" data-tip="baseline (no player), 1 instance: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
         <span class="rlabel"><b>baseline (no player)</b><br>×1</span>
         <div class="track"><div class="bar gray" style="--w:34.73%"></div><span class="refline" style="left:34.73%"></span></div>
         <span class="rval">16.67 ms</span>
       </div>
-      <div class="row" title="baseline (no player), 16 instances: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
+      <div class="row" data-tip="baseline (no player), 16 instances: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
         <span class="rlabel"><b>baseline (no player)</b><br>×16</span>
         <div class="track"><div class="bar gray" style="--w:34.73%"></div><span class="refline" style="left:34.73%"></span></div>
         <span class="rval">16.67 ms</span>
       </div>
-      <div class="row" title="lottie-react-native, 1 instance: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
+      <div class="row" data-tip="lottie-react-native, 1 instance: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
         <span class="rlabel"><b>lottie-react-native</b><br>×1</span>
         <div class="track"><div class="bar" style="--w:34.73%"></div><span class="refline" style="left:34.73%"></span></div>
         <span class="rval">16.67 ms</span>
       </div>
-      <div class="row" title="lottie-react-native, 4 instances: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
+      <div class="row" data-tip="lottie-react-native, 4 instances: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
         <span class="rlabel"><b>lottie-react-native</b><br>×4</span>
         <div class="track"><div class="bar" style="--w:34.73%"></div><span class="refline" style="left:34.73%"></span></div>
         <span class="rval">16.67 ms</span>
       </div>
-      <div class="row" title="lottie-react-native, 9 instances: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
+      <div class="row" data-tip="lottie-react-native, 9 instances: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
         <span class="rlabel"><b>lottie-react-native</b><br>×9</span>
         <div class="track"><div class="bar" style="--w:34.73%"></div><span class="refline" style="left:34.73%"></span></div>
         <span class="rval">16.67 ms</span>
       </div>
-      <div class="row" title="lottie-react-native, 16 instances: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
+      <div class="row" data-tip="lottie-react-native, 16 instances: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
         <span class="rlabel"><b>lottie-react-native</b><br>×16</span>
         <div class="track"><div class="bar" style="--w:34.73%"></div><span class="refline" style="left:34.73%"></span></div>
         <span class="rval">16.67 ms</span>
       </div>
-      <div class="row" title="μLottie rn-svg, 1 instance: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
+      <div class="row" data-tip="μLottie rn-svg, 1 instance: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
         <span class="rlabel"><b>μLottie rn-svg</b><br>×1</span>
         <div class="track"><div class="bar s2" style="--w:34.73%"></div><span class="refline" style="left:34.73%"></span></div>
         <span class="rval">16.67 ms</span>
       </div>
-      <div class="row" title="μLottie rn-svg, 4 instances: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
+      <div class="row" data-tip="μLottie rn-svg, 4 instances: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
         <span class="rlabel"><b>μLottie rn-svg</b><br>×4</span>
         <div class="track"><div class="bar s2" style="--w:34.73%"></div><span class="refline" style="left:34.73%"></span></div>
         <span class="rval">16.67 ms</span>
       </div>
-      <div class="row" title="μLottie rn-svg, 9 instances: mean 16.69 ms, p50 16.67, p95 16.67, p99 16.67, max 36.67, 1 dropped">
+      <div class="row" data-tip="μLottie rn-svg, 9 instances: mean 16.69 ms, p50 16.67, p95 16.67, p99 16.67, max 36.67, 1 dropped">
         <span class="rlabel"><b>μLottie rn-svg</b><br>×9</span>
         <div class="track"><div class="bar s2" style="--w:76.40%"></div><span class="refline" style="left:34.73%"></span></div>
         <span class="rval">36.67 ms</span>
       </div>
-      <div class="row" title="μLottie rn-svg, 16 instances: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
+      <div class="row" data-tip="μLottie rn-svg, 16 instances: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
         <span class="rlabel"><b>μLottie rn-svg</b><br>×16</span>
         <div class="track"><div class="bar s2" style="--w:34.73%"></div><span class="refline" style="left:34.73%"></span></div>
         <span class="rval">16.67 ms</span>
       </div>
-      <div class="row" title="μLottie rn-skia, 1 instance: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
+      <div class="row" data-tip="μLottie rn-skia, 1 instance: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
         <span class="rlabel"><b>μLottie rn-skia</b><br>×1</span>
         <div class="track"><div class="bar s3" style="--w:34.73%"></div><span class="refline" style="left:34.73%"></span></div>
         <span class="rval">16.67 ms</span>
       </div>
-      <div class="row" title="μLottie rn-skia, 4 instances: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
+      <div class="row" data-tip="μLottie rn-skia, 4 instances: mean 16.67 ms, p50 16.67, p95 16.67, p99 16.67, max 16.67, 0 dropped">
         <span class="rlabel"><b>μLottie rn-skia</b><br>×4</span>
         <div class="track"><div class="bar s3" style="--w:34.73%"></div><span class="refline" style="left:34.73%"></span></div>
         <span class="rval">16.67 ms</span>
       </div>
-      <div class="row" title="μLottie rn-skia, 9 instances: mean 16.68 ms, p50 16.67, p95 16.67, p99 16.67, max 27.18, 1 dropped">
+      <div class="row" data-tip="μLottie rn-skia, 9 instances: mean 16.68 ms, p50 16.67, p95 16.67, p99 16.67, max 27.18, 1 dropped">
         <span class="rlabel"><b>μLottie rn-skia</b><br>×9</span>
         <div class="track"><div class="bar s3" style="--w:56.63%"></div><span class="refline" style="left:34.73%"></span></div>
         <span class="rval">27.18 ms</span>
       </div>
-      <div class="row" title="μLottie rn-skia, 16 instances: mean 16.76 ms, p50 16.67, p95 16.67, p99 16.67, max 44.23, 4 dropped">
+      <div class="row" data-tip="μLottie rn-skia, 16 instances: mean 16.76 ms, p50 16.67, p95 16.67, p99 16.67, max 44.23, 4 dropped">
         <span class="rlabel"><b>μLottie rn-skia</b><br>×16</span>
         <div class="track"><div class="bar s3" style="--w:92.15%"></div><span class="refline" style="left:34.73%"></span></div>
         <span class="rval">44.23 ms</span>
@@ -961,67 +1179,66 @@ footer p { max-width: 74ch; }
 
   <figure class="chart">
     <figcaption>Worst frame per fixture — percent of pixels differing from the lottie-ios oracle</figcaption>
-    <p class="sub">Lower is better. Each bar is the widest of that fixture's five pins; all five ride in the row's tooltip. The hairline marks the 1% gate.</p>
     <div class="legend">
       <span><i class="swatch s2"></i>μLottie rn-svg vs lottie-ios</span>
     </div>
     <div class="bars">
-      <div class="row" title="boucing_ball — 0% pin: 0, 25%: 0, 50%: 0, 75%: 0, 100%: 0">
+      <div class="row" data-tip="boucing_ball — 0% pin: 0, 25%: 0, 50%: 0, 75%: 0, 100%: 0">
         <span class="rlabel"><b>boucing_ball</b></span>
         <div class="track"><span class="refline" style="left:66.67%"></span></div>
         <span class="rval">0%</span>
       </div>
-      <div class="row" title="rectangle — 0% pin: 0, 25%: 0, 50%: 0, 75%: 0, 100%: 0">
+      <div class="row" data-tip="rectangle — 0% pin: 0, 25%: 0, 50%: 0, 75%: 0, 100%: 0">
         <span class="rlabel"><b>rectangle</b></span>
         <div class="track"><span class="refline" style="left:66.67%"></span></div>
         <span class="rval">0%</span>
       </div>
-      <div class="row" title="ellipse — 0% pin: 0, 25%: 0, 50%: 0, 75%: 0, 100%: 0">
+      <div class="row" data-tip="ellipse — 0% pin: 0, 25%: 0, 50%: 0, 75%: 0, 100%: 0">
         <span class="rlabel"><b>ellipse</b></span>
         <div class="track"><span class="refline" style="left:66.67%"></span></div>
         <span class="rval">0%</span>
       </div>
-      <div class="row" title="fill — 0% pin: 0, 25%: 0, 50%: 0, 75%: 0, 100%: 0">
+      <div class="row" data-tip="fill — 0% pin: 0, 25%: 0, 50%: 0, 75%: 0, 100%: 0">
         <span class="rlabel"><b>fill</b></span>
         <div class="track"><span class="refline" style="left:66.67%"></span></div>
         <span class="rval">0%</span>
       </div>
-      <div class="row" title="trim_path — 0% pin: 0, 25%: 0, 50%: 0, 75%: 0, 100%: 0">
+      <div class="row" data-tip="trim_path — 0% pin: 0, 25%: 0, 50%: 0, 75%: 0, 100%: 0">
         <span class="rlabel"><b>trim_path</b></span>
         <div class="track"><span class="refline" style="left:66.67%"></span></div>
         <span class="rval">0%</span>
       </div>
-      <div class="row" title="android_wave — 0% pin: 0, 25%: 0, 50%: 0, 75%: 0, 100%: 0">
+      <div class="row" data-tip="android_wave — 0% pin: 0, 25%: 0, 50%: 0, 75%: 0, 100%: 0">
         <span class="rlabel"><b>android_wave</b></span>
         <div class="track"><span class="refline" style="left:66.67%"></span></div>
         <span class="rval">0%</span>
       </div>
-      <div class="row" title="precomp_star_circle — 0% pin: 0, 25%: 0.02, 50%: 0.04, 75%: 0, 100%: 0.01">
+      <div class="row" data-tip="precomp_star_circle — 0% pin: 0, 25%: 0.02, 50%: 0.04, 75%: 0, 100%: 0.01">
         <span class="rlabel"><b>precomp_star_circle</b></span>
         <div class="track"><div class="bar s2" style="--w:2.67%"></div><span class="refline" style="left:66.67%"></span></div>
         <span class="rval">0.04%</span>
       </div>
-      <div class="row" title="lottie_logo_1 — 0% pin: 0.11, 25%: 0.11, 50%: 0.11, 75%: 0.11, 100%: 0.18">
+      <div class="row" data-tip="lottie_logo_1 — 0% pin: 0.11, 25%: 0.11, 50%: 0.11, 75%: 0.11, 100%: 0.18">
         <span class="rlabel"><b>lottie_logo_1</b></span>
         <div class="track"><div class="bar s2" style="--w:12.00%"></div><span class="refline" style="left:66.67%"></span></div>
         <span class="rval">0.18%</span>
       </div>
-      <div class="row" title="mask_subtract — 0% pin: 0.11, 25%: 0.18, 50%: 0.22, 75%: 0.18, 100%: 0.11">
+      <div class="row" data-tip="mask_subtract — 0% pin: 0.11, 25%: 0.18, 50%: 0.22, 75%: 0.18, 100%: 0.11">
         <span class="rlabel"><b>mask_subtract</b></span>
         <div class="track"><div class="bar s2" style="--w:14.67%"></div><span class="refline" style="left:66.67%"></span></div>
         <span class="rval">0.22%</span>
       </div>
-      <div class="row" title="gradient_radial — 0% pin: 0.23, 25%: 0.22, 50%: 0.22, 75%: 0.22, 100%: 0.23">
+      <div class="row" data-tip="gradient_radial — 0% pin: 0.23, 25%: 0.22, 50%: 0.22, 75%: 0.22, 100%: 0.23">
         <span class="rlabel"><b>gradient_radial</b></span>
         <div class="track"><div class="bar s2" style="--w:15.33%"></div><span class="refline" style="left:66.67%"></span></div>
         <span class="rval">0.23%</span>
       </div>
-      <div class="row" title="matte_alpha — 0% pin: 0.11, 25%: 0.11, 50%: 0.11, 75%: 0.32, 100%: 0.11">
+      <div class="row" data-tip="matte_alpha — 0% pin: 0.11, 25%: 0.11, 50%: 0.11, 75%: 0.32, 100%: 0.11">
         <span class="rlabel"><b>matte_alpha</b></span>
         <div class="track"><div class="bar s2" style="--w:21.33%"></div><span class="refline" style="left:66.67%"></span></div>
         <span class="rval">0.32%</span>
       </div>
-      <div class="row" title="stroke_under_fill — 0% pin: 0.11, 25%: 0.11, 50%: 1.14, 75%: 0.11, 100%: 0.11">
+      <div class="row" data-tip="stroke_under_fill — 0% pin: 0.11, 25%: 0.11, 50%: 1.14, 75%: 0.11, 100%: 0.11">
         <span class="rlabel"><b>stroke_under_fill</b></span>
         <div class="track"><div class="bar s2" style="--w:76.00%"></div><span class="refline" style="left:66.67%"></span></div>
         <span class="rval">1.14%</span>
@@ -1119,12 +1336,23 @@ footer p { max-width: 74ch; }
   </ul>
   <p class="sec"><code>@shopify/react-native-skia</code>'s own Skottie module does run on this stack.</p>
 
-  <h3>Android: the rn-svg target did not finish</h3>
+  <h3>Android: two bugs stood between the rn-svg target and a finished run</h3>
   <p class="sec">
-    Two attempts at mixed16, two upstream crashes: a Hermes VM SIGSEGV (null dereference in
-    <code>libhermesvm.so</code>) while mounting the 16 SVG trees, then a <code>react-native-svg</code> Fabric
-    prop-cast RedBox (<code>java.lang.String cannot be cast to java.lang.Double</code> in
-    <code>RNSVGGroupManagerDelegate.setProperty</code>). A ~2200-node SVG commit is beyond that player on Android.
+    The first was ours. The compiler emitted leading-dot decimals (<code>.47</code>), which
+    <code>react-native-svg</code>'s JS parser rejects and leaves as a <code>String</code>; and even with the leading
+    zero restored, an animated prop bypasses that JS coercion entirely — reanimated writes it straight into Fabric,
+    where the generated <code>RNSVGGroupManagerDelegate</code> casts the opacity family with <code>(Double) value</code>
+    and throws <code>java.lang.String cannot be cast to java.lang.Double</code>. Both paths now emit
+    <code>opacity</code>, <code>fillOpacity</code>, <code>strokeOpacity</code> and <code>strokeDashoffset</code> as
+    JS numbers.
+  </p>
+  <p class="sec">
+    That uncovered an upstream one. In <code>react-native-svg</code> 15.15.4,
+    <code>GroupView.mLayerCanvas</code> aliases the parent canvas whenever a group's opacity is 1; on a later frame
+    with opacity ≠ 1, <code>Canvas.setBitmap</code> on that stale alias resets the parent's save stack and
+    <code>drawGroup</code> throws <code>Underflow in restore</code>. We carry a local workaround in
+    <code>patches/react-native-svg+15.15.4.patch</code> — still to be filed upstream. With both fixed, mixed16
+    completes on a Pixel 8 across every run, at the ~1 fps charted above.
   </p>
 
   <details>
@@ -1153,14 +1381,26 @@ footer p { max-width: 74ch; }
     <li><b>Bundle size.</b> <code>npx expo export:embed --dev false</code> over minimal entry points
       (<code>examples/compare/bench/e0..e9</code>), Hermes-targeted minified JS, <code>boucing_ball</code> as the
       one animation. Deltas exclude native binaries.</li>
-    <li><b>Timing.</b> Dev-mode Metro bundles (Hermes, <code>dev=true</code>), 10 s <code>useFrameCallback</code>
-      UI-thread probe, 3 runs per player, median per metric, on the iPhone 17 simulator (iOS 26.4, locked 60 Hz)
-      or an arm64 AVD (android-35, 60 Hz). <b>Relative comparisons, not production absolutes.</b></li>
+    <li><b>Timing.</b> 10 s <code>useFrameCallback</code> UI-thread probe, 3 runs per player.
+      iOS: dev-mode Metro bundle (Hermes, <code>dev=true</code>) on the iPhone 17 simulator (iOS 26.4, locked
+      60 Hz), median per metric. Android: the release APK on a Google Pixel 8 (Android 14, 60 Hz) driven through
+      BrowserStack App Automate, mean per metric, one session covering every player.
+      <b>Relative comparisons, not production absolutes.</b></li>
     <li><b>mixed16.</b> The 16 heaviest distinct fixtures mounted at once. rn-svg mounts 12 of them:
       <code>fx_effects</code>, <code>gradient_animated</code>, <code>blend_multiply</code> and
       <code>matte_luma_inv</code> are skia-only in the app registry.</li>
     <li><b>Parity.</b> <code>cargo test -p ulottie-rt --features "tinyskia thorvg"</code> for the rt backends;
       odiff over @3x screenshot crops for rn-svg.</li>
+    <li><b>Native size.</b> iOS: shipped framework/dylib file sizes per arm64 device slice; statically linked
+      pods (†) as release-built arm64 linked objects summed with <code>size</code> (<code>__TEXT</code>+<code>__DATA</code>,
+      before dead-strip); rt dylibs dead-stripped to their 5 C-ABI exports (<code>strip -x</code>). Android: stripped
+      <code>.so</code> in the release arm64-v8a APK (<code>llvm-strip --strip-unneeded</code>); JVM-weight libraries (‡)
+      as <code>classes.jar</code> + resources. Both Android rt bars count the shared
+      <code>libulottiertshared.so</code> (150,776 B) once — one registry serves both backends. dotlottie additionally
+      ships its animation as a <code>.lottie</code> asset outside the JS bundle, plus <code>libc++_shared.so</code>
+      on Android if the app lacks it. Skottie by margelo (legacy app): iOS is the arm64 slice of its prebuilt fat
+      archives plus its wrapper pods rebuilt on the same basis; its JS delta is against that app's own empty entry,
+      not <code>e0</code>.</li>
   </ul>
 </section>
 
@@ -1173,5 +1413,182 @@ footer p { max-width: 74ch; }
 </footer>
 
 </div>
+
+<script type="module">
+try {
+  const { computePosition, offset, flip, shift, arrow } =
+    await import('https://cdn.jsdelivr.net/npm/@floating-ui/dom@1/+esm');
+
+  const tip = document.createElement('div');
+  tip.id = 'tip';
+  const point = document.createElement('i');
+  tip.append(point);
+  document.body.append(tip);
+
+  let current = null;
+
+  const hide = () => { current = null; tip.removeAttribute('data-open'); };
+
+  // .prow rows are display:contents, so they have no box of their own — anchor to
+  // the union of their children instead, via floating-ui's virtual-element API.
+  function anchorFor(el) {
+    const r = el.getBoundingClientRect();
+    if (r.width || r.height) return el;
+    const boxes = [...el.children]
+      .map((c) => c.getBoundingClientRect())
+      .filter((b) => b.width || b.height);
+    if (!boxes.length) return el;
+    const left = Math.min(...boxes.map((b) => b.left));
+    const top = Math.min(...boxes.map((b) => b.top));
+    const right = Math.max(...boxes.map((b) => b.right));
+    const bottom = Math.max(...boxes.map((b) => b.bottom));
+    const rect = { x: left, y: top, left, top, right, bottom, width: right - left, height: bottom - top };
+    return { getBoundingClientRect: () => rect, contextElement: el };
+  }
+
+  // Bruls/Huizing/van Wijk squarified treemap: repeatedly fill a row along the shorter
+  // side of the free rectangle, extending it while the worst aspect ratio keeps improving.
+  const worst = (row, sum, side) => {
+    const mx = Math.max(...row), mn = Math.min(...row);
+    const s2 = sum * sum, l2 = side * side;
+    return Math.max((l2 * mx) / s2, s2 / (l2 * mn));
+  };
+  function squarify(values, w, h) {
+    const total = values.reduce((a, b) => a + b, 0) || 1;
+    const out = new Array(values.length);
+    let rest = values
+      .map((v, i) => ({ i, a: Math.max((v / total) * w * h, 1e-4) }))
+      .sort((p, q) => q.a - p.a);
+    let x = 0, y = 0;
+    while (rest.length) {
+      const side = Math.min(w, h);
+      let n = 1, sum = rest[0].a;
+      while (n < rest.length) {
+        const areas = rest.slice(0, n).map((r) => r.a);
+        if (worst(areas.concat(rest[n].a), sum + rest[n].a, side) > worst(areas, sum, side)) break;
+        sum += rest[n].a; n++;
+      }
+      const thick = sum / side;
+      let off = 0;
+      for (const r of rest.slice(0, n)) {
+        const len = r.a / thick;
+        out[r.i] = w >= h
+          ? { x, y: y + off, w: thick, h: len }
+          : { x: x + off, y, w: len, h: thick };
+        off += len;
+      }
+      if (w >= h) { x += thick; w -= thick; } else { y += thick; h -= thick; }
+      rest = rest.slice(n);
+    }
+    return out;
+  }
+
+  const TM_W = 280, TM_H = 110;
+  const LIGHT = [16, 58, 34, 70, 46, 25];
+  const group = (n) => n.toLocaleString('en-US');
+
+  function tileColor(i, last, and) {
+    if (i === last) return `var(--series-${and ? 4 : 2})`;
+    return `color-mix(in oklch, var(--series-${and ? 3 : 1}), white ${LIGHT[i % LIGHT.length]}%)`;
+  }
+
+  function treemap(el) {
+    let entries;
+    try { entries = JSON.parse(el.getAttribute('data-treemap')); } catch { return null; }
+    if (!Array.isArray(entries) || !entries.length) return null;
+    const and = !!el.querySelector('.bar.and');
+    const last = entries.length - 1;
+    const boxes = squarify(entries.map((e) => e[1]), TM_W, TM_H);
+
+    const map = document.createElement('div');
+    map.className = 'tm';
+    map.style.width = TM_W + 'px';
+    map.style.height = TM_H + 'px';
+    entries.forEach(([name, bytes], i) => {
+      const b = boxes[i], tile = document.createElement('b');
+      Object.assign(tile.style, {
+        left: b.x + 'px', top: b.y + 'px',
+        width: Math.max(b.w - 1, 0) + 'px', height: Math.max(b.h - 1, 0) + 'px',
+        background: tileColor(i, last, and),
+      });
+      // labels only where they fit — no area is inflated to make room for text
+      if (b.w >= 44 && b.h >= 14) {
+        tile.textContent = name;
+        if (b.w >= 56 && b.h >= 26) {
+          const v = document.createElement('em');
+          v.textContent = group(bytes) + ' B';
+          tile.append(v);
+        }
+      }
+      map.append(tile);
+    });
+
+    const list = document.createElement('div');
+    list.className = 'tml';
+    entries.forEach(([name, bytes], i) => {
+      const line = document.createElement('span');
+      const chip = document.createElement('i');
+      chip.style.background = tileColor(i, last, and);
+      const val = document.createElement('u');
+      val.textContent = group(bytes) + ' B';
+      line.append(chip, name, val);
+      list.append(line);
+    });
+
+    const frag = document.createDocumentFragment();
+    frag.append(map, list);
+    return frag;
+  }
+
+  async function show(el) {
+    current = el;
+    tip.textContent = el.getAttribute('data-tip');
+    if (el.hasAttribute('data-treemap')) {
+      const frag = treemap(el);
+      if (frag) tip.append(frag);
+    }
+    tip.append(point);
+    tip.setAttribute('data-open', '');
+    const { x, y, placement, middlewareData } = await computePosition(anchorFor(el), tip, {
+      placement: 'top',
+      middleware: [offset(8), flip(), shift({ padding: 8 }), arrow({ element: point })],
+    });
+    if (current !== el) return;
+    Object.assign(tip.style, { left: x + 'px', top: y + 'px' });
+    const a = middlewareData.arrow || {};
+    const side = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' }[placement.split('-')[0]];
+    Object.assign(point.style, {
+      left: a.x != null ? a.x + 'px' : '',
+      top: a.y != null ? a.y + 'px' : '',
+      right: '', bottom: '',
+      [side]: '-4px',
+    });
+  }
+
+  const target = (e) => e.target.closest && e.target.closest('[data-tip]');
+
+  document.addEventListener('pointerenter', (e) => {
+    const el = target(e);
+    if (el) show(el);
+  }, true);
+  document.addEventListener('focusin', (e) => {
+    const el = target(e);
+    if (el) show(el);
+  });
+  document.addEventListener('pointerleave', (e) => { if (target(e)) hide(); }, true);
+  document.addEventListener('focusout', hide);
+  document.addEventListener('scroll', hide, { passive: true, capture: true });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hide(); });
+  document.addEventListener('click', (e) => {
+    const el = target(e);
+    if (!el) return hide();
+    if (current === el) hide(); else show(el);
+  });
+} catch {
+  for (const el of document.querySelectorAll('[data-tip]')) {
+    el.setAttribute('title', el.getAttribute('data-tip'));
+  }
+}
+</script>
 </body>
 </html>
